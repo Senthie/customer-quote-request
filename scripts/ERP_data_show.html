@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>ERP · 书版产品录入 (Vue3 拼音映射)</title>
+    <!-- 引入 Vue 3 全局构建 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs/dayjs.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            font-family: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+        body {
+            background: #e6e9f0;
+            display: flex;
+            justify-content: center;
+            padding: 24px 16px;
+        }
+        #app {
+            max-width: 1500px;
+            width: 100%;
+        }
+        .erp-card {
+            width: 100%;
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+            padding: 24px 28px 32px;
+            border: 1px solid #d0d7de;
+        }
+        .erp-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 22px;
+            flex-wrap: wrap;
+            gap: 12px;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 16px;
+        }
+        .erp-header h2 {
+            font-weight: 600;
+            font-size: 1.8rem;
+            color: #0b1e3a;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .erp-header h2 small {
+            font-size: 0.9rem;
+            font-weight: 400;
+            color: #5e6f8d;
+            margin-left: 6px;
+        }
+        .import-area {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .btn {
+            background: white;
+            border: 1px solid #cbd5e1;
+            padding: 8px 18px;
+            border-radius: 40px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            color: #1e293b;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #f9fbfd;
+        }
+        .btn-primary {
+            background: #1a3a6f;
+            border-color: #1a3a6f;
+            color: white;
+            box-shadow: 0 4px 10px rgba(26, 58, 111, 0.15);
+        }
+        .btn-primary:hover {
+            background: #2550a4;
+        }
+        .btn-outline-blue {
+            border-color: #9aa9bb;
+        }
+        .btn-outline-blue:hover {
+            background: #e9f0fa;
+            border-color: #3b6cb7;
+        }
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 0.85rem;
+        }
+        .file-input {
+            display: none;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px 24px;
+            margin: 18px 0 12px;
+        }
+        .field-group {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            border-bottom: 1px dashed #e2e8f0;
+            padding-bottom: 8px;
+        }
+        .field-group.full-row {
+            grid-column: 1 / -1;
+            flex-wrap: nowrap;
+        }
+        .field-label {
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: #2c3e50;
+            min-width: 100px;
+            white-space: nowrap;
+        }
+        .field-control {
+            flex: 1;
+            min-width: 170px;
+        }
+        .inline-combo {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        input,
+        select,
+        textarea {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            background: #fff;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.02);
+        }
+        input:focus,
+        select:focus,
+        textarea:focus {
+            border-color: #2b6eb3;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(43, 110, 179, 0.12);
+        }
+        input[type='checkbox'] {
+            width: 20px;
+            height: 20px;
+            margin-right: 4px;
+            accent-color: #1a3a6f;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 22px;
+            flex-wrap: wrap;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            white-space: nowrap;
+        }
+        textarea {
+            min-height: 64px;
+            resize: vertical;
+        }
+        .static-text {
+            padding: 8px 0;
+            color: #0f172a;
+            font-weight: 500;
+        }
+        .action-bar {
+            margin-top: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 22px;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 18px;
+        }
+        .badge-json {
+            background: #e3eaf3;
+            border-radius: 30px;
+            padding: 2px 12px;
+            font-size: 0.8rem;
+            color: #1a3a6f;
+            font-weight: 500;
+        }
+        .hint-text {
+            color: #68788c;
+            font-size: 0.8rem;
+            margin-top: 12px;
+            text-align: right;
+        }
+        select {
+            appearance: none;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%234b5563"><path d="M6 9l6 6 6-6"/></svg>');
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 14px;
+        }
+        .hint-text span {
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="erp-card">
+            <div class="erp-header">
+                <h2>
+                    📘 书版 · 产品信息
+                    <small>拼音缩写映射 (CPDL/CPLB…)</small>
+                </h2>
+                <div class="import-area">
+                    <span class="badge-json">📎 JSON key → 字段</span>
+                    <button class="btn btn-outline-blue btn-sm" type="button" @click="loadSampleData">
+                        📋 载入示例数据
+                    </button>
+                    <button class="btn btn-primary btn-sm" type="button" @click="triggerFileInput">
+                        ⬆️ 导入 JSON 文件
+                    </button>
+                    <input
+                        ref="fileInput"
+                        type="file"
+                        class="file-input"
+                        accept=".json,application/json"
+                        @change="handleFileImport"
+                    />
+                </div>
+            </div>
+
+            <!-- 表单区域 -->
+            <form @submit.prevent>
+                <div class="form-grid">
+                    <div class="field-group">
+                        <span class="field-label">任务ID：</span>
+                        <div class="field-control">
+                            <input disabled type="text" v-model="formData.id" placedholder="任务ID：" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">创建人：</span>
+                        <div class="field-control">
+                            <input disabled type="text" v-model="formData.create_by" placeholder="创建人：" />
+                        </div>
+                    </div>
+                    <!-- 产品大类 / 产品类别 / 书脊方向 / 装订方式 -->
+                    <div class="field-group">
+                        <span class="field-label">产品大类 (CPDL)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.CPDL" placeholder="书版" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">产品类别 (CPLB)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.CPLB">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="精装书">精装书</option>
+                                <option value="平装书">平装书</option>
+                                <option value="骑马钉">骑马钉</option>
+                                <option value="儿童书">儿童书</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">书脊方向 (SJFX)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.SJFX" placeholder="长书脊" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">装订方式 (ZDFS)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.ZDFS">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="胶装">胶装</option>
+                                <option value="锁线胶装">锁线胶装</option>
+                                <option value="骑马钉">骑马钉</option>
+                                <option value="精装">精装</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 产品名称 / 款数 / 语言数 / 单位 -->
+                    <div class="field-group">
+                        <span class="field-label">产品名称 (CPMC)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.CPMC" placeholder="产品名称" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">款数 (TZS)：</span>
+                        <div class="field-control">
+                            <input type="number" v-model.number="formData.TZS" min="0" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">语言数 (YYS)：</span>
+                        <div class="field-control">
+                            <input type="number" v-model.number="formData.YYS" min="0" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">单位 (DWMC)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.DWMC">
+                                <option value="" disabled>&lt;--i--&gt;</option>
+                                <option value="本">本</option>
+                                <option value="套">套</option>
+                                <option value="册">册</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 客户币种 / 目标价 / 规格(长宽高) -->
+                    <div class="field-group">
+                        <span class="field-label">客户币种 (BZ)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.BZ">
+                                <option value="CNY">CNY</option>
+                                <option value="USD">USD</option>
+                                <option value="HKD">HKD</option>
+                                <option value="EUR">EUR</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">客户目标价 (KHMBJ)：</span>
+                        <div class="field-control">
+                            <input type="number" step="0.01" v-model.number="formData.KHMBJ" placeholder="0.00" />
+                        </div>
+                    </div>
+                    <div class="field-group full-row" style="grid-column: span 2">
+                        <span class="field-label">规格(MM) 长/宽/高：</span>
+                        <div class="field-control inline-combo">
+                            <input type="number" v-model.number="formData.GG_length" placeholder="长" step="0.1" style="width:85px" />
+                            <span>×</span>
+                            <input type="number" v-model.number="formData.GG_width" placeholder="宽" step="0.1" style="width:85px" />
+                            <span>×</span>
+                            <input type="number" v-model.number="formData.GG_height" placeholder="高" step="0.1" style="width:85px" />
+                            <span class="hint-text">(mm)</span>
+                        </div>
+                    </div>
+
+                    <!-- 包装方式 / 台板类型 / 送货方式 / 客户单号 -->
+                    <div class="field-group">
+                        <span class="field-label">包装方式 (BZFS)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.BZFS">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="纸箱">纸箱</option>
+                                <option value="木箱">木箱</option>
+                                <option value="托盘">托盘</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">台板类型 (TBLX)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.TBLX">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="木质">木质</option>
+                                <option value="塑料">塑料</option>
+                                <option value="纸质">纸质</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">送货方式 (SHFS)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.SHFS">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="陆运">陆运</option>
+                                <option value="空运">空运</option>
+                                <option value="海运">海运</option>
+                                <option value="快递">快递</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">客户单号 (KHCPMC)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.KHCPMC" placeholder="PO-" />
+                        </div>
+                    </div>
+
+                    <!-- 交货日期 / 安全检查 / 年龄段 / 是否有配件 -->
+                    <div class="field-group">
+                        <span class="field-label">交货日期 (JHRQ)：</span>
+                        <div class="field-control">
+                            <input type="date" v-model="jhrqDate" />
+                            <div class="hint-text" style="margin-top:6px">详细: {{ timestamp2data(formData.JHRQ, 'YYYY-MM-DD HH:mm:ss') }}</div>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">安全检查：</span>
+                        <div class="field-control checkbox-group">
+                            <label class="checkbox-item">
+                                <input type="checkbox" v-model="formData.has_safety_checks" /> 需要安全检查
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">用户年龄段：</span>
+                        <div class="field-control">
+                            <select v-model="formData.target_age_group">
+                                <option value="">不限</option>
+                                <option value="0-3岁">0-3岁</option>
+                                <option value="4-8岁">4-8岁</option>
+                                <option value="9-14岁">9-14岁</option>
+                                <option value="青少年">青少年</option>
+                                <option value="成人">成人</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">是否有配件 (SFYPJ)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.SFYPJ">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="是">是</option>
+                                <option value="否">否</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 配件描述 / 排序号 / 产品类型 / 预计下单日期 -->
+                    <div class="field-group">
+                        <span class="field-label">配件描述 (Remark1)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.Remark1" placeholder="例如书签" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">排序号 (PXH)：</span>
+                        <div class="field-control">
+                            <input type="number" v-model.number="formData.PXH" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">产品类型 (CPLX)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.CPLX">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="常规">常规</option>
+                                <option value="定制">定制</option>
+                                <option value="加急">加急</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">预计下单日期 (WCRQ)：</span>
+                        <div class="field-control">
+                            <input type="date" v-model="wcrqDate" />
+                            <div class="hint-text" style="margin-top:6px">详细: {{ timestamp2data(formData.WCRQ, 'YYYY-MM-DD HH:mm:ss') }}</div>
+                        </div>
+                    </div>
+
+                    <!-- 香港单号 / 产品英文名 / 不需报价 / 纸箱类别 -->
+                    <div class="field-group">
+                        <span class="field-label">香港单号 (KHDDH)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.KHDDH" placeholder="HK-" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">产品英文名 (ECPMC)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.ECPMC" placeholder="English name" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">不需报价：</span>
+                        <div class="field-control checkbox-group">
+                            <label class="checkbox-item">
+                                <input type="checkbox" v-model="formData.ZDBJF" /> 不需报价
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">纸箱类别 (ZXLB)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.ZXLB">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="普通瓦楞">普通瓦楞</option>
+                                <option value="重型瓦楞">重型瓦楞</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 纸板类型 / 装箱方式 / 台板集装 / 底卡名称 -->
+                    <div class="field-group">
+                        <span class="field-label">纸板类型 (ZBLX)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.ZBLX">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="单粉">单粉</option>
+                                <option value="双粉">双粉</option>
+                                <option value="灰板">灰板</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">装箱方式 (ZXFS)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.ZXFS" placeholder="平装" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">台板/集装 (BSYJZX)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.BSYJZX">
+                                <option value="不使用台板">不使用台板</option>
+                                <option value="不使用集装">不使用集装</option>
+                                <option value="正常使用">正常使用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">底卡名称 (DKMC)：</span>
+                        <div class="field-control">
+                            <select v-model="formData.DKMC">
+                                <option value="" disabled>&lt;--请选择--&gt;</option>
+                                <option value="灰板">灰板</option>
+                                <option value="白卡">白卡</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 描述区域 -->
+                    <div class="field-group full-row">
+                        <span class="field-label">产品描述 (CPMS)：</span>
+                        <div class="field-control">
+                            <textarea v-model="formData.CPMS" rows="2" placeholder="详细描述..."></textarea>
+                        </div>
+                    </div>
+                    <div class="field-group full-row">
+                        <span class="field-label">补充描述 (BCMS)：</span>
+                        <div class="field-control">
+                            <textarea v-model="formData.BCMS" rows="2"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- 备注字段 -->
+                    <div class="field-group">
+                        <span class="field-label">备注 (CPBZ1)：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.CPBZ1" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">预留字段 Remark4：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.Remark4" />
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">预留字段 Remark3：</span>
+                        <div class="field-control">
+                            <input type="text" v-model="formData.Remark3" />
+                        </div>
+                    </div>
+                    <div class="field-group full-row">
+                        <span class="field-label">关联报价需求单：</span>
+                        <div class="field-control static-text">📎 点击列表设置关联</div>
+                    </div>
+                </div>
+
+                <!-- 底部操作按钮 -->
+                <div class="action-bar">
+                    <div class="legend-note">— 列表设置 —</div>
+                    <div class="action-buttons">
+                        <button type="button" class="btn" @click="handleListSettings">📋 列表设置</button>
+                        <button type="button" class="btn btn-primary" @click="handleSave">💾 保存</button>
+                        <button type="button" class="btn" @click="handleClose">❌ 关闭</button>
+                    </div>
+                </div>
+            </form>
+            <div class="hint-text">
+                ⚡ JSON 键名如 CPDL, CPLB, SJFX … 导入时自动映射填充。支持复选框/下拉/日期。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed } = Vue;
+
+        const app = createApp({
+            setup() {
+                // 文件input的ref
+                const fileInput = ref(null);
+
+                // 表单数据 (字段名与JSON key完全一致)
+                const formData = reactive({
+                    id:"4a1c709ed3f44d0faa81b835ed99620d",
+                    create_by: "KM",
+                    CPDL: '书版',
+                    CPLB: '',
+                    SJFX: '长书脊',
+                    ZDFS: '',
+                    CPMC: 'EUR追溯',
+                    TZS: 1,
+                    YYS: 1,
+                    DWMC: '本',
+                    BZ: 'CNY',
+                    KHMBJ: null,
+                    GG_length: null,
+                    GG_width: null,
+                    GG_height: null,
+                    BZFS: '',
+                    TBLX: '',
+                    SHFS: '',
+                    KHCPMC: '',
+                    JHRQ: 0,
+                    has_safety_checks: false,
+                    target_age_group: '',
+                    SFYPJ: '',
+                    Remark1: '',
+                    PXH: 1,
+                    CPLX: '',
+                    WCRQ: 0,
+                    KHDDH: '',
+                    ECPMC: '',
+                    ZDBJF: false,
+                    ZXLB: '',
+                    ZBLX: '',
+                    ZXFS: '平装',
+                    BSYJZX: '不使用台板',
+                    DKMC: '',
+                    CPMS: '',
+                    BCMS: '',
+                    CPBZ1: '',
+                    Remark4: '',
+                    Remark3: ''
+                });
+
+                // 示例数据 (与用户提供的格式匹配)
+                const sampleData = {
+                    CPDL: '书版',
+                    CPLB: '精装书',
+                    SJFX: '长书脊',
+                    ZDFS: '锁线胶装',
+                    CPMC: 'EUR追溯',
+                    TZS: 2,
+                    YYS: 3,
+                    DWMC: '本',
+                    BZ: 'USD',
+                    KHMBJ: 12.50,
+                    GG_length: 210,
+                    GG_width: 285,
+                    GG_height: 15,
+                    BZFS: '纸箱',
+                    TBLX: '木质',
+                    SHFS: '陆运',
+                    KHCPMC: 'PO-2409-01',
+                    JHRQ: 1775804694450,
+                    has_safety_checks: true,
+                    target_age_group: '4-8岁',
+                    SFYPJ: '是',
+                    Remark1: '丝带书签+贴纸',
+                    PXH: 1,
+                    CPLX: '定制',
+                    WCRQ: 1744243200000,
+                    KHDDH: 'HK-8823',
+                    ECPMC: 'EUR Traceability Edition',
+                    ZDBJF: false,
+                    ZXLB: '普通瓦楞',
+                    ZBLX: '双粉',
+                    ZXFS: '平装',
+                    BSYJZX: '不使用台板',
+                    DKMC: '灰板',
+                    CPMS: 'EUR追溯系列，内文四色，封面烫金。',
+                    BCMS: '附赠电子追溯码',
+                    CPBZ1: '首批加急',
+                    Remark4: '',
+                    Remark3: '内部编码A01'
+                };
+
+                // 加载示例数据
+                const loadSampleData = () => {
+                    Object.assign(formData, sampleData);
+                };
+
+                // 触发文件选择
+                const triggerFileInput = () => {
+                    fileInput.value?.click();
+                };
+
+                // 处理JSON文件导入
+                const handleFileImport = (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const json = JSON.parse(e.target.result);
+                            // 只更新存在的字段，避免意外添加属性
+                            Object.keys(formData).forEach(key => {
+                                if (json.hasOwnProperty(key)) {
+                                    formData[key] = json[key];
+                                }
+                            });
+                            alert('✅ JSON 数据已导入，字段已按拼音缩写填充。');
+                        } catch (err) {
+                            alert('❌ JSON解析失败: ' + err.message);
+                        } finally {
+                            // 清空input，允许重复导入同一文件
+                            event.target.value = '';
+                        }
+                    };
+                    reader.readAsText(file, 'UTF-8');
+                };
+
+                // 底部按钮交互
+                const handleListSettings = () => {
+                    alert('列表设置：可配置显示列 (演示)');
+                };
+
+                const handleSave = () => {
+                    console.log('📦 保存的表单数据 (拼音key):', { ...formData });
+                    alert('数据已保存至控制台，可查看详情。');
+                };
+
+                const handleClose = () => {
+                    if (confirm('关闭面板？')) {
+                        alert('面板关闭 (演示)');
+                    }
+                };
+                function timestamp2data(timestamp, formatTemplate = 'YYYY-MM-DD HH:mm:ss dddd') {
+                    const ts = Number(timestamp);
+                    if (isNaN(ts) || !isFinite(ts)) return 'Invalid timestamp';
+                    const dateObj = dayjs(ts);
+                    if (!dateObj.isValid()) return 'Invalid date';
+                    return dateObj.format(formatTemplate);
+                }
+
+
+                // 计算属性：把时间戳和 date 输入的 YYYY-MM-DD 互转
+                const jhrqDate = computed({
+                    get() {
+                        const ts = Number(formData.JHRQ);
+                        if (!ts) return '';
+                        const d = dayjs(ts);
+                        return d.isValid() ? d.format('YYYY-MM-DD') : '';
+                    },
+                    set(val) {
+                        if (!val) { formData.JHRQ = 0; return; }
+                        const d = dayjs(val);
+                        formData.JHRQ = d.isValid() ? d.valueOf() : 0;
+                    }
+                });
+
+                const wcrqDate = computed({
+                    get() {
+                        const ts = Number(formData.WCRQ);
+                        if (!ts) return '';
+                        const d = dayjs(ts);
+                        return d.isValid() ? d.format('YYYY-MM-DD') : '';
+                    },
+                    set(val) {
+                        if (!val) { formData.WCRQ = 0; return; }
+                        const d = dayjs(val);
+                        formData.WCRQ = d.isValid() ? d.valueOf() : 0;
+                    }
+                });
+
+                // 例子
+                console.log(timestamp2data(1734163200000)); 
+
+                // 页面加载后自动填充示例数据
+                loadSampleData();
+
+                // 返回模板中需要的数据和方法
+                return {
+                    fileInput,
+                    formData,
+                    timestamp2data,
+                    loadSampleData,
+                    triggerFileInput,
+                    handleFileImport,
+                    handleListSettings,
+                    handleSave,
+                    handleClose
+                    ,jhrqDate,wcrqDate
+                };
+            }
+        });
+
+        app.mount('#app');
+    </script>
+</body>
+</html>
