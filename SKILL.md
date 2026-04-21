@@ -1,6 +1,6 @@
 ---
 name: customer-quote-request
-description: 通过 CSV 或 XLSX 文件读取客户的报价需求，将报表表格提取为 JSON 格式的结构化数据。
+description: 通过 CSV, XLSX, DOCX 或 TXT 文件读取客户的报价需求，将报表表格提取为 JSON 格式的结构化数据。
 metadata:
   openclaw:
     emoji: "👨‍💼"
@@ -12,20 +12,23 @@ metadata:
 
 # Customer Quote Request Parser
 
-解析客户报价单文件（CSV/XLSX），提取关键信息并映射为标准化的 ERP JSON 格式。
+解析客户报价单文件（CSV/XLSX/DOCX/TXT），提取关键信息并映射为标准 ERP JSON 格式。
 
 ## 功能特性
 
 - **任务隔离**：每个任务使用独立目录，以 UUID4 作为任务ID
 - **文件防重复**：处理完成后自动从 pending 目录移出
 - **多格式输出**：同时生成 ERP JSON 和 CSV 格式
-- **完整追溯**：原始文件、转换后的CSV、ERP JSON 都在同一任务目录下
+- **完整追溯**：原始文件、转换后的CSV、ERP JSON，都在同一任务目录下
+- **格式扩展**：支持文本类文档 (.docx, .txt, .pdf) 的关键词提取
+
+---
 
 ---
 
 ## 输出目录结构
 
-处理完成后，文件将按以下结构组织：
+处理完成后，文件将按以下结构组织（位于 `<agent_workspace>/customer-files/`）：
 
 ```
 customer-files/
@@ -36,10 +39,14 @@ customer-files/
 │       ├── ERP_<task_id>_<YYYYMMDD>_<HHMMSS>.json   # ERP系统导入格式
 │       ├── <原文件名>.csv                           # 转换后的CSV
 │       └── <原文件名>.xlsx                          # 原始文件
-└── failed/              # 处理失败的任务
-    └── failed_<YYYYMMDD>_<HHMMSS>/
-        └── <原文件名>.xlsx
+├── failed/              # 处理失败的任务
+│   └── failed_<YYYYMMDD>_<HHMMSS>/
+│       └── <原文件名>.xlsx
+└── logs/                # 日志文件
+    └── quote_request_<timestamp>.log
 ```
+
+**注意：** 如果 `customer-files` 目录不存在，系统会自动创建。
 
 ---
 
@@ -308,7 +315,7 @@ CPLB: 无线胶装书, ZLBM: 23.01
 
 #### 5.9 产品数量
 
-> **TODO:** 从 `Quantity` / `Print Run` / `数量` 提取，无明确信息时留空
+> **TODO:** 从 `Works References For all Titles` 提取，无明确信息时留空
 
 ---
 
@@ -446,7 +453,7 @@ gg_height = (extent_pp / 2) * extent_pp_thickness + extent_cover * extent_cover_
 
 #### 5.16 客户单号 (KHCPMC)
 
-**数据来源：** `Works References`
+**数据来源：** `默认为空`
 
 ---
 

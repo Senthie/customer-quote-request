@@ -127,22 +127,63 @@ def generate_task_id(logger: Logger) -> str:
     return task_id
 
 
+def _load_text_document(file_path: str, ext: str, logger: Logger) -> dict:
+    """加载文本类文档 (DOCX/TXT/PDF)"""
+    script_dir = Path(__file__).parent
+    if ext == '.pdf':
+        script_name = "pdf2json.py"
+    elif ext == '.docx':
+        script_name = "docx2json.py"
+    else:
+        script_name = "txt2json.py"
+    script_path = script_dir / script_name
+    
+    logger.info(f"调用解析器: {script_name}")
+    cmd = ["uv", "run", str(script_path), str(file_path)]
+    process = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if process.returncode != 0:
+        logger.error(f"解析失败: {process.stderr}")
+        raise ValueError(f"解析器错误: {process.stderr}")
+    
+    output = process.stdout
+    result = {}
+    
+    # 从解析器输出中提取 Key: Value 对
+    for line in output.split('\n'):
+        if ':' in line and '提取的字段列表' not in line and '步骤' not in line:
+            parts = line.split(':', 1)
+            if len(parts) == 2:
+                k, v = parts[0].strip(), parts[1].strip()
+                if k and v and not k.startswith('['):
+                    result[k] = v
+    
+    logger.info(f"从 {ext} 提取字段数: {len(result)}")
+    return result
+
+
 def load_customer_data(file_path: str, logger: Logger) -> dict:
-    """加载客户数据文件 (CSV/XLSX)"""
+    """加载客户数据文件 (CSV/XLSX/DOCX/TXT)"""
     import pandas as pd
     
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"文件不存在: {file_path}")
     
-    logger.info(f"文件类型: {path.suffix.lower()}")
+    ext = path.suffix.lower()
+    logger.info(f"文件类型: {ext}")
     
-    if path.suffix.lower() == ".csv":
+    # 处理文本类文件 (DOCX/TXT/PDF)
+    if ext in ['.docx', '.txt', '.pdf']:
+        return _load_text_document(file_path, ext, logger)
+    
+    # 处理表格类文件 (CSV/XLSX/XLS)
+    if ext == ".csv":
         df = pd.read_csv(file_path)
-    elif path.suffix.lower() in [".xlsx", ".xls"]:
+    elif ext in [".xlsx", ".xls"]:
         df = pd.read_excel(file_path)
     else:
-        raise ValueError(f"不支持的文件格式: {path.suffix}")
+        raise ValueError(f"不支持的文件格式: {ext}")
     
     if len(df) == 0:
         raise ValueError("文件为空")
@@ -308,17 +349,25 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         result["CPLB"] = "99.99;其他"
         default_count += 1
     
+    # id 字段 - 使用任务ID
+    logger.field_mapping("id", 4, total_fields)
+    result["id"] = task_id
+    logger.info("  来源: 任务ID")
+    logger.info(f"  映射值: {result['id']}")
+    logger.info("  状态: 成功")
+    success_count += 1
+    
     # 产品名称
-    logger.field_mapping("CPMC", 4, total_fields)
+    logger.field_mapping("CPMC", 5, total_fields)
     series_name = customer_data.get("Series Name", "")
-    result["CPMC"] = f"{task_id}-{result.get('CPLB', '')}-{series_name}"
-    logger.info("  来源: 任务ID + CPLB + Series Name")
+    result["CPMC"] = f"{result.get('CPLB', '')}-{series_name}"
+    logger.info("  来源: CPLB + Series Name")
     logger.info(f"  映射值: {result['CPMC']}")
     logger.info("  状态: 成功")
     success_count += 1
     
     # 款数
-    logger.field_mapping("TZS", 5, total_fields)
+    logger.field_mapping("TZS", 6, total_fields)
     num_titles = customer_data.get("Number of titles", "1")
     result["TZS"] = int(num_titles) if str(num_titles).isdigit() else 1
     logger.info(f"  来源: Number of titles={num_titles}")
@@ -327,7 +376,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
     success_count += 1
     
     # 规格 - 尺寸
-    logger.field_mapping("GG_length/GG_width", 6, total_fields)
+    logger.field_mapping("GG_length/GG_width", 7, total_fields)
     size_str = customer_data.get("Size (tps) H x W x D mm", "")
     if "x" in size_str.lower():
         logger.info(f"  来源: Size (tps) H x W x D mm={size_str}")
@@ -348,7 +397,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         default_count += 1
     
     # 厚度计算
-    logger.field_mapping("GG_height", 7, total_fields)
+    logger.field_mapping("GG_height", 8, total_fields)
     if result.get("GG_height", 0) == 0:
         extent_str = customer_data.get("Extent (pp + cover)", "")
         text_material = customer_data.get("Text Material", "")
@@ -382,7 +431,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         logger.info("  已由尺寸解析提供，跳过计算")
     
     # 书脊方向 (SJFX)
-    logger.field_mapping("SJFX", 8, total_fields)
+    logger.field_mapping("SJFX", 9, total_fields)
     gg_length = result.get("GG_length", 0)
     gg_width = result.get("GG_width", 0)
     if gg_length > 0 and gg_width > 0:
@@ -401,7 +450,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         default_count += 1
     
     # 交货日期
-    logger.field_mapping("JHRQ", 9, total_fields)
+    logger.field_mapping("JHRQ", 10, total_fields)
     pub_month = customer_data.get("Pub Month", "")
     if pub_month:
         logger.info(f"  来源: Pub Month={pub_month}")
@@ -414,7 +463,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         default_count += 1
     
     # 预计下单日期
-    logger.field_mapping("WCRQ", 10, total_fields)
+    logger.field_mapping("WCRQ", 11, total_fields)
     future_date = datetime.now() + timedelta(days=10)
     result["WCRQ"] = int(future_date.timestamp() * 1000)
     logger.info("  来源: 当前日期 + 10天")
@@ -423,7 +472,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
     success_count += 1
     
     # 安全检查
-    logger.field_mapping("has_safety_checks", 11, total_fields)
+    logger.field_mapping("has_safety_checks", 12, total_fields)
     safety = customer_data.get("Safety Checks Req? (Y/N)", "N")
     logger.info(f"  来源: Safety Checks Req? (Y/N)={safety}")
     result["has_safety_checks"] = safety.upper() in ["Y", "YES", "是"]
@@ -432,7 +481,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
     success_count += 1
     
     # 年龄段
-    logger.field_mapping("target_age_group", 12, total_fields)
+    logger.field_mapping("target_age_group", 13, total_fields)
     age_group = customer_data.get("Target Age Group", "")
     if age_group:
         logger.info(f"  来源: Target Age Group={age_group}")
@@ -451,7 +500,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         default_count += 1
     
     # 产品描述
-    logger.field_mapping("CPMS", 13, total_fields)
+    logger.field_mapping("CPMS", 14, total_fields)
     project_desc = customer_data.get("Project description", "")
     if project_desc:
         logger.info(f"  来源: Project description={project_desc}")
@@ -464,7 +513,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         default_count += 1
     
     # 客户单号
-    logger.field_mapping("KHCPMC", 14, total_fields)
+    logger.field_mapping("KHCPMC", 15, total_fields)
     works_ref = ""
     for key in customer_data.keys():
         if "Works References" in key:
@@ -481,7 +530,7 @@ def map_fields(customer_data: dict, template: dict, logger: Logger) -> dict:
         default_count += 1
     
     # 其他字段使用默认值
-    remaining_fields = total_fields - 14
+    remaining_fields = total_fields - 15
     logger.info("")
     logger.info(f"剩余 {remaining_fields} 个字段使用默认值")
     default_count += remaining_fields
@@ -511,16 +560,32 @@ def create_task_directory(base_dir: Path, task_id: str) -> Path:
 
 
 def convert_to_csv(input_path: Path, output_dir: Path, logger: Logger) -> Path:
-    """将XLSX/XLS文件转换为CSV"""
+    """将文件转换为CSV格式"""
     import pandas as pd
+    import shutil
     
-    if input_path.suffix.lower() == ".csv":
+    ext = input_path.suffix.lower()
+    
+    # CSV文件直接复制
+    if ext == ".csv":
         output_path = output_dir / f"{input_path.stem}.csv"
-        import shutil
         shutil.copy2(input_path, output_path)
         logger.info(f"  源文件已是CSV格式，直接复制")
         return output_path
     
+    # 文本类文件转换为CSV
+    if ext in ['.docx', '.txt', '.pdf']:
+        output_path = output_dir / f"{input_path.stem}.csv"
+        with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        # 简单地将内容写入CSV格式
+        with open(output_path, 'w', encoding='utf-8-sig') as f:
+            f.write("Content\n")
+            f.write(content.replace('\n', ' '))
+        logger.info(f"  文本文件已转换为CSV格式")
+        return output_path
+    
+    # Excel文件转换
     df = pd.read_excel(input_path)
     csv_filename = f"{input_path.stem}.csv"
     output_path = output_dir / csv_filename
@@ -556,7 +621,7 @@ def step1_input_validation(input_path: Path, logger: Logger) -> bool:
     
     logger.info(f"输入文件: {input_path}")
     
-    supported_formats = ['.csv', '.xlsx', '.xls']
+    supported_formats = ['.csv', '.xlsx', '.xls', '.docx', '.txt', '.pdf']
     if input_path.suffix.lower() not in supported_formats:
         logger.error(f"文件格式检查: 失败 (不支持的格式 {input_path.suffix})")
         return False
@@ -675,19 +740,33 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path, lo
 
 def main():
     parser = argparse.ArgumentParser(description="客户报价请求处理")
-    parser.add_argument("input_file", help="输入文件路径 (CSV 或 XLSX)")
-    parser.add_argument("--output-dir", "-o", default=".", help="输出目录路径")
+    parser.add_argument("input_file", help="输入文件路径 (CSV, XLSX, DOCX, TXT, PDF)")
+    parser.add_argument("--output-dir", "-o", default=None, help="输出目录路径")
     parser.add_argument("--processed-dir", default=None, help="处理完成后原始文件移动到的目录")
     parser.add_argument("--failed-dir", default=None, help="处理失败时原始文件移动到的目录")
     args = parser.parse_args()
     
     input_path = Path(args.input_file)
-    output_dir = Path(args.output_dir)
-    processed_dir = Path(args.processed_dir) if args.processed_dir else output_dir
-    failed_dir = Path(args.failed_dir) if args.failed_dir else None
+    
+    # 设置默认输出目录为 <agent_workspace>/customer-files/processed
+    script_dir = Path(__file__).parent
+    skill_dir = script_dir.parent
+    workspace_dir = skill_dir.parent.parent  # 回到 workspace-igl_demo
+    customer_files_dir = workspace_dir / "customer-files"
+    
+    # 确保 customer-files 目录结构存在
+    customer_files_dir.mkdir(parents=True, exist_ok=True)
+    (customer_files_dir / "processed").mkdir(exist_ok=True)
+    (customer_files_dir / "failed").mkdir(exist_ok=True)
+    (customer_files_dir / "logs").mkdir(exist_ok=True)
+    
+    # 使用默认路径或用户指定路径
+    output_dir = Path(args.output_dir) if args.output_dir else customer_files_dir / "processed"
+    processed_dir = Path(args.processed_dir) if args.processed_dir else customer_files_dir / "processed"
+    failed_dir = Path(args.failed_dir) if args.failed_dir else customer_files_dir / "failed"
     
     # 创建日志目录
-    log_dir = processed_dir.parent / "logs" if processed_dir else output_dir / "logs"
+    log_dir = customer_files_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     
     # 先生成临时任务ID用于日志文件名
