@@ -12,6 +12,9 @@ metadata:
 
 # Customer Quote Request Parser
 
+> **仓库路径：** `/home/claw/customer-quote-request/`
+> 所有命令需在仓库根目录下执行，或使用绝对路径。
+
 解析客户报价单文件（CSV/XLSX/DOCX/TXT），提取关键信息并映射为标准 ERP JSON 格式。
 
 ## 功能特性
@@ -28,7 +31,7 @@ metadata:
 
 ## 输出目录结构
 
-处理完成后，文件将按以下结构组织（位于 `<agent_workspace>/customer-files/`）：
+处理完成后，文件将按以下结构组织（位于 `/home/claw/customer-quote-request/customer-files/`）：
 
 ```
 customer-files/
@@ -52,7 +55,7 @@ customer-files/
 
 ## 工作流程（详细步骤）
 
-> **日志记录要求**：每个步骤必须将开始、执行过程、结果写入日志文件。日志文件路径：`./logs/quote_request_<task_id>_<timestamp>.log`
+> **日志记录要求**：每个步骤必须将开始、执行过程、结果写入日志文件。日志文件路径：`/home/claw/customer-quote-request/logs/quote_request_<task_id>_<timestamp>.log`
 
 ---
 
@@ -80,16 +83,16 @@ customer-files/
 
 ```bash
 # 同一目录下生成 file.csv
-python xlsx2csv.py /path/to/file.xlsx
+uv run /home/claw/customer-quote-request/scripts/xlsx2csv.py /path/to/file.xlsx
 
-# 指定输出文件
-python xlsx2csv.py input.xlsx -o output.csv
+  # 指定输出文件
+  uv run /home/claw/customer-quote-request/scripts/xlsx2csv.py input.xlsx -o output.csv
 
-# 指定工作表（名称或索引）
-python xlsx2csv.py input.xlsx -s "Sheet2"
+  # 指定工作表（名称或索引）
+  uv run /home/claw/customer-quote-request/scripts/xlsx2csv.py input.xlsx -s "Sheet2"
 
-# 指定编码
-python xlsx2csv.py input.xlsx --encoding utf-8
+  # 指定编码
+  uv run /home/claw/customer-quote-request/scripts/xlsx2csv.py input.xlsx --encoding utf-8
 ```
 
 **检查必需字段：**
@@ -143,7 +146,7 @@ python xlsx2csv.py input.xlsx --encoding utf-8
 [YYYY-MM-DD HH:MM:SS] 步骤 3 完成，状态: <成功/失败>
 ```
 
-读取 `./assets/add_customer_quote_request.json` 获取标准字段列表：
+读取 `/home/claw/customer-quote-request/assets/add_customer_quote_request.json` 获取标准字段列表：
 
 - `key`: ERP 字段名
 - `value`: 默认值
@@ -162,7 +165,7 @@ python xlsx2csv.py input.xlsx --encoding utf-8
 ```
 
 ```bash
-uv run ./scripts/uuid_utils.py
+cd /home/claw/customer-quote-request && uv run ./scripts/uuid_utils.py
 ```
 
 输出示例：
@@ -224,7 +227,7 @@ e5ca14ad5c30401da25582b64237080e
 2. 查询映射表：
 
 ```bash
-uv run ./scripts/product_categories.py --select "Paperback"
+cd /home/claw/customer-quote-request && uv run ./scripts/product_categories.py --select "Paperback"
 ```
 
 1. 解析输出：
@@ -382,7 +385,7 @@ CPLB: 无线胶装书, ZLBM: 23.01
 1. 查询纸张厚度：
 
 ```bash
-uv run ./scripts/select_page_thickness.py --pg 光粉纸 --faw 80
+cd /home/claw/customer-quote-request && uv run ./scripts/select_page_thickness.py --pg 光粉纸 --faw 80
 ```
 
 1. 计算 `gg_height`：
@@ -468,7 +471,7 @@ gg_height = (extent_pp / 2) * extent_pp_thickness + extent_cover * extent_cover_
 3. 转换为时间戳：
 
 ```bash
-uv run ./scripts/string2timestamp.py 2027-05-01
+cd /home/claw/customer-quote-request && uv run ./scripts/string2timestamp.py 2027-05-01
 # 输出: 1798752000000
 ```
 
@@ -587,7 +590,23 @@ uv run ./scripts/string2timestamp.py 2027-05-01
 
 #### 5.28 产品描述 (CPMS)
 
-**数据来源：** `Project description`
+**处理流程：**
+
+1. **提取** — 读取客户报价文件（XLSX/CSV/DOCX/TXT/PDF）中的**所有文本内容**，包括但不限于：
+   - 项目基本信息（品牌、申请人、复杂度、系列名称等）
+   - 产品类型与规格说明（尺寸、装订方式、印刷规格、纸张材料等）
+   - 安全合规要求（安全检查、目标年龄段等）
+   - 包装与运输要求（纸箱规格、装运方式等）
+   - 其他备注说明（样书要求、特殊说明等）
+2. **翻译为中文** — 将提取的全部英文文本翻译成通顺的中文
+3. **优化纯文本格式** — 按信息类别分段整理，清除多余的换行、空格、特殊符号，组织为结构清晰、易读的纯文本
+4. 将处理后的中文文本写入 CPMS 字段
+
+**示例：**
+
+| 原始文件内容（英文） | 处理后 CPMS（中文，节选） |
+|---------------------|------------------------|
+| Project description: Puzzle and colouring book<br>Size: 198mm x 129mm<br>Format: Paperback<br>Extent: 120pp + cover<br>Text: 90gsm woodfree<br>Cover: 250gsm C1S artboard<br>Binding: perfect bound<br>Safety: Y<br>Target Age: 7+ | 【项目基本信息】<br>产品描述：拼图与涂色书<br>...<br>【尺寸规格】<br>成品尺寸：198mm × 129mm<br>内页数量：120页+封面<br>...<br>【安全合规要求】<br>需进行安全检查<br>目标年龄段：7岁以上 |
 
 ---
 
@@ -721,7 +740,7 @@ ERP_<task_id>_<YYYYMMDD>_<HHMMSS>.json
   "has_safety_checks": true,
   "target_age_group": 7,
   "SFYPJ": false,
-  "CPMS": "Puzzle and colouring book"
+  "CPMS": "拼图与涂色书"
 }
 ```
 
@@ -760,7 +779,7 @@ ERP_<task_id>_<YYYYMMDD>_<HHMMSS>.json
 **日志文件命名：**
 
 ```
-./logs/quote_request_<task_id>_<timestamp>.log
+`/home/claw/customer-quote-request/logs/quote_request_<task_id>_<timestamp>.log`
 ```
 
 **示例：**
@@ -891,7 +910,9 @@ ERP_<task_id>_<YYYYMMDD>_<HHMMSS>.json
 [2026-03-30 09:09:01] 
 [2026-03-30 09:09:01] [字段 11/32] CPMS
 [2026-03-30 09:09:01]   来源: Project description=Puzzle and colouring book
-[2026-03-30 09:09:01]   映射值: Puzzle and colouring book
+[2026-03-30 09:09:01]   翻译: → "拼图与涂色书"
+[2026-03-30 09:09:01]   格式优化: 完成
+[2026-03-30 09:09:01]   映射值: 拼图与涂色书
 [2026-03-30 09:09:01]   状态: 成功
 [2026-03-30 09:09:01] 
 [2026-03-30 09:09:01] [字段 12/32] SJFX
@@ -994,13 +1015,13 @@ uv sync
 
 ```
 customer-quote-request/
-├── SKILL.md                          # 本文件
-├── assets/
+├── SKILL.md                          # 本文件（见 ~/.hermes/profiles/igl_agent/skills/customer-quote-request/）
+├── assets/                           # /home/claw/customer-quote-request/assets/
 │   ├── add_customer_quote_request.json    # ERP 字段模板
 │   ├── customer_erp_mapper.xlsx      # 客户字段映射表
 │   ├── product_categories.xlsx       # 产品类别映射表
 │   └── page_thickness.xlsx           # 纸张厚度表
-├── customer-files/                   # 客户文件目录
+├── customer-files/                   # /home/claw/customer-quote-request/customer-files/
 │   ├── pending/                      # 待处理文件（处理前放入此处）
 │   ├── processed/                    # 已处理完成的任务目录
 │   │   └── <task_id>/               # UUID4 任务目录
@@ -1010,9 +1031,9 @@ customer-quote-request/
 │   └── failed/                       # 处理失败的任务目录
 │       └── failed_<timestamp>/
 │           └── <原文件名>.xlsx
-├── logs/                             # 日志目录
+├── logs/                             # /home/claw/customer-quote-request/logs/
 │   └── quote_request_<task_id>_<timestamp>.log
-├── scripts/
+├── scripts/                          # /home/claw/customer-quote-request/scripts/
 │   ├── main.py                       # 主入口（推荐）
 │   ├── uuid_utils.py                 # UUID 生成
 │   ├── product_categories.py         # 产品类别查询
@@ -1033,7 +1054,7 @@ customer-quote-request/
 生成 UUID4。
 
 ```bash
-uv run ./scripts/uuid_utils.py
+cd /home/claw/customer-quote-request && uv run ./scripts/uuid_utils.py
 # 输出: 550e8400-e29b-41d4-a716-446655440000
 ```
 
@@ -1042,7 +1063,7 @@ uv run ./scripts/uuid_utils.py
 查询产品类别映射。
 
 ```bash
-uv run ./scripts/product_categories.py --select "Paperback"
+cd /home/claw/customer-quote-request && uv run ./scripts/product_categories.py --select "Paperback"
 # 输出:
 # 匹配结果：
 # CPLB: 无线胶装书, ZLBM: 23.01
@@ -1053,10 +1074,10 @@ uv run ./scripts/product_categories.py --select "Paperback"
 日期转时间戳（毫秒）。
 
 ```bash
-uv run ./scripts/string2timestamp.py 2027-05-01
+cd /home/claw/customer-quote-request && uv run ./scripts/string2timestamp.py 2027-05-01
 # 输出: 1798752000000
 
-uv run ./scripts/string2timestamp.py May-27
+cd /home/claw/customer-quote-request && uv run ./scripts/string2timestamp.py May-27
 # 输出: 1798752000000 (解释为 2027-05-01)
 ```
 
@@ -1080,7 +1101,7 @@ python xlsx2csv.py input.xlsx -s "Sheet2"
 查询纸张厚度。
 
 ```bash
-uv run ./scripts/select_page_thickness.py --pg 光粉纸 --faw 80
+cd /home/claw/customer-quote-request && uv run ./scripts/select_page_thickness.py --pg 光粉纸 --faw 80
 # 输出: 0.07
 ```
 
@@ -1089,7 +1110,7 @@ uv run ./scripts/select_page_thickness.py --pg 光粉纸 --faw 80
 查询客户 ERP 字段映射。
 
 ```bash
-uv run ./scripts/customer2erp.py --field "Format" --value "Paperback"
+cd /home/claw/customer-quote-request && uv run ./scripts/customer2erp.py --field "Format" --value "Paperback"
 ```
 
 ---
