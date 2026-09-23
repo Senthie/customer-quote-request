@@ -1,0 +1,119 @@
+# ═══════════════════════════════════════════════════════════════
+# 兜底档案 / 公共默认值
+#
+# 两个作用：
+#   1. 【公共默认】所有客户档案都会 deep-merge 到本文件之上
+#      （客户档案里的值覆盖本文件；list 类型是「整体替换」，不是追加）
+#   2. 【兜底】自动识别不出客户时，直接用本档案跑，并打 WARN 提示人工确认
+#
+# ⚠️ 改这里会影响**所有**客户，改完必须对所有客户档案跑一遍回归。
+# ═══════════════════════════════════════════════════════════════
+id: generic
+name: 未识别客户（通用兜底）
+priority: 0
+status: draft
+notes: 自动识别失败时的兜底档案；也是所有客户档案的公共默认层。
+
+detect: {}          # 兜底档案不参与自动识别
+
+# 通用英文列名（各客户大体相同的部分）
+fields:
+  imprint:              ["Imprint"]
+  complexity:           ["Complexity"]
+  requested_by:         ["Requested By"]
+  pub_month:            ["Pub Month", "Publication Month", "Publishing Month"]
+  series_name:          ["Series Name", "Series"]
+  number_of_titles:     ["Number of titles", "No. of titles", "Titles"]
+  group:                ["Group"]
+  category:             ["Category"]
+  safety_checks:        ["Safety Checks Req? (Y/N)", "Safety Checks"]
+  target_age_group:     ["Target Age Group", "Age Group"]
+  works_references:     ["Works References For all Titles", "Works References"]
+  group_series_number:  ["Group/Series Number"]
+  isbn:                 ["ISBNs of All Titles", "ISBNs", "ISBN"]
+  project_description:  ["Project description"]
+  size:                 ["Size (tps) H x W x D mm", "Size"]
+  format:               ["Format"]
+  extent:               ["Extent (pp + cover)", "Extent"]
+  text_printing_spec:   ["Text Printing Spec"]
+  text_material:        ["Text Material"]
+  cover_printing_spec:  ["Cover Printing Spec"]
+  cover_material:       ["Cover Material"]
+  spine_width:          ["Spine width"]
+  binding:              ["Binding instructions", "Binding"]
+  finishes:             ["Finishes"]
+  quantity_tiers:       ["Total Costs", "Total Cost", "Cost", "Quantity", "数量"]
+
+# 业务层公共默认值（多个客户一致，已业务确认 2026-09-23）
+erp_fixed:
+  CPDL: 书版
+  YYS: 1
+  BZ: 美元
+  PXH: 1
+  KHMBDJ: 0
+
+rules:
+  layout:
+    strategies: [auto_pairs, column_pairs, shifted_pairs]
+    label_col: 1
+    value_col: 2
+    min_label_row_hits: 2
+    max_label_len: 60
+  size:
+    unit: mm
+    order: [CD, KD, GD]
+  quantity_tiers:
+    k_suffix: true
+    plain: true
+    plain_label_hint: "quantity|qty|total|cost|数量|印数"
+    max_tiers: 10
+  materials:
+    text:
+      default: 书纸
+      map:
+        - { match: "woodfree|uncoated|书纸|胶版|munk|蒙肯", page_style: 书纸 }
+        - { match: "art ?paper|c1s|c2s|铜版|光粉|粉卡|白卡", page_style: 光粉纸 }
+    cover:
+      default: 光粉纸
+      map:
+        - { match: "c1s|artboard|art ?card|光粉|粉卡|白卡|卡纸", page_style: 光粉纸 }
+        - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+  binding:
+    enabled: false
+    default: ""
+    map: {}
+  # 产品类别 CPLB —— 权威树见 assets/cplb_tree.yaml（88 节点）
+  #   cplb.map        客户文件里的写法 → 树节点编号（正则，命中即用，可被客户档案覆盖）
+  #   cplb.match_keys 在哪些规范键里找关键词
+  #   fallback        兜不住时用的值，必须也在树里
+  #     32.00;其他 是安全兜底（树里存在）；用 --node 32.00 查看定义
+  product_category:
+    fallback: "32.00;其他"
+  cplb:
+    match_keys: [format, binding, finishes, project_description, series_name]
+    map: []
+  # 产品属性 CPSX —— 由「目标年龄段 + 安全检查」推导（业务确认 2026-09-23 要落库）
+  #   取值必须是 assets/erp_form_schema.yaml 里 CPSX 的合法枚举（中文 label）
+  cpsx:
+    threshold: 3
+    above: 三岁以上
+    below: 三岁以下
+    above_with_test: "3岁以上（要寄第三方测试）"
+    below_with_test: "3岁以下（要寄第三方测试）"
+    safety_true: ["y", "yes", "true", "是", "1", "✓"]
+  dates:
+    JHRQ: { from: pub_month }
+    WCRQ: { mode: today_plus_days, days: 10 }
+  spine:
+    mode: cd_vs_kd
+    long: 长书脊
+    short: 短书脊
+
+email:
+  khdh:
+    attachment_keys: ["works_references"]
+    subject_patterns:
+      - '(?i)\b(?:p\.?o\.?|ref(?:erence)?|order)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{3,8}(?:\s*[/,&]\s*\d{3,8})*)'
+      - '\b(\d{5}(?:\s*[/,&]\s*\d{5})*)\b'
+    body_patterns:
+      - '(?i)works?\s+references?\s*[:#]?\s*(\d{3,8}(?:\s*[/,&]\s*\d{3,8})*)'

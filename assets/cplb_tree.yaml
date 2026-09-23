@@ -1,0 +1,1540 @@
+# ═══════════════════════════════════════════════════════════════════
+# ERP 产品类别（CPLB）权威树 + 重设计导航树
+#
+# 本文件由 scripts/cplb_tree.py --rebuild 生成，请勿手改 ——
+# 要改设计（分组 / 决策路径 / 常用速选），改脚本里的 NAVIGATION 等常量再重放。
+#
+# 用法：uv run ./scripts/cplb_tree.py --list | --group 精装书 | --node 23.01
+# ═══════════════════════════════════════════════════════════════════
+tree_version: 1
+generated_at: '2026-09-23'
+source: assets/product_categories.xlsx（ERP 产品类别表导出）
+generator: scripts/cplb_tree.py --rebuild
+field: CPLB
+form_name: txtCPLB
+label: 产品类别
+format_hint: ERP 存储格式：`<编号>;<名称>`，例：`23.01;无线胶装书`（历史单据实例）
+design_note: 编号全部沿用 ERP 原值（一个都没改），只在其上叠加「导航层」：分组顺序按业务决策顺序（成品形态 → 装订 → 封面 → 内文工艺），组内把同属性的兄弟节点排到一起。
+legend:
+  depth: 1=顶层大组（编号 X.00），2=可选的具体子类（写进 JSON 的值取这一层）
+  criteria: ERP 产品类别表里的业务定义（REMARK 列）—— 判断「该不该选它」的依据
+  attrs.cover_board: 封面灰板：有 / 无 / 不涉及
+  attrs.features: 从名称+定义里抽出的工艺特征（供搜索与建议打分）
+nodes:
+  '22.03':
+    code: '22.03'
+    name: 假精装书
+    label: 22.03;假精装书
+    depth: 2
+    top: '22'
+    top_name: 精装书
+    parent: '22.00'
+    category_group: 书版
+    criteria: 假精装
+    attrs:
+      cover_board: 不涉及
+    aliases:
+    - quarter bound
+    - 假精装
+    - 半精装
+  '26.04':
+    code: '26.04'
+    name: 精装蛇圈书
+    label: 26.04;精装蛇圈书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面有灰板，且蛇圈(单线圈)全外露的书
+    attrs:
+      cover_board: 有
+      features:
+      - 蛇圈单线圈
+  '23.05':
+    code: '23.05'
+    name: PAD头书
+    label: 23.05;PAD头书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 除PAD头（全封面）外的PAD书，如PAD（无封面）、PAD（有封面，但封底尺寸不等于封面尺寸的有封面PAD头书）
+    attrs:
+      cover_board: 不涉及
+      features:
+      - PAD 头
+    aliases:
+    - pad book
+    - PAD头
+  '24.01':
+    code: '24.01'
+    name: 普通骑钉书
+    label: 24.01;普通骑钉书
+    depth: 2
+    top: '24'
+    top_name: 骑钉书
+    parent: '24.00'
+    category_group: 书版
+    criteria: 普通骑钉书
+    attrs:
+      cover_board: 不涉及
+  '26.05':
+    code: '26.05'
+    name: 精装半内藏蛇圈书
+    label: 26.05;精装半内藏蛇圈书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面有灰板，且只有封底可以看到蛇圈(单线圈)的书
+    attrs:
+      cover_board: 有
+      features:
+      - 蛇圈单线圈
+  '26.03':
+    code: '26.03'
+    name: 普通内藏蛇圈书
+    label: 26.03;普通内藏蛇圈书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且只有揭开封面才可以看到蛇圈(单线圈)的书
+    attrs:
+      cover_board: 无
+      features:
+      - 蛇圈单线圈
+  '25.03':
+    code: '25.03'
+    name: 精装车线音乐书(线路)
+    label: 25.03;精装车线音乐书(线路)
+    depth: 2
+    top: '25'
+    top_name: 车线书
+    parent: '25.00'
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 软线路（内藏）
+      finance_class: 方脊锁线精装书
+      board_class: 精装书
+  '27.08':
+    code: '27.08'
+    name: 普通磁胶BB书
+    label: 27.08;普通磁胶BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且整本书有磁胶、铁粉胶的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 磁胶/铁粉胶
+  '23.00':
+    code: '23.00'
+    name: 胶装书
+    label: 23.00;胶装书
+    depth: 1
+    top: '23'
+    top_name: 胶装书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '22.05':
+    code: '22.05'
+    name: 带机封方脊精装书
+    label: 22.05;带机封方脊精装书
+    depth: 2
+    top: '22'
+    top_name: 精装书
+    parent: '22.00'
+    category_group: 书版
+    criteria: 带机封的方脊精装书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 机封（封面折叠）
+      finance_class: 方脊锁线精装书
+  '22.00':
+    code: '22.00'
+    name: 精装书
+    label: 22.00;精装书
+    depth: 1
+    top: '22'
+    top_name: 精装书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '26.11':
+    code: '26.11'
+    name: 精装半内藏YO书
+    label: 26.11;精装半内藏YO书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面有灰板，且只有封底可以看到YO(双线圈)的书
+    attrs:
+      cover_board: 有
+      features:
+      - Y O 双线圈
+  '25.00':
+    code: '25.00'
+    name: 车线书
+    label: 25.00;车线书
+    depth: 1
+    top: '25'
+    top_name: 车线书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '26.02':
+    code: '26.02'
+    name: 普通半内藏蛇圈书
+    label: 26.02;普通半内藏蛇圈书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且只有封底可以看到蛇圈(单线圈)的书
+    attrs:
+      cover_board: 无
+      features:
+      - 蛇圈单线圈
+  '26.10':
+    code: '26.10'
+    name: 精装YO书
+    label: 26.10;精装YO书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面有灰板，且YO(双线圈)全外露的书
+    attrs:
+      cover_board: 有
+      features:
+      - Y O 双线圈
+  '28.00':
+    code: '28.00'
+    name: POP UP书
+    label: 28.00;POP UP书
+    depth: 1
+    top: '28'
+    top_name: POP UP书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '26.00':
+    code: '26.00'
+    name: 线圈书
+    label: 26.00;线圈书
+    depth: 1
+    top: '26'
+    top_name: 线圈书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '32.02':
+    code: '32.02'
+    name: 文件夹
+    label: 32.02;文件夹
+    depth: 2
+    top: '32'
+    top_name: 其他
+    parent: '32.00'
+    category_group: 书版
+    criteria: 文件夹
+    attrs:
+      cover_board: 不涉及
+  '24.03':
+    code: '24.03'
+    name: 贴纸骑钉书
+    label: 24.03;贴纸骑钉书
+    depth: 2
+    top: '24'
+    top_name: 骑钉书
+    parent: '24.00'
+    category_group: 书版
+    criteria: 内文全部是贴纸的骑钉书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 贴纸
+  '31.01':
+    code: '31.01'
+    name: 啤牌咭
+    label: 31.01;啤牌咭
+    depth: 2
+    top: '31'
+    top_name: 单张类
+    parent: '31.00'
+    category_group: 书版
+    criteria: 需过啤牌油的单张咭
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 过啤牌油
+  '32.03':
+    code: '32.03'
+    name: 手挽袋
+    label: 32.03;手挽袋
+    depth: 2
+    top: '32'
+    top_name: 其他
+    parent: '32.00'
+    category_group: 书版
+    criteria: 手挽袋
+    attrs:
+      cover_board: 不涉及
+    aliases:
+    - tote bag
+    - 纸袋
+  '23.02':
+    code: '23.02'
+    name: 锁线胶装书
+    label: 23.02;锁线胶装书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 需锁线的胶装书
+    attrs:
+      cover_board: 不涉及
+  '27.21':
+    code: '27.21'
+    name: 风琴揭页BB书
+    label: 27.21;风琴揭页BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 一张过有揭页的风琴折BB书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 揭页
+      - 风琴折
+  '24.04':
+    code: '24.04'
+    name: 带机封骑钉书
+    label: 24.04;带机封骑钉书
+    depth: 2
+    top: '24'
+    top_name: 骑钉书
+    parent: '24.00'
+    category_group: 书版
+    criteria: 封面需要做折叠的骑钉书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 机封（封面折叠）
+  '29.00':
+    code: '29.00'
+    name: 套装
+    label: 29.00;套装
+    depth: 1
+    top: '29'
+    top_name: 套装
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '27.10':
+    code: '27.10'
+    name: 冲形状普通BB书
+    label: 27.10;冲形状普通BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 需整书冲形状，且封面不用灰板包皮壳的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 冲形状
+  '30.00':
+    code: '30.00'
+    name: 盒类
+    label: 30.00;盒类
+    depth: 1
+    top: '30'
+    top_name: 盒类
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '27.11':
+    code: '27.11'
+    name: 冲形状精装BB书
+    label: 27.11;冲形状精装BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 需整书冲形状，且封面有灰板包皮壳的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 冲形状
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '27.22':
+    code: '27.22'
+    name: 普通毛毡布偶BB书
+    label: 27.22;普通毛毡布偶BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【不用】灰板包皮壳，书本带有毛毡布，玩偶一类的BB书及整本书粘2片或2片以上配件。
+    attrs:
+      cover_board: 无
+      features:
+      - 毛毡布偶/配件
+  '24.02':
+    code: '24.02'
+    name: 冲形状骑钉书
+    label: 24.02;冲形状骑钉书
+    depth: 2
+    top: '24'
+    top_name: 骑钉书
+    parent: '24.00'
+    category_group: 书版
+    criteria: 需冲形状的骑钉书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 冲形状
+  '27.16':
+    code: '27.16'
+    name: 普通音乐BB书(发声)
+    label: 27.16;普通音乐BB书(发声)
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【不用】灰板包皮壳，且整书有外露音乐器的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 发声器（外露）
+    aliases:
+    - sound book
+    - musical
+  '30.02':
+    code: '30.02'
+    name: 坑盒
+    label: 30.02;坑盒
+    depth: 2
+    top: '30'
+    top_name: 盒类
+    parent: '30.00'
+    category_group: 书版
+    criteria: 有坑纸组成的彩盒
+    attrs:
+      cover_board: 不涉及
+  '28.01':
+    code: '28.01'
+    name: 普通POP UP书
+    label: 28.01;普通POP UP书
+    depth: 2
+    top: '28'
+    top_name: POP UP书
+    parent: '28.00'
+    category_group: 书版
+    criteria: 封面没有灰板的POP UP书
+    attrs:
+      cover_board: 无
+      features:
+      - POP UP
+  '32.00':
+    code: '32.00'
+    name: 其他
+    label: 32.00;其他
+    depth: 1
+    top: '32'
+    top_name: 其他
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '26.14':
+    code: '26.14'
+    name: 普通YO日历
+    label: 26.14;普通YO日历
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 三角架用单粉纸、双粉纸、粉灰纸或直接用双面白/单面白做的YO日历
+    attrs:
+      cover_board: 不涉及
+      features:
+      - Y O 双线圈
+      - 日历/三角座
+  '22.04':
+    code: '22.04'
+    name: 带机封圆脊精装书
+    label: 22.04;带机封圆脊精装书
+    depth: 2
+    top: '22'
+    top_name: 精装书
+    parent: '22.00'
+    category_group: 书版
+    criteria: 带机封的圆脊精装书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 机封（封面折叠）
+      finance_class: 圆脊锁线精装书
+  '32.01':
+    code: '32.01'
+    name: 塑胶
+    label: 32.01;塑胶
+    depth: 2
+    top: '32'
+    top_name: 其他
+    parent: '32.00'
+    category_group: 书版
+    criteria: 只有胶片组成的产品
+    attrs:
+      cover_board: 不涉及
+  '26.08':
+    code: '26.08'
+    name: 普通半内藏YO书
+    label: 26.08;普通半内藏YO书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且只有封底可以看到YO(双线圈)的书
+    attrs:
+      cover_board: 无
+      features:
+      - Y O 双线圈
+  '23.08':
+    code: '23.08'
+    name: 带机封锁线胶装书
+    label: 23.08;带机封锁线胶装书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 封面需要做折叠的锁线胶装书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 机封（封面折叠）
+  '29.03':
+    code: '29.03'
+    name: 魔术套装
+    label: 29.03;魔术套装
+    depth: 2
+    top: '29'
+    top_name: 套装
+    parent: '29.00'
+    category_group: 书版
+    criteria: 由魔术玩具与其他产品组合成而的产品
+    attrs:
+      cover_board: 不涉及
+  '23.07':
+    code: '23.07'
+    name: 带机封无线胶装书
+    label: 23.07;带机封无线胶装书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 封面需要做折叠的无线胶装书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 机封（封面折叠）
+  '22.02':
+    code: '22.02'
+    name: 方脊精装书
+    label: 22.02;方脊精装书
+    depth: 2
+    top: '22'
+    top_name: 精装书
+    parent: '22.00'
+    category_group: 书版
+    criteria: 方脊精装书
+    attrs:
+      cover_board: 不涉及
+      finance_class: 方脊锁线精装书
+    aliases:
+    - square back
+    - flat spine
+    - 方脊
+  '29.04':
+    code: '29.04'
+    name: 其它套装
+    label: 29.04;其它套装
+    depth: 2
+    top: '29'
+    top_name: 套装
+    parent: '29.00'
+    category_group: 书版
+    criteria: 除以上组合外的套装产品
+    attrs:
+      cover_board: 不涉及
+  '31.06':
+    code: '31.06'
+    name: 便利贴
+    label: 31.06;便利贴
+    depth: 2
+    top: '31'
+    top_name: 单张类
+    parent: '31.00'
+    category_group: 书版
+    criteria: 便利贴
+    attrs:
+      cover_board: 不涉及
+    aliases:
+    - sticky note
+    - n次贴
+  '23.04':
+    code: '23.04'
+    name: 冲形状胶锁线装书
+    label: 23.04;冲形状胶锁线装书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 需冲形状，需锁线的胶装书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 冲形状
+  '27.13':
+    code: '27.13'
+    name: 精装拉卡机关BB书
+    label: 27.13;精装拉卡机关BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面有用灰板包皮壳，且内文有拉卡机关的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 拉卡机关
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '22.06':
+    code: '22.06'
+    name: 方脊精装音乐书(线路)
+    label: 22.06;方脊精装音乐书(线路)
+    depth: 2
+    top: '22'
+    top_name: 精装书
+    parent: '22.00'
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 软线路（内藏）
+      finance_class: 方脊锁线精装书
+      board_class: 精装书
+  '27.14':
+    code: '27.14'
+    name: 普通POP UP BB书
+    label: 27.14;普通POP UP BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面不用灰板包皮壳，且内文有POP UP的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - POP UP
+  '26.06':
+    code: '26.06'
+    name: 精装内藏蛇圈书
+    label: 26.06;精装内藏蛇圈书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面有灰板，且只有揭开封面才可以看到蛇圈(单线圈)的书
+    attrs:
+      cover_board: 有
+      features:
+      - 蛇圈单线圈
+      finance_class: 圆脊内藏YO书
+  '27.04':
+    code: '27.04'
+    name: 精装砌图BB书
+    label: 27.04;精装砌图BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面有灰板，且内文有砌图的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 砌图
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '27.12':
+    code: '27.12'
+    name: 普通拉卡机关BB书
+    label: 27.12;普通拉卡机关BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面不用灰板包皮壳，且内文有拉卡机关的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 拉卡机关
+    aliases:
+    - pull tab
+  '26.13':
+    code: '26.13'
+    name: 精装YO日历
+    label: 26.13;精装YO日历
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 有日历三角座，且三角座有灰板的YO(双线圈)书
+    attrs:
+      cover_board: 有
+      features:
+      - Y O 双线圈
+      - 日历/三角座
+      finance_class: 座台月历YO书
+      board_class: 精装书
+    aliases:
+    - calendar
+    - 月历
+  '26.12':
+    code: '26.12'
+    name: 精装内藏YO书
+    label: 26.12;精装内藏YO书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面有灰板，且只有揭开封面才可以看到YO(双线圈)的书
+    attrs:
+      cover_board: 有
+      features:
+      - Y O 双线圈
+      finance_class: 圆脊内藏YO书
+      board_class: 精装书
+  '29.02':
+    code: '29.02'
+    name: 砌图套装
+    label: 29.02;砌图套装
+    depth: 2
+    top: '29'
+    top_name: 套装
+    parent: '29.00'
+    category_group: 书版
+    criteria: 打散后的砌图跟其他产品/物料组合而成的产品
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 砌图
+  '25.02':
+    code: '25.02'
+    name: 精装车线书
+    label: 25.02;精装车线书
+    depth: 2
+    top: '25'
+    top_name: 车线书
+    parent: '25.00'
+    category_group: 书版
+    criteria: 装订方式是：车线，且封面有灰板的车线书
+    attrs:
+      cover_board: 有
+  '27.17':
+    code: '27.17'
+    name: 精装音乐BB书(发声)
+    label: 27.17;精装音乐BB书(发声)
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【有用】灰板包皮壳，且整书有外露音乐器的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 发声器（外露）
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '27.09':
+    code: '27.09'
+    name: 精装磁胶BB书
+    label: 27.09;精装磁胶BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面有灰板，且整本书有磁胶、铁粉胶的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 磁胶/铁粉胶
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '27.23':
+    code: '27.23'
+    name: 精装毛毡布偶BB书
+    label: 27.23;精装毛毡布偶BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【有用】灰板包皮壳，书本带有毛毡布，玩偶一类的BB书及整本书粘2片或2片以上配件。
+    attrs:
+      cover_board: 有
+      features:
+      - 毛毡布偶/配件
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '31.07':
+    code: '31.07'
+    name: 吸塑咭
+    label: 31.07;吸塑咭
+    depth: 2
+    top: '31'
+    top_name: 单张类
+    parent: '31.00'
+    category_group: 书版
+    criteria: 需过吸塑油的单张咭
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 过吸塑油
+  '27.18':
+    code: '27.18'
+    name: 普通音乐BB书(线路)
+    label: 27.18;普通音乐BB书(线路)
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【不用】灰板包皮壳，且整书有内藏软线路音乐器的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 软线路（内藏）
+  '31.04':
+    code: '31.04'
+    name: 对裱咭
+    label: 31.04;对裱咭
+    depth: 2
+    top: '31'
+    top_name: 单张类
+    parent: '31.00'
+    category_group: 书版
+    criteria: 需对裱的单张咭
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 对裱
+  '27.01':
+    code: '27.01'
+    name: 普通BB书
+    label: 27.01;普通BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面没有灰板的普通BB书
+    attrs:
+      cover_board: 无
+    aliases:
+    - soft cover board book
+    - 普通纸板书
+  '26.09':
+    code: '26.09'
+    name: 普通内藏YO书
+    label: 26.09;普通内藏YO书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且只有揭开封面才可以看到YO(双线圈)的书
+    attrs:
+      cover_board: 无
+      features:
+      - Y O 双线圈
+  '23.06':
+    code: '23.06'
+    name: PAD头书(全封面)
+    label: 23.06;PAD头书(全封面)
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 有封面的PAD头书，需上二次胶装机，第一次上脊胶，第二次上封面
+    attrs:
+      cover_board: 不涉及
+      features:
+      - PAD 头
+    aliases:
+    - pad head full cover
+  '30.03':
+    code: '30.03'
+    name: 咭盒
+    label: 30.03;咭盒
+    depth: 2
+    top: '30'
+    top_name: 盒类
+    parent: '30.00'
+    category_group: 书版
+    criteria: 只有咭纸，没有灰板也没有坑纸组成的彩盒
+    attrs:
+      cover_board: 无
+  '30.01':
+    code: '30.01'
+    name: 糊盒
+    label: 30.01;糊盒
+    depth: 2
+    top: '30'
+    top_name: 盒类
+    parent: '30.00'
+    category_group: 书版
+    criteria: 有灰板组成的精品盒
+    attrs:
+      cover_board: 有
+  '31.03':
+    code: '31.03'
+    name: 坑咭
+    label: 31.03;坑咭
+    depth: 2
+    top: '31'
+    top_name: 单张类
+    parent: '31.00'
+    category_group: 书版
+    criteria: 有坑纸组成的单张咭
+    attrs:
+      cover_board: 不涉及
+  '25.01':
+    code: '25.01'
+    name: 普通车线书
+    label: 25.01;普通车线书
+    depth: 2
+    top: '25'
+    top_name: 车线书
+    parent: '25.00'
+    category_group: 书版
+    criteria: 装订方式是：车线，且封面没有灰板的车线书
+    attrs:
+      cover_board: 无
+  '27.07':
+    code: '27.07'
+    name: 蛇圈揭页BB书
+    label: 27.07;蛇圈揭页BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 装订方式是：蛇圈，且内文有揭页的BB书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 揭页
+      - 蛇圈单线圈
+  '22.01':
+    code: '22.01'
+    name: 圆脊精装书
+    label: 22.01;圆脊精装书
+    depth: 2
+    top: '22'
+    top_name: 精装书
+    parent: '22.00'
+    category_group: 书版
+    criteria: 圆脊精装书
+    attrs:
+      cover_board: 不涉及
+      finance_class: 圆脊锁线精装书
+    aliases:
+    - round back
+    - round spine
+    - 圆脊
+  '27.19':
+    code: '27.19'
+    name: 精装音乐BB书(线路)
+    label: 27.19;精装音乐BB书(线路)
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【有用】灰板包皮壳，且整书有内藏软线路音乐器的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 软线路（内藏）
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '29.01':
+    code: '29.01'
+    name: 铁盒套装
+    label: 29.01;铁盒套装
+    depth: 2
+    top: '29'
+    top_name: 套装
+    parent: '29.00'
+    category_group: 书版
+    criteria: 有铁盒跟其他产品组合而成的产品
+    attrs:
+      cover_board: 不涉及
+  '24.00':
+    code: '24.00'
+    name: 骑钉书
+    label: 24.00;骑钉书
+    depth: 1
+    top: '24'
+    top_name: 骑钉书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '31.05':
+    code: '31.05'
+    name: 单张
+    label: 31.05;单张
+    depth: 2
+    top: '31'
+    top_name: 单张类
+    parent: '31.00'
+    category_group: 书版
+    criteria: 普通单张咭
+    attrs:
+      cover_board: 不涉及
+  '23.03':
+    code: '23.03'
+    name: 冲形状无线胶装书
+    label: 23.03;冲形状无线胶装书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 需冲形状，无需锁线的胶装书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 冲形状
+  '26.01':
+    code: '26.01'
+    name: 普通蛇圈书
+    label: 26.01;普通蛇圈书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且蛇圈(单线圈)全外露的书
+    attrs:
+      cover_board: 无
+      features:
+      - 蛇圈单线圈
+  '27.03':
+    code: '27.03'
+    name: 普通砌图BB书
+    label: 27.03;普通砌图BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且内文有砌图的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 砌图
+  '32.04':
+    code: '32.04'
+    name: 铝片
+    label: 32.04;铝片
+    depth: 2
+    top: '32'
+    top_name: 其他
+    parent: '32.00'
+    category_group: 书版
+    criteria: 铝片
+    attrs:
+      cover_board: 不涉及
+  '23.01':
+    code: '23.01'
+    name: 无线胶装书
+    label: 23.01;无线胶装书
+    depth: 2
+    top: '23'
+    top_name: 胶装书
+    parent: '23.00'
+    category_group: 书版
+    criteria: 无需锁线的胶装书，如内文是书纸外的其他纸不建议做无线胶装书，容易掉页
+    attrs:
+      cover_board: 不涉及
+  '26.07':
+    code: '26.07'
+    name: 普通YO书
+    label: 26.07;普通YO书
+    depth: 2
+    top: '26'
+    top_name: 线圈书
+    parent: '26.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且YO(双线圈)全外露的书
+    attrs:
+      cover_board: 无
+      features:
+      - Y O 双线圈
+  '31.00':
+    code: '31.00'
+    name: 单张类
+    label: 31.00;单张类
+    depth: 1
+    top: '31'
+    top_name: 单张类
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+  '28.02':
+    code: '28.02'
+    name: 精装POP UP书
+    label: 28.02;精装POP UP书
+    depth: 2
+    top: '28'
+    top_name: POP UP书
+    parent: '28.00'
+    category_group: 书版
+    criteria: 封面有灰板的POP UP书
+    attrs:
+      cover_board: 有
+      features:
+      - POP UP
+  '27.05':
+    code: '27.05'
+    name: 普通揭页BB书
+    label: 27.05;普通揭页BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面没有灰板，且内文有揭页的BB书
+    attrs:
+      cover_board: 无
+      features:
+      - 揭页
+    aliases:
+    - lift the flap
+    - 翻翻书
+  '27.20':
+    code: '27.20'
+    name: 对裱揭页BB书
+    label: 27.20;对裱揭页BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 一张过且需对裱也有揭页的BB书
+    attrs:
+      cover_board: 不涉及
+      features:
+      - 揭页
+      - 对裱
+  '27.15':
+    code: '27.15'
+    name: 精装POP UP BB书
+    label: 27.15;精装POP UP BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面【有用】灰板包皮壳，且内文有POP UP的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - POP UP
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+  '27.06':
+    code: '27.06'
+    name: 精装揭页BB书
+    label: 27.06;精装揭页BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面有灰板，且内文有揭页的BB书
+    attrs:
+      cover_board: 有
+      features:
+      - 揭页
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+    aliases:
+    - hardcover lift the flap
+  '27.02':
+    code: '27.02'
+    name: 精装BB书
+    label: 27.02;精装BB书
+    depth: 2
+    top: '27'
+    top_name: BB书
+    parent: '27.00'
+    category_group: 书版
+    criteria: 封面有灰板的普通BB书
+    attrs:
+      cover_board: 有
+      finance_class: 方脊精装BB书
+      board_class: 精装书
+    aliases:
+    - hardcover board book
+    - 精装纸板书
+    - 硬皮书
+  '27.00':
+    code: '27.00'
+    name: BB书
+    label: 27.00;BB书
+    depth: 1
+    top: '27'
+    top_name: BB书
+    parent: null
+    category_group: 书版
+    criteria: ''
+    attrs:
+      cover_board: 不涉及
+quick_pick:
+  name: 常用速选（童书/纸品类订单高频）
+  note: ⚠️ 排序依据是业务经验，不是 ERP 真实频次数据 —— 拿到导出后可据实重排。
+  items:
+  - code: '23.01'
+    why: 平装首选：软封面、无线胶装、不锁线
+  - code: '22.02'
+    why: 硬封面 + 方脊（最常见精装）
+  - code: '22.01'
+    why: 硬封面 + 圆脊
+  - code: '24.01'
+    why: 薄本、成本最低（骑马钉）
+  - code: '27.02'
+    why: 纸板书 + 硬封面（BB书主力）
+  - code: '27.01'
+    why: 纸板书 + 软封面
+  - code: '25.01'
+    why: 车线（缝线）装订、无灰板
+  - code: '26.01'
+    why: 单线圈（蛇圈）、无灰板
+  - code: '23.05'
+    why: PAD 书（封面大于内文、露 PAD 头）
+  - code: '31.05'
+    why: 非成册：单张 / 卡牌
+navigation:
+- name: A. 书籍类（可翻阅成册）
+  hint: 先定装订方式，再看封面有没有灰板（有=精装变体，无=普通变体），最后看内文工艺。
+  groups:
+  - file: 22 精装书
+    top: '22'
+    hint: 封面有灰板包皮壳（硬封面）。再分：脊型（圆/方）、是否带机封（封面需折叠）、内文是否含线路。
+    subgroups:
+    - name: 圆脊
+      items:
+      - '22.01'
+      - '22.04'
+    - name: 方脊
+      items:
+      - '22.02'
+      - '22.05'
+    - name: 假精装（软封套硬壳，成本低于精装）
+      items:
+      - '22.03'
+    - name: 内文含线路（音乐书）
+      items:
+      - '22.06'
+  - file: 23 胶装书
+    top: '23'
+    hint: 软封面、书脊上胶。先判要不要锁线（不锁=无线胶装，锁=锁线），再判是否 PAD 书（封面与内文尺寸不等）、封面是否需折叠、是否整书冲形状。
+    subgroups:
+    - name: 常规胶装
+      items:
+      - '23.01'
+      - '23.02'
+    - name: PAD 书（封面大于内文，露 PAD 头）
+      items:
+      - '23.05'
+      - '23.06'
+    - name: 封面需折叠（带机封）
+      items:
+      - '23.07'
+      - '23.08'
+    - name: 整书冲形状
+      items:
+      - '23.03'
+      - '23.04'
+  - file: 24 骑钉书
+    top: '24'
+    hint: 骑马钉（staple / saddle stitch），薄本。只有「封面需折叠」「整书冲形状」「内文是贴纸」三种变体。
+    subgroups:
+    - name: 常规
+      items:
+      - '24.01'
+    - name: 封面需折叠（带机封）
+      items:
+      - '24.04'
+    - name: 整书冲形状
+      items:
+      - '24.02'
+    - name: 内文全部是贴纸
+      items:
+      - '24.03'
+  - file: 25 车线书
+    top: '25'
+    hint: 车线（thread sewn）装订。按封面有没有灰板分普通/精装；内文含线路的另立一类。
+    subgroups:
+    - name: 无灰板（普通）
+      items:
+      - '25.01'
+    - name: 有灰板（精装）
+      items:
+      - '25.02'
+    - name: 含线路（音乐书）
+      items:
+      - '25.03'
+  - file: 26 线圈书
+    top: '26'
+    hint: 线圈装订。两个变量：圈型（蛇圈=单线圈 / YO=双线圈）× 封面（普通=无灰板 / 精装=有灰板），圈的可视度再分「全外露 / 半内藏 / 内藏」。日历是 YO + 三角座的变体。
+    subgroups:
+    - name: 蛇圈（单线圈）—— 普通封面的 全外露/半内藏/内藏
+      items:
+      - '26.01'
+      - '26.02'
+      - '26.03'
+    - name: 蛇圈（单线圈）—— 精装（有灰板）的 全外露/半内藏/内藏
+      items:
+      - '26.04'
+      - '26.05'
+      - '26.06'
+    - name: YO（双线圈）—— 普通封面的 全外露/半内藏/内藏
+      items:
+      - '26.07'
+      - '26.08'
+      - '26.09'
+    - name: YO（双线圈）—— 精装（有灰板）的 全外露/半内藏/内藏
+      items:
+      - '26.10'
+      - '26.11'
+      - '26.12'
+    - name: 日历（YO + 三角座）
+      items:
+      - '26.13'
+      - '26.14'
+  - file: 27 BB书（纸板书）
+    top: '27'
+    hint: ★ 原树最大的组（23 个子类）。判法：先定封面「普通（无灰板）/ 精装（有灰板）」，再看内文或工艺特征（揭页 / 砌图 / 拉卡机关 / POP UP / 音乐 / 磁胶 / 毛毡布偶 / 整书冲形状）。组内已按特征重新聚合，不再按编号散排。
+    subgroups:
+    - name: 基础（无特殊工艺）
+      items:
+      - '27.01'
+      - '27.02'
+    - name: 揭页（lift-the-flap）
+      items:
+      - '27.05'
+      - '27.06'
+      - '27.07'
+      - '27.20'
+      - '27.21'
+    - name: 砌图（puzzle）
+      items:
+      - '27.03'
+      - '27.04'
+    - name: 拉卡机关（pull-tab）
+      items:
+      - '27.12'
+      - '27.13'
+    - name: 内文 POP UP
+      items:
+      - '27.14'
+      - '27.15'
+    - name: 音乐 / 发声（外露音乐器 vs 内藏软线路）
+      items:
+      - '27.16'
+      - '27.17'
+      - '27.18'
+      - '27.19'
+    - name: 磁胶 / 铁粉胶
+      items:
+      - '27.08'
+      - '27.09'
+    - name: 毛毡布偶 / 整本书粘配件
+      items:
+      - '27.22'
+      - '27.23'
+    - name: 整书冲形状
+      items:
+      - '27.10'
+      - '27.11'
+  - file: 28 POP UP书
+    top: '28'
+    hint: 整本以 POP UP（立体页）为主体的书 —— 区别于 27 里的「内文含 POP UP 的 BB书」。按封面有无灰板分。
+    subgroups:
+    - name: 无灰板
+      items:
+      - '28.01'
+    - name: 有灰板
+      items:
+      - '28.02'
+- name: B. 组合 / 包装类
+  hint: 不是单本成册的书：多件组合（套装）或盒形容器。
+  groups:
+  - file: 29 套装
+    top: '29'
+    hint: 多个产品/物料组合成一套。按组合件的容器/玩法分。
+    subgroups:
+    - name: 按容器 / 玩法
+      items:
+      - '29.01'
+      - '29.02'
+      - '29.03'
+      - '29.04'
+  - file: 30 盒类
+    top: '30'
+    hint: 单独的彩盒（不含书）。按盒身材料分：灰板（糊盒）/ 坑纸（坑盒）/ 卡纸（咭盒）。
+    subgroups:
+    - name: 按盒身材料
+      items:
+      - '30.01'
+      - '30.02'
+      - '30.03'
+- name: C. 单张 / 卡牌类
+  hint: 不成册的平面印品。
+  groups:
+  - file: 31 单张类
+    top: '31'
+    hint: 单张、卡牌、贴纸、便利贴。按「表面工艺 / 纸张结构」分：过啤牌油 / 过吸塑油 / 对裱 / 坑纸。
+    subgroups:
+    - name: 基础单张
+      items:
+      - '31.05'
+    - name: 表面工艺（过油）
+      items:
+      - '31.01'
+      - '31.07'
+    - name: 纸张结构（对裱 / 坑纸）
+      items:
+      - '31.04'
+      - '31.03'
+    - name: 文具类
+      items:
+      - '31.06'
+- name: D. 其他（非纸类 / 杂项）
+  hint: 主材不是纸的印品。
+  groups:
+  - file: 32 其他
+    top: '32'
+    hint: 塑胶 / 铝片 / 手挽袋 / 文件夹。
+    subgroups:
+    - name: 非纸主材
+      items:
+      - '32.01'
+      - '32.04'
+    - name: 袋 / 夹
+      items:
+      - '32.03'
+      - '32.02'
+paths:
+- step: 第 1 问：成品是不是「成册可翻阅的书」？
+  'yes': 进入 A 类，问装订方式
+  'no': 不是书 → 29 套装（多件组合）/ 30 盒类（容器）/ 31 单张类（不成册印品）/ 32 其他（非纸主材）
+- step: 第 2 问：装订方式是什么？
+  options:
+  - 硬封面、书脊有灰板包皮壳 → 22 精装书
+  - 软封面、书脊上胶 → 23 胶装书
+  - 骑马钉（铁丝钉）→ 24 骑钉书
+  - 车线（缝线）→ 25 车线书
+  - 线圈（蛇圈=单线圈 / YO=双线圈）→ 26 线圈书
+  - 内文是厚纸板（整本硬纸板）→ 27 BB书
+  - 整本立体页 → 28 POP UP书
+- step: 第 3 问（书类）：封面有没有灰板？
+  options:
+  - 有灰板 → 精装 / 精装变体（名称带「精装」，如 27.02 精装BB书、26.04 精装蛇圈书）
+  - 无灰板 → 普通变体（名称带「普通」，如 27.01 普通BB书、26.01 普通蛇圈书）
+- step: 第 4 问：内文 / 工艺有什么特征？
+  options:
+  - 有揭页（lift-the-flap）→ 27.05/27.06/27.07/27.20/27.21
+  - 有砌图（puzzle）→ 27.03/27.04（砌图套装是 29.02）
+  - 有拉卡机关（pull-tab）→ 27.12/27.13
+  - 内文有 POP UP → 27.14/27.15；整本 POP UP → 28.01/28.02
+  - 有发声器（外露）→ 27.16/27.17；内藏软线路 → 27.18/27.19
+  - 有磁胶 / 铁粉胶 → 27.08/27.09
+  - 有毛毡布 / 玩偶 / 粘 2 片以上配件 → 27.22/27.23
+  - 内文全部是贴纸 → 24.03（骑钉）
+  - 无特殊工艺 → 取该装订的基础子类
+- step: 第 5 问：整书要不要冲形状（die-cut）？封面要不要折叠（带机封）？
+  options:
+  - 整书冲形状 → 取同装订的「冲形状 XXX」，如 23.03 冲形状无线胶装书、27.10 冲形状普通BB书
+  - 封面需折叠（机封）→ 取「带机封 XXX」，如 23.07、22.04、24.04
+- step: 第 6 问（胶装特例）：是不是 PAD 书？
+  options:
+  - 封面大于内文、露 PAD 头（内文无封面，或有封面但封底尺寸≠封面）→ 23.05 PAD头书
+  - 有封面的 PAD 头书、需二次上胶装机 → 23.06 PAD头书(全封面)

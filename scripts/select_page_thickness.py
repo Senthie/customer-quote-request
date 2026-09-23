@@ -10,6 +10,7 @@ select_page_thickness.py - 查询纸张厚度
     uv run ./scripts/select_page_thickness.py --pg 书纸 --faw 100
 """
 import argparse
+import re
 import sys
 import pandas as pd
 from pathlib import Path
@@ -80,6 +81,26 @@ def main():
         matched = df.loc[mask_fuzzy]
     
     if matched.empty:
+        # 同纸张类型下按克重就近取值
+        # （厚度表只列离散克重，客户常写 90gsm 这类表里没有的中间值）
+        sub = df[df["page_style"].astype(str).str.strip() == page_style].copy()
+        target = pd.to_numeric(re.sub(r"[^0-9.]", "", str(faw)), errors="coerce")
+        if not sub.empty and pd.notna(target):
+            sub["_w"] = pd.to_numeric(sub["faw/g"], errors="coerce")
+            sub = sub.dropna(subset=["_w"])
+            if not sub.empty:
+                # 就近取值；克重并列时取较大者（宁厚勿薄，避免书脊算窄装不下）
+                # 如需改成“取较小克重”，把下面 ascending 的第二个值改成 True
+                sub["_d"] = (sub["_w"] - target).abs()
+                best = sub.sort_values(["_d", "_w"], ascending=[True, False]).iloc[0]
+                print(best["thickness"])
+                print(
+                    f"提示：{page_style} {faw} 无精确数据，已按最近克重 "
+                    f"{int(best['_w'])} 取值（thickness={best['thickness']}）",
+                    file=sys.stderr,
+                )
+                sys.exit(0)
+
         print(f"未找到 {page_style} {faw} 的厚度数据。")
         sys.exit(0)
 

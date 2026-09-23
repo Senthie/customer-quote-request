@@ -1,0 +1,224 @@
+# ═══════════════════════════════════════════════════════════════
+# 客户档案：igl  （IGL / Flamingo）
+#
+# status: calibrated —— 已用真实报价文件 `PUZZLE COLOUR DISNEY.xlsx`
+#         校准，字段别名表来自 assets/customer_erp_mapper.xlsx（25 行）。
+#
+# 改这里的任何值 → 必须重跑回归：
+#     uv run ./scripts/main.py customer-files/pending/<样本> --customer igl
+#   并确认 59 键断言通过、字段值无意外变化。
+# ═══════════════════════════════════════════════════════════════
+id: igl
+name: IGL
+priority: 100
+status: calibrated
+notes: >
+  香港书商，报价单是「横向键值对」表格：第一行 Imprint | Autumn | Complexity | Low …
+  同一行右侧还可能续上第 3、4 组键值（如 Group/Series Number | | 6366）。
+
+# ── 1. 身份识别：怎么从邮件/文件认出这是 igl ───────────────────
+detect:
+  # 文件名关键词（小写、包含匹配）
+  filename_keywords:
+    - puzzle
+    - colour
+  # 附件/邮件里出现下列任一「特征标签」即判为 igl
+  label_signatures:
+    - "Works References For all Titles"
+    - "Safety Checks Req? (Y/N)"
+    - "Extent (pp + cover)"
+  min_signature_hits: 1
+  # 发件人域名（可选，留空表示不按发件人判断）
+  sender_domains: []
+  # 邮件主题关键词（可选）
+  subject_keywords: []
+
+# ── 2. 字段别名表：客户表里的列名 → 规范键 ─────────────────────
+# 匹配规则：归一化（小写 / 压缩空白）后「完全相等」，或整词包含。
+# 多个别名同时命中时取最长者（所以 Group 不会抢走 Group/Series Number）。
+fields:
+  imprint:              ["Imprint"]
+  complexity:           ["Complexity"]
+  requested_by:         ["Requested By"]
+  pub_month:            ["Pub Month", "Publication Month", "Publishing Month"]
+  series_name:          ["Series Name", "Series"]
+  number_of_titles:     ["Number of titles", "Number of Titles", "No. of titles", "Titles"]
+  group:                ["Group"]
+  category:             ["Category"]
+  safety_checks:        ["Safety Checks Req? (Y/N)", "Safety Checks Required?", "Safety Checks"]
+  target_age_group:     ["Target Age Group", "Age Group"]
+  works_references:     ["Works References For all Titles", "Works References"]
+  group_series_number:  ["Group/Series Number"]
+  isbn:                 ["ISBNs of All Titles", "ISBNs", "ISBN"]
+  project_description:  ["Project description", "Project Description"]
+  size:                 ["Size (tps) H x W x D mm", "Size"]
+  format:               ["Format"]
+  extent:               ["Extent (pp + cover)", "Extent"]
+  text_printing_spec:   ["Text Printing Spec"]
+  text_material:        ["Text Material"]
+  cover_printing_spec:  ["Cover Printing Spec"]
+  cover_material:       ["Cover Material"]
+  spine_width:          ["Spine width"]
+  binding:              ["Binding instructions", "Binding"]
+  finishes:             ["Finishes"]
+  # 数量档位行的标签（CPSL1~CPSL10 的来源）
+  quantity_tiers:       ["Total Costs", "Total Cost", "Cost", "Quantity", "数量"]
+
+# ── 2b. 已知的「非 ERP 字段」附加信息 ──────────────────────────
+# 这些栏位不进 ERP JSON（模板里没有对应字段），但**必须**体现在 CPMS 里。
+# 登记在这里的好处：① `calibrate_customer.py` 不再把它们当成「认不出的标签」；
+# ② `main.py` 会把它们列成「CPMS 素材」提醒 agent 别漏。
+extras:
+  - Quotation Number
+  - Quote Valid Until
+  - Production Facility Name & Address
+  - Carton Weight
+  - Carton Weight (mm) H x W x L
+  - Carton Length
+  - Carton Width / Depth
+  - Carton Height
+  - Carton dimensions to be adhered too
+  - Based on carton qty
+  - Minimum
+  - Maximum
+  - GRAND TOTAL
+  - Add 100%foil
+  - Add 50%foil
+  - Add 25%foil
+  - Add 100% holo foil
+  - Add 50% holo foil
+  - Add spot UV
+  - Add emboss
+  - Add 1 PMS
+  - Add pallets
+  - Text paper type and brand
+  - Cover paper type and brand
+
+# ── 3. ERP 固定值（该客户所有单子都一样的值）────────────────────
+# 取值必须落在 assets/erp_form_schema.yaml 的合法枚举内 —— main.py 步骤 5b 会校验。
+erp_fixed:
+  CPDL: 书版          # ERP 枚举：4=书版
+  YYS: 1
+  BZ: 美元            # 历史单据存 label（"美元"），不是 code "02"
+  PXH: 1
+  KHMBDJ: 0
+  DWMC: 本            # 业务确认 2026-09-23：书版产品单位用「本」（ERP 单位枚举含「本」）
+
+# ── 4. 解析规则 ────────────────────────────────────────────
+rules:
+  layout:
+    # 依次尝试的布局策略；先到先得（不覆盖已抽到的值），所以可以互补
+    #   auto_pairs    —— 主策略：标签在下方 or 右侧，一条规则通吃大多数报价单
+    #   column_pairs  —— 固定列：标签在 label_col，值在 value_col
+    #   shifted_pairs —— 只向右扫（纯横向键值对布局）
+    strategies: [auto_pairs, column_pairs, shifted_pairs]
+    label_col: 1              # column_pairs 用的标签列（0 基）
+    value_col: 2              # 对应的值列
+    min_label_row_hits: 2     # 一行里有 ≥2 个已知标签即视为「密集标签行」→ 优先取下方
+    max_label_len: 60         # 超过这个长度的单元格不可能是标签（防值被当标签）
+
+  size:
+    unit: mm
+    order: [CD, KD, GD]       # 客户写 "H x W x D"，第 1 段=长(CD) 第 2 段=宽(KD) 第 3 段=厚(GD)
+
+  # 数量档位（CPSL1~CPSL10）识别方式
+  quantity_tiers:
+    k_suffix: true                            # 支持 3k / 7.5k
+    plain: true                               # 支持 3000
+    plain_label_hint: "quantity|qty|total|cost|数量|印数"
+    max_tiers: 10
+
+  # 材质 → 厚度表纸张类型（TODO「纸张类型映射表」的落地）
+  materials:
+    text:
+      default: 书纸
+      map:
+        - { match: "woodfree|uncoated|书纸|胶版|munk|蒙肯", page_style: 书纸 }
+        - { match: "art ?paper|c1s|c2s|铜版|光粉|粉卡|白卡", page_style: 光粉纸 }
+    cover:
+      default: 光粉纸
+      map:
+        - { match: "c1s|artboard|art ?card|光粉|粉卡|白卡|卡纸", page_style: 光粉纸 }
+        - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+
+  # 装订方式 → ERP `ZDFS`
+  # ★ 2026-09-23 已定口径：合法取值以 ERP 表单为准（assets/erp_form_schema.yaml）：
+  #   胶装/PAD书 · 精装书 · 骑马钉 · 其他 · 套装 · 车线书 · 线圈书 · 快线/中线/慢线BB书
+  #   注意「无线胶装」不是合法值（历史单据 0e39e2e2 就填错了）→ 对应「胶装/PAD书」。
+  #   映射表命中不到时用 default（同样必须是合法值）。
+  binding:
+    enabled: true
+    default: 胶装/PAD书
+    map:
+      "perfect bound": 胶装/PAD书
+      "perfectbound": 胶装/PAD书
+      "paperback": 胶装/PAD书
+      "paper back": 胶装/PAD书
+      "无线胶装": 胶装/PAD书
+      "wire-o": 线圈书
+      "wiro": 线圈书
+      "coil": 线圈书
+      "saddle": 骑马钉
+      "staple": 骑马钉
+      "case bound": 精装书
+      "hardcover": 精装书
+      "hardback": 精装书
+      "sewn": 车线书
+      "thread sewn": 车线书
+      "slipcase": 套装
+      "box set": 套装
+
+  # 产品类别查表：先走 cplb.map（档案关键词 → 树节点，精确可控），
+  # 命中不到再退回 assets/product_categories.xlsx 的 customer_product_categories 列
+  # （该列只有 paperback 一行有值，是历史遗留路径，尽量用 cplb.map 取代）。
+  cplb:
+    match_keys: [format, binding, finishes, project_description, series_name]
+    map:
+      # 长正则在前（先到先得），限定「纸板书」类词以免 board 误命中
+      - { match: "board\\s*book|纸板书|厚纸板", node: "27.02" }
+      - { match: "lift[- ]the[- ]flap|翻翻|揭页", node: "27.05" }
+      - { match: "pop[- ]?up", node: "28.01" }
+      - { match: "wire[- ]?o|wiro|spiral|线圈|蛇圈", node: "26.01" }
+      - { match: "saddle|staple|骑马钉|骑钉", node: "24.01" }
+      - { match: "case\\s*bound|hardcover|hard\\s*back|精装", node: "22.02" }
+      - { match: "thread\\s*sewn|车线", node: "25.01" }
+      - { match: "perfect\\s*bound|perfectbound|paperback|paper\\s*back|无线胶装", node: "23.01" }
+  product_category:
+    fallback: "32.00;其他"
+
+  # 产品属性 CPSX：由客户文件里的 Target Age Group + Safety Checks 推导（业务确认 2026-09-23）
+  cpsx:
+    threshold: 3
+    above: 三岁以上
+    below: 三岁以下
+    above_with_test: "3岁以上（要寄第三方测试）"
+    below_with_test: "3岁以下（要寄第三方测试）"
+    safety_true: ["y", "yes", "true", "是", "1", "✓"]
+
+  # 日期字段
+  dates:
+    JHRQ: { from: pub_month }
+    WCRQ: { mode: today_plus_days, days: 10 }
+
+  # 书脊方向 Drop_SJFX（业务确认 2026-09-23：默认由 CD/KD 比较决定）
+  # ERP 合法枚举（assets/erp_form_schema.yaml）：短书脊(0) / 长书脊(1) / 四边裁(2)
+  # 本档案只按尺寸判前两种；「四边裁」需要业务明确判据后再加规则。
+  spine:
+    mode: cd_vs_kd
+    long: 长书脊
+    short: 短书脊
+    four_sided: 四边裁
+
+# ── 5. 邮件规则 ────────────────────────────────────────────
+email:
+  # 客户单号 KHDH：优先邮件标题/正文，其次附件列
+  khdh:
+    attachment_keys: ["works_references"]
+    # 标题里的单号：`PO 23992` / `Ref: 23992 / 23993` / 裸 5 位数
+    subject_patterns:
+      - '(?i)\b(?:p\.?o\.?|ref(?:erence)?|order)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{4,6}(?:\s*[/,&]\s*\d{4,6})*)'
+      - '\b(\d{5}(?:\s*[/,&]\s*\d{5})*)\b'
+    # 正文里的单号：`Works References: 23992 / 23993`
+    body_patterns:
+      - '(?i)works?\s+references?\s*[:#]?\s*(\d{4,6}(?:\s*[/,&]\s*\d{4,6})*)'
+      - '(?i)\bcustomer\s+(?:ref|reference|no)\b\s*[:#]?\s*(\d{4,6}(?:\s*[/,&]\s*\d{4,6})*)'

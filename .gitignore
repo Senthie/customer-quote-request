@@ -8,3 +8,17 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 运行产物与客户数据（客户报价原文 / ERP 输出 / 日志）—— 不进仓库
+logs/
+customer-files/processed/
+customer-files/failed/
+customer-files/logs/
+customer-files/pending/*
+!customer-files/pending/.gitkeep
+
+# 校准草稿（calibrate_customer.py 生成，仅供对照，不入库）
+customers/_draft_*.yaml
+
+# 测试缓存
+.pytest_cache/

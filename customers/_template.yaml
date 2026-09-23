@@ -1,0 +1,93 @@
+# ═══════════════════════════════════════════════════════════════
+# 新客户档案骨架
+#
+# 用法：
+#   1. cp customers/_template.yaml customers/<新客户id>.yaml
+#   2. uv run ./scripts/calibrate_customer.py --customer <新客户id> --file <样本文件>
+#      （先用 id=新客户 建好文件，脚本会把候选别名写进 _draft_<id>.yaml 供参考）
+#   3. 填好 detect / fields / rules，跑 main.py 回归，再改 status: calibrated
+#
+# 规则：
+#   * 本文件所有段落都会被 deep-merge 到 customers/_defaults.yaml 之上，
+#     所以**只写与该客户不同的部分**即可；list 是整体替换，不是追加。
+#   * 别在这里写死 ERP 字段赋值逻辑 —— 那是 main.py 的职责，
+#     档案只负责「客户怎么写 → 规范键叫什么」和「该客户的特殊口径」。
+# ═══════════════════════════════════════════════════════════════
+id: NEWCUSTOMER              # 必填，与文件名一致，小写
+name: 新客户名称              # 必填，用于日志/报告
+priority: 10                 # 自动识别冲突时的优先级，越大越优先
+status: draft                # draft | calibrated
+notes: >
+  一句话说明这个客户的报价单长什么样（表格布局、语言、单位习惯）。
+
+# ── 1. 身份识别 ────────────────────────────────────────────
+detect:
+  filename_keywords: []      # 文件名小写包含匹配，如 [acme]
+  label_signatures: []       # 文件里出现这些标签之一 → 判为该客户（最可靠）
+  min_signature_hits: 1
+  sender_domains: []         # 如 [acme.com]；留空 = 不看发件人
+  subject_keywords: []       # 邮件主题关键词
+
+# ── 2. 字段别名表（客户列名 → 规范键）────────────────────────
+# 规范键的可用清单见 SKILL.md「规范键」一节；只写该客户实际会出现的列名。
+fields:
+  imprint:          []
+  pub_month:        []
+  series_name:      []
+  number_of_titles: []
+  format:           []
+  size:             []
+  extent:           []
+  text_material:    []
+  cover_material:   []
+  binding:          []
+  quantity_tiers:   []
+
+# ── 3. 该客户的 ERP 固定值覆盖（不同则写，相同可删）──────────
+# erp_fixed:
+#   CPDL: 书版
+
+# ── 4. 解析规则覆盖 ────────────────────────────────────────
+# ⚠️ 凡是映射到 ERP 下拉字段的值（ZDFS / CPDL / CPLB / DWMC / Drop_SJFX / TBLX …），
+#    必须落在 assets/erp_form_schema.yaml 的合法枚举内 —— main.py 步骤 5b 会校验。
+#    查合法值：uv run ./scripts/erp_schema.py --values ZDFS
+# rules:
+#   layout:
+#     strategies: [column_pairs]
+#     label_col: 0
+#     value_col: 1
+#   size:
+#     unit: mm
+#     order: [CD, KD, GD]
+#   quantity_tiers:
+#     k_suffix: false          # 该客户只写裸数字
+#   binding:
+#     enabled: true
+#     default: 胶装/PAD书       # 兜底值也必须是合法值
+#     map:
+#       "perfect bound": 胶装/PAD书   # ← 注意不是「无线胶装」，那是非法值
+#   # 产品类别：客户写法 → 产品类别树节点编号（assets/cplb_tree.yaml）
+#   #   查树：uv run ./scripts/cplb_tree.py --search <关键词> | --suggest "<描述>"
+#   #   取值来源三种写法都会认：product_category.fallback / cplb.map / 旧表查表
+#   cplb:
+#     match_keys: [format, binding, finishes, project_description, series_name]
+#     map:
+#       - { match: "board\\s*book|纸板书", node: "27.02" }
+#       - { match: "perfect\\s*bound|paperback", node: "23.01" }
+#   product_category:
+#     fallback: "32.00;其他"    # 必须在树里
+#   # 产品属性 CPSX：年龄段 + 安全检查 → ERP 中文枚举（与默认口径不同才写）
+#   cpsx:
+#     threshold: 3
+#     above: 三岁以上
+#     below: 三岁以下
+#     above_with_test: "3岁以上（要寄第三方测试）"
+#     below_with_test: "3岁以下（要寄第三方测试）"
+#     safety_true: [y, yes, true, 是, 1, ✓]
+
+# ── 5. 邮件规则 ────────────────────────────────────────────
+# email:
+#   khdh:
+#     attachment_keys: []
+#     subject_patterns: []
+#     body_patterns: []

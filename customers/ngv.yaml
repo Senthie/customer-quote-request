@@ -1,0 +1,140 @@
+# ═══════════════════════════════════════════════════════════════
+# 客户档案：ngv
+#
+# status: draft  ⚠️ 尚未校准 —— 手上还没有 NGV 的真实报价文件，
+#         下面的别名表是「按 igl 的通用英文列名」写的占位，**不能当作已验证**。
+#
+# 校准步骤（拿到第一份 NGV 样本后 5 分钟就能做完）：
+#   1. uv run ./scripts/calibrate_customer.py --customer ngv \
+#          --file customer-files/pending/<NGV样本>
+#      → 打印样本里所有「像标签的单元格」+ 哪些没被识别
+#   2. 把未识别的标签填进下面的 fields: 里（或改 layout 策略）
+#   3. uv run ./scripts/main.py <样本> --customer ngv
+#      → 确认 59 键断言通过、字段值正确
+#   4. 把本文件 status 改成 calibrated，并在 SKILL.md 的客户清单里登记
+# ═══════════════════════════════════════════════════════════════
+id: ngv
+name: NGV
+priority: 50
+status: draft
+notes: >
+  待校准。ERP 的送货方式下拉里有 `FOB(NGV)` 这一项，说明 NGV 走 FOB 交货，
+  但报价单的字段命名/布局尚未见到样本，别名表是占位值。
+
+detect:
+  filename_keywords:
+    - ngv
+  label_signatures:
+    - "NGV"
+  min_signature_hits: 1
+  sender_domains: []
+  subject_keywords:
+    - ngv
+
+# ── 占位别名表：待用真实样本校准 ────────────────────────────
+fields:
+  imprint:              ["Imprint", "Brand", "Publisher"]
+  complexity:           ["Complexity"]
+  requested_by:         ["Requested By", "Requestor", "Contact"]
+  pub_month:            ["Pub Month", "Publication Month", "Publishing Month", "Delivery Month"]
+  series_name:          ["Series Name", "Series", "Title", "Product Name"]
+  number_of_titles:     ["Number of titles", "No. of titles", "Titles", "No of Titles"]
+  group:                ["Group"]
+  category:             ["Category"]
+  safety_checks:        ["Safety Checks Req? (Y/N)", "Safety Checks", "Safety Test"]
+  target_age_group:     ["Target Age Group", "Age Group", "Age"]
+  works_references:     ["Works References For all Titles", "Works References", "Customer Ref", "Our Ref"]
+  group_series_number:  ["Group/Series Number"]
+  isbn:                 ["ISBNs of All Titles", "ISBNs", "ISBN"]
+  project_description:  ["Project description", "Project Description", "Description"]
+  size:                 ["Size (tps) H x W x D mm", "Size", "Trim Size", "Finished Size"]
+  format:               ["Format", "Binding Style"]
+  extent:               ["Extent (pp + cover)", "Extent", "Page Count", "Pages"]
+  text_printing_spec:   ["Text Printing Spec", "Text Print Spec"]
+  text_material:        ["Text Material", "Text Paper", "Body Paper"]
+  cover_printing_spec:  ["Cover Printing Spec", "Cover Print Spec"]
+  cover_material:       ["Cover Material", "Cover Paper"]
+  spine_width:          ["Spine width", "Spine"]
+  binding:              ["Binding instructions", "Binding"]
+  finishes:             ["Finishes", "Finishing"]
+  quantity_tiers:       ["Total Costs", "Total Cost", "Cost", "Quantity", "Qty"]
+
+# TODO(校准)：NGV 的固定值与 igl 是否相同，未经确认，先按通用值填
+erp_fixed:
+  CPDL: 书版
+  YYS: 1
+  BZ: 美元
+  PXH: 1
+  KHMBDJ: 0
+
+rules:
+  layout:
+    strategies: [auto_pairs, column_pairs, shifted_pairs]
+    label_col: 1
+    value_col: 2
+    min_label_row_hits: 2
+    max_label_len: 60
+  size:
+    unit: mm
+    order: [CD, KD, GD]
+  quantity_tiers:
+    k_suffix: true
+    plain: true
+    plain_label_hint: "quantity|qty|total|cost|数量|印数"
+    max_tiers: 10
+  materials:
+    text:
+      default: 书纸
+      map:
+        - { match: "woodfree|uncoated|书纸|胶版|munk|蒙肯", page_style: 书纸 }
+        - { match: "art ?paper|c1s|c2s|铜版|光粉|粉卡|白卡", page_style: 光粉纸 }
+    cover:
+      default: 光粉纸
+      map:
+        - { match: "c1s|artboard|art ?card|光粉|粉卡|白卡|卡纸", page_style: 光粉纸 }
+        - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+  binding:
+    enabled: false            # TODO(校准)
+    default: ""
+    map:
+      # 值必须是 ERP 合法枚举（assets/erp_form_schema.yaml 的 ZDFS）
+      "perfect bound": 胶装/PAD书
+      "paperback": 胶装/PAD书
+  # 产品类别 CPLB —— 挂到权威树（assets/cplb_tree.yaml）上的映射，待样本校准
+  cplb:
+    match_keys: [format, binding, finishes, project_description, series_name]
+    map:
+      - { match: "board\\s*book|纸板书", node: "27.02" }
+      - { match: "lift[- ]the[- ]flap|翻翻|揭页", node: "27.05" }
+      - { match: "pop[- ]?up", node: "28.01" }
+      - { match: "wire[- ]?o|wiro|spiral|线圈", node: "26.01" }
+      - { match: "saddle|staple|骑马钉|骑钉", node: "24.01" }
+      - { match: "case\\s*bound|hardcover|精装", node: "22.02" }
+      - { match: "thread\\s*sewn|车线", node: "25.01" }
+      - { match: "perfect\\s*bound|paperback|无线胶装", node: "23.01" }
+  product_category:
+    fallback: "32.00;其他"
+  # 产品属性 CPSX（年龄段 + 安全检查 → ERP 中文枚举），与 igl 同口径，待样本确认
+  cpsx:
+    threshold: 3
+    above: 三岁以上
+    below: 三岁以下
+    above_with_test: "3岁以上（要寄第三方测试）"
+    below_with_test: "3岁以下（要寄第三方测试）"
+    safety_true: ["y", "yes", "true", "是", "1", "✓"]
+  dates:
+    JHRQ: { from: pub_month }
+    WCRQ: { mode: today_plus_days, days: 10 }
+  spine:
+    mode: cd_vs_kd
+    long: 长书脊
+    short: 短书脊
+
+email:
+  khdh:
+    attachment_keys: ["works_references"]
+    subject_patterns:
+      - '(?i)\b(?:p\.?o\.?|ref(?:erence)?|order|job)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{3,8}(?:\s*[/,&-]\s*[A-Za-z0-9]{2,8})*)'
+      - '\b([A-Z]{2,4}[-/]\d{2,8}(?:[-/][A-Za-z0-9]{1,8})*)\b'
+    body_patterns:
+      - '(?i)\b(?:p\.?o\.?|customer\s+ref|reference|order\s+no)\b\s*[:#]?\s*(\d{3,8}(?:\s*[/,&-]\s*[A-Za-z0-9]{2,8})*)'

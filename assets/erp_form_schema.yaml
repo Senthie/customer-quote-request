@@ -1,0 +1,605 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# ERP「报价需求单 / 产品资料」权威字段字典
+#
+# 来源：客户真实 ERP 表单（ASP.NET，2026-09-23 由森西提供完整 HTML）。
+#      这是**合法取值的唯一权威来源** —— ERP 的下拉框只认这里的选项，
+#      写别的值轻则被静默丢弃，重则导入报错。
+#
+# 用途（由 scripts/erp_schema.py 消费）：
+#   ① 归一化：客户/脚本给出的取值 → ERP 合法值（去空白 / 同义词 / 大小写）
+#   ② 校验  ：59 字段结果里有没有「ERP 不认的值」，出 WARN 而不是静默放过
+#
+# 命名约定
+#   key        —— 我们 JSON 模板里的字段名（= ERP 导入键）
+#   form_name  —— ERP 表单控件的 name（溯源用；查 ERP 页面时按这个搜）
+#   label      —— 表单上显示的中文标签
+#   type       —— select / text / textarea / checkbox
+#   options    —— select 的合法取值。有 code 的写成 {code, label}，
+#                 ERP 存 code 还是 label 见各字段的 `store` 说明（默认 label）
+#   store      —— 固定为 `label`。业务确认（2026-09-23）：所有下拉**统一输出中文
+#                 显示文本**，不输出内部代码。历史单据佐证一致（BZ 存「美元」而非 02）。
+#                 字段里的 `code` 仍保留，只用于溯源与归一化（客户写代码也能认出来）。
+#   aliases    —— 已知同义词 → 合法值（客户文件里常见的写法；可被客户档案覆盖）
+#   required   —— 业务上是否必填（用于校验分级：error / warn）
+#
+# 历史单据佐证：customer-files/processed/0e39e2e2…/ERP_….json（2026-05-25 手填）
+#   BZ="美元"（label，非 code "02"）→ `store: label`
+#   DWMC="本"、ZDFS="无线胶装"（**非法值**，合法是「胶装/PAD书」）
+#
+# 业务决策记录（2026-09-23，森西确认）
+#   ① 客户单号：**保留 KHDH**。ERP 表单里控件名叫 txtKHCPMC（ERP 内部命名混乱，
+#      KHCPMC 同时被当成「客户产品名称」用过），我们不跟着错 —— 输出侧一律 KHDH，
+#      **不得出现 KHCPMC**，ERP 导入接口由 ERP 侧修改适配。
+#   ② CPSX 产品属性：**要落库**，由「目标年龄段 + 安全检查」推导（见 CPSX 字段 notes）。
+#   ③ 所有下拉**统一输出中文 label**（本文件 store 全为 label）。
+#   ④ CPLB 产品类别树重新设计，权威数据在 assets/cplb_tree.yaml（88 节点）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+schema_version: 1
+captured_at: "2026-09-23"
+source: "ERP 报价需求单/产品资料表单（真实页面 HTML）"
+
+fields:
+
+  # ── 1. ERP 自动带出（表单上不显示，导入接口自带）────────────────────────
+  # 业务确认（2026-09-23）：这 6 个字段由 ERP 自动带出，默认留空即可。
+  # 交叉验证：这 6 个确实在表单 HTML 里找不到控件 —— 与业务说法一致。
+  BDBH:
+    form_name: null
+    label: 报价单号
+    type: text
+    auto_filled: true
+  YWY:
+    form_name: null
+    label: 业务员
+    type: text
+    auto_filled: true
+  KHZL:
+    form_name: null
+    label: 客户资料
+    type: text
+    auto_filled: true
+  GDY:
+    form_name: null
+    label: 跟单员
+    type: text
+    auto_filled: true
+  CPMX:
+    form_name: null
+    label: 产品明细
+    type: text
+    auto_filled: true
+  Remark:
+    form_name: txtRemark
+    label: 备注
+    type: textarea
+    auto_filled: true
+
+  # ── 2. 产品分类 ────────────────────────────────────────────────────────
+  CPDL:
+    form_name: txtCPDL
+    label: 产品大类
+    type: select
+    store: label
+    required: warn
+    options:
+      - {code: "4", label: 书版}
+    notes: 表单里是联动下拉（选大类 → 类别树跟着变）；当前只有「书版」一个值。
+
+  CPLB:
+    form_name: txtCPLB
+    label: 产品类别
+    type: select
+    store: label
+    required: warn
+    # ★ 权威树在 assets/cplb_tree.yaml（88 节点 = 11 顶层 + 77 个可选子类，
+    #   由 ERP 产品类别表 assets/product_categories.xlsx 转录，含每个子类的业务定义）。
+    #   erp_schema.py 优先从这里取节点做校验；下面的 options_tree 只是树文件缺失时的兜底。
+    #   重设计的导航树（分组 / 决策路径 / 行话别名）也在该文件里。
+    tree_source: assets/cplb_tree.yaml
+    options_tree:
+      # 顶层节点（编号;名称），兜底用：
+      - {code: "22", label: 精装书}
+      - {code: "23", label: 胶装书}
+      - {code: "24", label: 骑钉书}
+      - {code: "25", label: 车线书}
+      - {code: "26", label: 线圈书}
+      - {code: "27", label: BB书}
+      - {code: "28", label: POP UP书}
+      - {code: "29", label: 套装}
+      - {code: "30", label: 盒类}
+      - {code: "31", label: 单张类}
+      - {code: "32", label: 其他}
+    notes: >
+      ERP 存的是**树节点文本**「编号;名称」，如 `23.01;无线胶装书`（历史单据实例）。
+      取值必须是 assets/cplb_tree.yaml 里的节点（顶层 22~32，具体到可选子类）。
+      重设计的导航树（分组顺序按决策流程、决策路径、行话/英文别名）见该文件的
+      navigation / paths / quick_pick 段；可视化选取器：assets/cplb_tree.html。
+      查树：uv run ./scripts/cplb_tree.py --list | --search 揭页 | --node 23.01 | --suggest "..."
+    aliases:
+      # 客户文件里的常见写法 → 树节点（长别名优先匹配）
+      "wire-o装订": "26;线圈书"
+      "wire o": "26;线圈书"
+      "精装": "22;精装书"
+      "board book": "27.02;精装BB书"
+      "boardbook": "27.02;精装BB书"
+      "paperback": "23.01;无线胶装书"
+      "perfect bound": "23.01;无线胶装书"
+      "hardcover": "22.02;方脊精装书"
+      "case bound": "22.02;方脊精装书"
+      "saddle stitch": "24.01;普通骑钉书"
+      "staple": "24.01;普通骑钉书"
+      "lift the flap": "27.05;普通揭页BB书"
+      "pop-up": "28.01;普通POP UP书"
+
+  # ── 3. 装订 / 书脊 ─────────────────────────────────────────────────────
+  Drop_SJFX:
+    form_name: Drop_SJFX
+    label: 书脊方向
+    type: select
+    store: label
+    required: warn
+    options:
+      - {code: "0", label: 短书脊}
+      - {code: "1", label: 长书脊}
+      - {code: "2", label: 四边裁}
+    notes: >
+      ★ 注意：只有这个下拉的 option value 是数字代码（0/1/2），其余下拉多数直接用
+      中文 label 当 value。当前输出写 label（长书脊/短书脊），若 ERP 导入端要代码，
+      改成 store: code 即可（脚本会自动转）。业务口径：默认由 CD/KD 比较决定
+      （2026-09-23 确认）——所以不要手填，交给 rules.spine。
+    aliases:
+      "直书脊": 长书脊
+      "横书脊": 短书脊
+
+  ZDFS:
+    form_name: txtZDFS
+    label: 装订方式
+    type: select
+    store: label
+    required: warn
+    options:
+      - 胶装/PAD书
+      - 精装书
+      - 骑马钉
+      - 其他
+      - 套装
+      - 车线书
+      - 线圈书
+      - "快线BB书"      # 表单里原值带尾随空格 "快线BB书   " —— 归一化会 strip
+      - "中线BB书"
+      - "慢线BB书"
+    aliases:
+      # 以下同义词是从客户文件/历史单据推断的，业务可改
+      "无线胶装": 胶装/PAD书      # ← 历史单据 0e39e2e2 写的就是这个非法值
+      "完美装订": 胶装/PAD书
+      "perfect bound": 胶装/PAD书
+      "perfectbound": 胶装/PAD书
+      "paperback": 胶装/PAD书
+      "平装": 胶装/PAD书
+      "骑马订": 骑马钉            # 「订」/「钉」字差别
+      "骑钉": 骑马钉
+      "胶装": 胶装/PAD书
+      "硬精装": 精装书
+      "case bound": 精装书
+      "hardcover": 精装书
+      "hardback": 精装书
+      "wire-o": 线圈书
+      "wiro": 线圈书
+      "锁线": 车线书
+      "sewn": 车线书
+    notes: "★ 历史单据里的「无线胶装」是非法值，合法值是「胶装/PAD书」。"
+
+  # ── 4. 产品名称 / 数量 ─────────────────────────────────────────────────
+  CPMC:
+    form_name: txtCPMC
+    label: 产品名称
+    type: text
+    notes: "由 CPLB + 系列名拼出（历史单据：`23.01;无线胶装书-Puzzle & Colour Disney`）。"
+
+  TZS:
+    form_name: txtTZS
+    label: 共有（款）
+    type: int
+    notes: "表单上是「共有 __ 款，每款 __ 种语言」的两个输入框。"
+
+  YYS:
+    form_name: txtYYS
+    label: 每款语言种数
+    type: int
+
+  DWMC:
+    form_name: txtDWMC
+    label: 单位
+    type: select
+    store: label
+    required: warn
+    options:
+      - 个
+      - 套
+      - 米
+      - 台
+      - 千平方英寸
+      - 罐
+      - 包
+      - 副
+      - 箱
+      - 盒
+      - 把
+      - 码
+      - 对
+      - 次
+      - 件
+      - 小时
+      - 筒
+      - 元
+      - 立方米
+      - 块
+      - 年
+      - 份
+      - 片
+      - 扎
+      - 组
+      - 排
+      - 板
+      - 斤
+      - 袋
+      - 月
+      - 手
+      - 盆
+      - 只
+      - 千平方英寸*毫米
+      - 平方厘米
+      - 千齿
+      - P
+      - 毫米
+      - 立方毫米
+      - 平方英寸*毫米
+      - 立方英寸
+      - 英寸
+      - 艘
+      - 项
+      - 天
+      - 间
+      - 批
+      - 度
+      - 根
+      - 吨
+      - 车
+      - 令
+      - 张
+      - 平方米
+      - 千克
+      - 本          # ← 书版产品的单位，合法值（历史单据佐证 DWMC="本"）
+      - 条
+      - 支
+      - 双
+      - 瓶
+      - 桶
+      - 磅
+      - 升
+      - 卷
+      - 克
+    aliases:
+      "册": 本
+      "pcs": 本
+      "pc": 本
+      "book": 本
+
+  CPSL1:  {form_name: txtCPSL1,  label: 产品数量1,  type: int, quantity_slot: 1}
+  CPSL2:  {form_name: txtCPSL2,  label: 产品数量2,  type: int, quantity_slot: 2}
+  CPSL3:  {form_name: txtCPSL3,  label: 产品数量3,  type: int, quantity_slot: 3}
+  CPSL4:  {form_name: txtCPSL4,  label: 产品数量4,  type: int, quantity_slot: 4}
+  CPSL5:  {form_name: txtCPSL5,  label: 产品数量5,  type: int, quantity_slot: 5}
+  CPSL6:  {form_name: txtCPSL6,  label: 产品数量6,  type: int, quantity_slot: 6}
+  CPSL7:  {form_name: txtCPSL7,  label: 产品数量7,  type: int, quantity_slot: 7}
+  CPSL8:  {form_name: txtCPSL8,  label: 产品数量8,  type: int, quantity_slot: 8}
+  CPSL9:  {form_name: txtCPSL9,  label: 产品数量9,  type: int, quantity_slot: 9}
+  CPSL10: {form_name: txtCPSL10, label: 产品数量10, type: int, quantity_slot: 10}
+  # 业务确认（2026-09-23）：默认 0；取值由客户订单的数量档位决定（左侧档位槽位）。
+  # 表单上还有并行的「产品每款数量」txtCPMKSL1~10 与「产品数量ID」txtCPSLID1~10，
+  # 不在导入模板里，忽略。
+
+  # ── 5. 价格 / 币种 ─────────────────────────────────────────────────────
+  BZ:
+    form_name: txtBZ
+    label: 客户目标价币种
+    type: select
+    store: label
+    options:
+      - {code: "01", label: 人民币}
+      - {code: "02", label: 美元}
+      - {code: "03", label: 欧元}
+      - {code: "04", label: 港币}
+      - {code: "05", label: 日元}
+      - {code: "06", label: 澳元}
+      - {code: "07", label: 英镑}
+    notes: "历史单据存 label（BZ=\"美元\"），不是 code。"
+
+  KHMBDJ:
+    form_name: txtKHMBDJ
+    label: 客户目标价
+    type: number
+    notes: "历史单据字段名写作 KHMBJ（v1 模板），v2 是 KHMBDJ。"
+
+  # ── 6. 规格 ────────────────────────────────────────────────────────────
+  CD: {form_name: txtCD, label: "规格（MM）长", type: number}
+  KD: {form_name: txtKD, label: "规格（MM）宽", type: number}
+  GD: {form_name: txtGD, label: "规格（MM）高", type: number}
+
+  # ── 7. 包装 / 台板 / 出货 ──────────────────────────────────────────────
+  BZFS:
+    form_name: txtBZFS
+    label: 包装方式
+    type: select
+    store: label
+    options: [纸箱包装, 牛皮纸包装, 胶袋包装, 卡板摆放]
+
+  TBLX:
+    form_name: txtTBLX
+    label: 台板类型
+    type: select
+    store: label
+    options:
+      - {code: "07", label: "1.2m*0.8m(欧式)实木消毒卡板"}
+      - {code: "10", label: "1.2*1.0m(欧式)实木消毒卡板"}
+      - {code: "09", label: "1.2m*0.8m(欧标)松木消毒卡板"}
+      - {code: "13", label: "1.2*1.0松木消毒卡板(四边喷环保蓝漆)"}
+      - {code: "12", label: "1.165m*1.165m(欧式)实木消毒木卡板"}
+      - {code: "05", label: "1.2*1.0m实木消毒卡板(Highights专用）"}
+      - {code: "08", label: "1.2m*1.0m(欧标)松木消毒卡板（有盖板）"}
+      - {code: "06", label: 不打卡板}
+      - {code: "14", label: "1.0m*0.8m(欧式)实木消毒卡板"}
+    notes: "表单存 code；历史单据未填（留空）。"
+
+  SHFS:
+    form_name: txtSHFS
+    label: 送货方式
+    type: select
+    store: label
+    options:
+      - FOB(NGV)
+      - FOB 盐田
+      - 送香港公司
+      - DPU
+      - 直交工厂
+      - DAP
+      - 物流/速递
+      - 工厂自提
+      - 送国内
+      - "FOB(美加线）-香港"
+      - FOB蛇口
+      - "FOB(美加线）-盐田"
+      - FOB 香港
+      - CIF
+      - DAT
+    notes: "含客户名（FOB(NGV)）—— 说明这个下拉是全局的，NGV 单也走同一套枚举。"
+
+  # ── 8. 单号 / 日期 / 地区 ──────────────────────────────────────────────
+  KHDH:
+    form_name: txtKHCPMC          # ERP 表单控件名（仅供溯源，见 notes）
+    label: 客户单号
+    type: text
+    required: error
+    notes: >
+      ★ 业务决策（2026-09-23，森西）：**保留 KHDH，不得输出 KHCPMC**。
+      ERP 表单里这个控件的 name 是 txtKHCPMC，且隐藏区另有一个 lblKHCPMC=「客户产品名称」
+      —— KHCPMC 在 ERP 内部被用在两处，属 ERP 侧命名混乱。我们的态度是**不跟着错**：
+      输出侧一律用 KHDH，避免与 KHDDH（香港单号）混淆造成误导。
+      ERP 导入接口由 ERP 侧修改适配本键名（已确认，不是待办）。
+      取值来源：客户邮件标题/正文（ingest_email.py 写副档）→ 附件列
+      （档案 email.khdh.attachment_keys）→ 规范键 khdh。
+
+  JHRQ: {form_name: txtJHRQ, label: 交货日期, type: date}
+  WCRQ: {form_name: txtWCRQ, label: 预计下单日期, type: date}
+  KHDDH:
+    form_name: txtKHDDH
+    label: 香港单号
+    type: text
+    readonly: true
+    notes: "表单只读，由「业务员简称」自动生成 —— 我们不应填。"
+  OLD_KHDDH:
+    form_name: txtOLD_KHDDH
+    label: 返单香港单号
+    type: text
+    notes: "返单才有，正常留空。"
+  KHDQ:
+    form_name: txtKHDQ
+    label: 客户地区
+    type: text
+    readonly: true
+    notes: "只读，随客户带出。"
+  SHDQ:
+    form_name: txtSHDQ
+    label: 送货地区
+    type: select
+    store: label
+    options: []          # 联动下拉，随客户/送货方式动态加载
+    notes: "联动下拉，表单 HTML 里是空的 —— 无法从静态 HTML 取枚举，需业务提供。"
+
+  FSCMC:
+    form_name: txtFSCMC
+    label: FSC类别
+    type: select
+    store: label
+    options:
+      - FSC Mix
+      - FSC 100%
+      - FSC Mix 85%
+      - FSC Mix Credit
+      - FSC Recycled 85%
+      - FSC Recycled 100%
+      - FSC Mix 90%
+      - FSC Mix 100%
+      - FSC
+      - FSC Recycled          # 表单原值带尾随空格
+      - FSC Mix 70%
+
+  # ── 9. 产品属性 / 类型 / 开关 ──────────────────────────────────────────
+  SFYPJ:
+    form_name: txtSFYPJ
+    label: 是否有配件
+    type: select
+    store: label
+    options:
+      - {code: "1", label: 是}
+      - {code: "0", label: 否}
+    notes: "历史单据写作布尔 false（v1 模板）→ v2 模板是字符串枚举。输出保持字符串。"
+
+  Remark1:
+    form_name: txtRemark1
+    label: 配件描述
+    type: textarea
+    notes: "readonly + 双击选备注库 —— 我们填文本即可。"
+
+  PXH: {form_name: txtPXH, label: 排序号, type: int, notes: "默认 1。"}
+
+  CPSX:
+    form_name: txtCPSX
+    label: 产品属性
+    type: select
+    store: label
+    options:
+      - {code: CPSX001, label: 三岁以上}
+      - {code: CPSX002, label: 三岁以下}
+      - {code: CPSX003, label: 其他}
+      - {code: CPSX004, label: "3岁以下（要寄第三方测试）"}
+      - {code: CPSX005, label: "3岁以上（要寄第三方测试）"}
+    notes: >
+      ★ 业务确认（2026-09-23）：**要落库** —— 「安全检查 / 目标年龄段」的落点就是这里。
+      推导规则（main.py「产品属性 CPSX」段，阈值与取值可在客户档案 rules.cpsx 覆盖）：
+        年龄段 ≥3 岁 + 无安全检查 → 三岁以上
+        年龄段 ≥3 岁 + 有安全检查 → 3岁以上（要寄第三方测试）
+        年龄段 <3 岁 + 无安全检查 → 三岁以下
+        年龄段 <3 岁 + 有安全检查 → 3岁以下（要寄第三方测试）
+      年龄段与安全检查都缺失（或只有安全检查、没有年龄）→ 留空 + WARN，不猜。
+      注意：落库**不替代** CPMS —— 年龄段 / 安全检查仍必须写进产品描述（见 SKILL.md 5.1.6）。
+
+  CPLX:
+    form_name: txtCPLX
+    label: 产品类型
+    type: select
+    store: label
+    options: [新产品, 返单产品, 半返单旧产品, 半返单新产品, 特殊新产品]
+    notes: "历史单据实例：CPLX=\"新产品\"。"
+
+  # ── 10. 包装明细（纸箱）────────────────────────────────────────────────
+  ZXLB:
+    form_name: txtZXLB
+    label: 纸箱类别
+    type: select
+    store: label
+    options:
+      - {code: "008", label: 普通纸箱}
+      - {code: "009", label: 半翼箱纸箱}
+      - {code: "066", label: 特殊纸箱}
+      - {code: "067", label: 天地盖纸箱}
+
+  ZBLX:
+    form_name: txtZBLX
+    label: 纸板类型
+    type: select
+    store: label
+    options:
+      - {code: "007", label: 特殊(看描述)}
+      - {code: "002", label: A=B双坑纸板}
+      - {code: "001", label: A3B单坑纸板}
+      - {code: "003", label: A=A双坑纸板}
+      - {code: "005", label: K=K加强芯双坑箱}
+      - {code: "008", label: K=K加强芯(耐破)}
+
+  ZXFS:
+    form_name: txtZXFS
+    label: 装箱方式
+    type: select
+    store: label
+    options:
+      - {code: "0", label: 平装}
+      - {code: "1", label: 竖装}
+
+  DKMC:
+    form_name: txtDKMC
+    label: 底卡名称
+    type: select
+    store: label
+    options:
+      - {code: "02", label: B3B坑纸板}
+      - {code: "03", label: A=B普通芯}
+      - {code: "001", label: 无需}
+      - {code: "01", label: K=K加强芯}
+      - {code: "002", label: 卡纸}
+      - {code: "003", label: 特殊指定}
+
+  YSLX:
+    form_name: txtYSLX
+    label: 运输类型
+    type: select
+    store: label
+    options:
+      - {code: "008", label: FOB盐田(普通)}
+      - {code: "03",  label: FOBHK}
+      - {code: "015", label: FOB(拼柜)}
+      - {code: "016", label: DPU}
+      - {code: "017", label: CIF}
+      - {code: "01",  label: 国内}
+      - {code: "019", label: FOB(底价)}
+      - {code: "012", label: FOB蛇口}
+      - {code: "018", label: FOB(美加线)}
+
+  chkXBJF:    {form_name: chkXBJF,    label: 不需报价,     type: checkbox}
+  chkZDBJF:   {form_name: chkZDBJF,   label: 有排交期,     type: checkbox}
+  chkBSYTB:   {form_name: chkBSYTB,   label: 不使用台板,   type: checkbox}
+  chkBSYJZX:  {form_name: chkBSYJZX,  label: 不使用集装箱, type: checkbox}
+  # 历史单据里 ZDBJF / BSYJZX 是布尔，v2 模板改名加了 chk 前缀。
+
+  # ── 11. 文本字段 ───────────────────────────────────────────────────────
+  ECPMC:  {form_name: txtECPMC,  label: 产品英文名, type: text}
+  CPMS:
+    form_name: txtCPMS
+    label: 产品描述
+    type: textarea
+    agent_written: true
+    notes: "★ 脚本一律留空，由 agent 亲力亲为补写（通读原文 → 翻译中文 → 分类分段）。"
+  BGMS:   {form_name: txtBGMS,   label: 补充描述, type: textarea}
+  Remark3: {form_name: txtRemark3, label: 修改记录, type: textarea}
+  Remark4: {form_name: txtRemark4, label: 检测项目, type: textarea}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 表单上还有、但**不在导入模板里**的字段（记录备查，防止以后误加）
+# ═══════════════════════════════════════════════════════════════════════════
+form_only:
+  - {form_name: txtCPMKSL1, label: 产品每款数量, notes: "1~10，与 CPSL 并行的一套"}
+  - {form_name: txtGGLX,    label: 规格描述, type: select, options: [{code: "0", label: 内径}, {code: "1", label: 外径}]}
+  - {form_name: txtKHCPBH,  label: 客户产品编号, notes: "gridView 列名 KHCPBH"}
+  - {form_name: txtCPBH,    label: 产品编号}
+  - {form_name: txtJZFS,    label: 付款方式, type: select, options: [现金, 电汇, 支票, 转账, 香港付款, 信用证(LC)]}
+  - {form_name: txtFKQXID,  label: 付款期限, notes: "52 个选项，见表单 HTML"}
+  - {form_name: txtFPLB,    label: 发票类别}
+  - {form_name: txtFPSL,    label: 发票税率}
+  - {form_name: ChBoxKQTHF, label: 款清提货, type: checkbox}
+  - {form_name: ChBoxYSXDF, label: 预收下单, type: checkbox}
+  - {form_name: txtGBCS,    label: 改版次数}
+  - {form_name: txtHL,      label: 汇率}
+  - {form_name: txtCPDJ,    label: 产品单价}
+  - {form_name: txtCPJE,    label: 产品金额}
+  - {form_name: txtYSFY,    label: 运输费用}
+  - {form_name: txtXGBZ,    label: 香港币种, type: select, options: [人民币, 港币, 美元, 欧元, 日元, 澳元, 英镑]}
+  - {form_name: txtXGHL,    label: 香港汇率}
+  - {form_name: txtXGCPDJ,  label: 香港产品单价}
+  - {form_name: txtXGCPJE,  label: 香港产品金额}
+  - {form_name: txtZZJHXT,  label: 最终交货形态}
+  - {form_name: txtZZJHXTMS, label: 最终交货形态描述}
+  - {form_name: txtCYFS,    label: 出样方式}
+  - {form_name: txtDZWJJQ,  label: 电子文件交期}
+  - {form_name: txtYQWJKHQR, label: 印前文件客户确认方式}
+  - {form_name: txtCPFDLX,  label: 产品翻单类型, options: [新产品, 返单产品, 半返单旧产品, 半返单新产品, 特殊新产品]}
+  - {form_name: txtLCRQ,    label: 离厂日期, type: date}
+  - {form_name: txtGBCS,    label: 改版次数}
+  - {form_name: txtRemark2, label: "备注2"}
+  - {form_name: txtRemark5, label: "备注5"}
+  - {form_name: chkQTDF,    label: 其他, type: checkbox, notes: "配 txtQTMC：上机打办/意向订单/产前样/兰纸/PDF/数码稿/印张"}
+  - {form_name: chkSFBG,    label: 是否变更, type: checkbox}
+  - {form_name: txtSPDJ,    label: SPDJ}
+  - {form_name: txtFSSL,    label: FSSL}
+  - {form_name: txtLYSL,    label: LYSL}
+  - {form_name: txtCTBSL,   label: CTBSL}

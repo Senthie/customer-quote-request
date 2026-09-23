@@ -9,4 +9,15 @@ dependencies = [
     "pandas>=3.0.1",
     "python-docx>=1.1.0",
     "pymupdf>=1.23.0",
+    "pyyaml>=6.0.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# tests/conftest.py 会把 scripts/ 加进 sys.path，测试可直接 import 各脚本模块
