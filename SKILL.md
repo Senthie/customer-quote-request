@@ -14,10 +14,11 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.15（2026-09-23 产品类别树重设计 + 四条业务决策落地）
+> **版本：** 1.0.23（2026-09-24 内部字段 `Reminder` 固化提醒；「无」落 JSON null）
 
 把**客户发来的报价需求**（邮件标题/正文 + 附件，或直接给的表格/文档）转换成
-**ERP 导入用的 59 字段 JSON**。
+**ERP 导入用的 59 字段 JSON**（产物末尾另追加 3 个我方内部字段：`ID` / `CPMC_ZH` / `Reminder`，
+可用 `--strip-internal` 去掉 —— 见 1.0.22 / 1.0.23 与 `assets/internal_export_fields.yaml`）。
 
 ---
 
@@ -34,7 +35,7 @@ metadata:
                      main.py ───────┴──► 归一化 + 校验（erp_schema.py）
                                     │      ×  assets/erp_form_schema.yaml（ERP 合法枚举）
                                     │
-                                    ├──► ERP JSON（59 字段）
+                                    ├──► ERP JSON（59 字段 + 内部字段 ID / CPMC_ZH）
                                     └──► CPMS 留空 → ★ agent 亲自补写
 ```
 
@@ -42,13 +43,28 @@ metadata:
 
 | 层 | 文件 | 职责 | 新增客户要改吗 |
 |----|------|------|---------------|
-| 客户档案 | `customers/*.yaml` | 这个客户怎么写字号/表头/档位/材质；怎么从邮件取单号 | **要**（只改这里） |
-| 抽取引擎 | `scripts/extract_fields.py` | 按档案把任意文件抽成「规范键 → 值」 | 一般不用（除非布局全新） |
+| 客户档案 | `customers/*.yaml` | 这个客户怎么写字号/表头/档位/材质/**分区表**；怎么从邮件取单号 | **要**（只改这里） |
+| 抽取引擎 | `scripts/extract_fields.py` | 按档案把任意文件抽成「规范键 → 值」。**两套范式**：平铺表走 `auto_pairs`（igl），分区表单走 `section_pairs`（NGV）—— 各家的细节见对应子技能（2.6） | 一般不用（除非布局全新） |
 | 业务映射 | `scripts/main.py` | 规范键 + 档案规则 → ERP 字段；输出断言 | 不用 |
 | **取值权威** | `assets/erp_form_schema.yaml` | **ERP 只认哪些值**（下拉枚举/类型/必填） | 不用（ERP 全局恒定） |
 
+> **客户专属知识在独立子技能里**：处理 IGL 前加载 `customer-quote-igl`、
+> 处理 NGV 前加载 `customer-quote-ngv`（附件形态 / 抽取范式 / 口径 / 坑 / 检查清单）。
+> 本文件是**总纲**：架构、引擎、邮件入口、字段总览、`CPMS` 规则、校验方法、新增客户 SOP。
+>
 > **铁律：`main.py` 里不允许出现任何客户的列名。**
 > 列名只属于档案。看到 `main.py` 里写死了某个客户的表头，就是重构退化了。
+>
+> **推论**：客户差异一律走档案开关 —— `quantity.mode`、`spine.mode`、`unit`、
+> `cpmc.template`、`binding.match_keys`、`thickness.enabled`、`rules.scan`、
+> `versions.empty_when_single|when_missing`、`size.zero_tops`、`required_empty` …
+> 加一个客户**不该**新增 `if 客户 == xxx`。现有客户是 igl（平铺）与 NGV（分区表单），
+> 两个范式都已校准；再加客户先判它属于哪一种（见 2.1）。
+>
+> ★ **业务 2026-09-24 强调：每个客户的附件类型不一样、格式也不一样。**
+> 所以**永远不要把一个客户的结构套到另一个客户身上** —— 拿真实附件校准（`calibrate_customer.py`），
+> 判形态 → 填档案 → 用 `scripts/compare_with_erp.py` 与权威 ERP 导出对照。
+> 「上一个客户是平铺表，这个客户估计也是」是这类工作里最贵的假设。
 
 ---
 
@@ -89,12 +105,23 @@ uv run ./scripts/main.py "customer-files/pending/QUOTE.xlsx" --customer auto
 
 ### 2.1 现有档案
 
-| 档案 | 客户 | 状态 |
-|------|------|------|
-| `customers/igl.yaml` | IGL | ✅ calibrated（用真实样本校准过） |
-| `customers/ngv.yaml` | NGV | ⚠️ **draft，未校准**（手上还没有 NGV 样本） |
-| `customers/_defaults.yaml` | 兜底 + 公共默认值 | 所有档案都叠加在它之上；认不出客户时用它（会打 WARN） |
-| `customers/_template.yaml` | 新客户骨架 | 复制它开始 |
+| 档案 | 客户 | 子技能（客户专属知识） | 状态 | 文件形态 |
+|------|------|------------------------|------|----------|
+| `customers/igl.yaml` | IGL | **`customer-quote-igl`** | ✅ calibrated（真实样本校准） | 平铺 + 横向键值对表 |
+| `customers/ngv.yaml` | NGV | **`customer-quote-ngv`** | ✅ calibrated（4 份真实附件 + ERP 导出） | **德英双语 enquiry 分区表单** |
+| `customers/_defaults.yaml` | 兜底 + 公共默认值 | 所有档案都叠加在它之上；认不出客户时用它（会打 WARN） | — |
+| `customers/_template.yaml` | 新客户骨架 | 复制它开始 | — |
+
+两种文件形态对应两套抽取策略，**新增客户前先判你手上是哪一种**
+（判错形态会把时间浪费在调别名表上）：
+
+| | igl 范式 | NGV 范式 |
+|---|---|---|
+| 形态 | 标签与值同行/同列平铺 | A 列分区 + B 列标签 + C 列起值 |
+| 策略 | `auto_pairs` | `section_pairs` |
+| 档案段落 | `fields:` 别名表 | `fields:` + **`sections:` 分区表** |
+| 麻烦点 | 值可能隔空列、一行多组键值 | **同标签在不同分区含义不同；同分区内标签会重复** |
+| 详见 | 子技能 `customer-quote-igl` + 本文 2.5 | 子技能 `customer-quote-ngv` + 本文 2.6 |
 
 ```bash
 uv run ./scripts/customer_profile.py --list       # 有哪些档案
@@ -112,6 +139,11 @@ cp customers/_template.yaml customers/<新客户id>.yaml
 uv run ./scripts/calibrate_customer.py --customer <新客户id> --file <样本文件> [--layout]
 ```
 
+> **先判形态**：打开样本看一眼 —— 是「标签/值平铺」（→ `auto_pairs` + `fields:`），
+> 还是「分区表」（A 列分区 / B 列标签 / C 列起值 → `section_pairs` + `sections:`）？
+> 判错形态会把时间浪费在调别名表上（NGV 的样本用平铺策略实测只抽出 4 个键，
+> 而且值全是错的）。
+
 脚本会打印：已识别的规范键、数量档位、**像标签但认不出的单元格**（附候选规范键建议），
 并写出 `customers/_draft_<id>.yaml` 供对照。报告自动过滤两类噪音：
 
@@ -126,7 +158,12 @@ uv run ./scripts/calibrate_customer.py --customer <新客户id> --file <样本�
 
 ```bash
 uv run ./scripts/main.py <样本文件> --customer <新客户id>
-uv run pytest                                      # 72 项测试必须全过
+uv run pytest                                      # 全部测试必须绿（当前 179 项）
+
+# 有权威 ERP 导出时，做一次分类对照（差异原因写进 customers/<id>.erp_diff.json）
+uv run ./scripts/compare_with_erp.py --customer <新客户id> \
+    --attachment <样本附件> --erp <对应的 ERP 导出.json> \
+    --accepted customers/<新客户id>.erp_diff.json
 ```
 
 59 键断言通过 + 字段值人工核对无误 → 把 `status: draft` 改成 `calibrated`，
@@ -161,10 +198,19 @@ extras:
   - Quotation Number
   - Carton Weight
 
-# ── ④ ERP 固定值 ─────────────────────────────────────────
+# ── ④ ERP 固定值（落库值）─────────────────────────────────
 erp_fixed:
   CPDL: 书版
   YYS: 1
+  PXH: ""                    # 写空串 = 显式留空（模板默认的 1 会被真的清掉）
+
+# ── ④b 客户偏好表（给人看：同一批字段 + 依据）──────────────
+# 业务 2026-09-24 要的「喜爱表」：长期客户有稳定口径，一眼看全、快速填写。
+# value 非空 = 落库这个值；value 空 = 显式留空（推不出来不猜）。
+# 必须与 erp_fixed 一致（validate + 测试拦着）。查看：customer_profile.py --prefs
+preferences:
+  - { field: CPDL, value: "书版", reason: "唯一合法值" }
+  - { field: PXH,  value: "",     reason: "由 ERP/业务侧填 → 留空" }
 
 # ── ⑤ 解析规则 ───────────────────────────────────────────
 rules:
@@ -256,6 +302,7 @@ email:
 | `auto_pairs` | **主策略**。对每个标签单元格：先看**同列下方**一格（非空且非标签就用它）；否则看**同行右侧**最近的「非空且非标签」格。所在行是「密集标签行」时优先取下方，否则优先取右侧 | 绝大多数报价单（含横向键值对与标签行/数据行混排） |
 | `column_pairs` | 固定列：标签在 `label_col`、值在 `value_col` | 列位固定的表 |
 | `shifted_pairs` | 只向右扫（纯横向键值对） | 横向键值对布局 |
+| `section_pairs` | **分区表**。A 列分区（向下继承），**按行位置**对齐 `sections:` 声明的条目：`section_value` 取 B 列自身；`label` 取右侧（`value_mode: first`/`run`） | 分区式表单（NGV，见子技能 `customer-quote-ngv`） |
 
 > 表头即标签的整列表格不需要单独策略：引擎统一按 `header=None` 读表，
 > 真表头会落在第 0 行，由 `auto_pairs` 按「密集标签行 → 取其下方」处理。
@@ -265,6 +312,66 @@ email:
 > （横向，值隔着空格）与 `Pub Month`/数据行、`Size…`/下一列（纵向），共 23 个规范键。
 
 ---
+
+### 2.6 客户专属知识在子技能里（已拆分）
+
+引擎只认「形态」；每家客户的表单结构、口径、坑放在**独立子技能**里，按需加载：
+
+| 客户 | 子技能 | 附件形态 | 抽取策略 |
+|------|--------|----------|----------|
+| IGL | **`customer-quote-igl`** | 平铺 + 横向键值对报价表 | `auto_pairs`（+ `column_pairs` / `shifted_pairs`） |
+| NGV | **`customer-quote-ngv`** | 德英双语 `enquiry` 分区表单（`A1:K32`：A 列分区 / B 列标签 / C 列起值） | `section_pairs` + 档案 `sections:` |
+
+**处理一份文件的顺序**：读本总纲 → 看识别结果 → **加载对应子技能** → 按子技能里的
+口径 / 坑 / 交付检查清单干活。新增客户见 2.2，校准完同样给它写一份子技能（模板照现成的两份）。
+
+引擎侧对两种范式只需要知道这么多：
+
+- **`auto_pairs`**：主策略，标签在下方或右侧，一条规则通吃「横向键值对 + 标签行/数据行」。
+- **`section_pairs`**：按**行位置**对齐档案 `sections:` 声明的条目 ——
+  `section_value` 取 B 列自身（合并格即值），`label` 取右侧（`value_mode: first`/`run`）。
+  声明的 `label` 兼作**断言**：结构一变、行位置对不上就打 WARN 并把该格记进
+  `unmatched_labels`，**宁可空着不猜**。
+
+分区表单那些真正的坑（同一标签跨分区含义不同、同分区内标签重复、A 列干扰文字、
+B 列自身即值）**全部在 `customer-quote-ngv` 子技能里**，改 NGV 之前先读它。
+
+### 2.7 客户偏好表（`preferences:`）—— 业务「喜爱表」
+
+> 业务要求（2026-09-24）：「因为有些客户和我们的达成合作比较久，所以我们会有一些默认值，
+> 你也需要根据不同的用户设置一份喜爱表，方便快速填写用户习惯。」
+
+每个客户档案多一段 `preferences:`，把「这个客户哪些字段固定填什么、哪些字段就该空着」
+连同**依据**写在一处。口径只有两种，**都必须显式声明**，不许留空白让人猜：
+
+| 写法 | 含义 |
+|------|------|
+| `value` 非空 | 落库这个值（必须与 `erp_fixed` 一致） |
+| `value: ""` （空） | **显式留空** —— 该客户这个字段就该空着，推不出来不猜。<br>⚠️ 模板自带默认值时必须靠它清掉（如 `PXH` 模板默认 `1`） |
+
+```yaml
+preferences:
+  - { field: BZ,    value: "美元", reason: "该客户报价一律美元（长期口径）" }
+  - { field: PXH,   value: "",     reason: "排序号由 ERP/业务侧填 —— 模板默认 1 必须清掉" }
+```
+
+**与 `erp_fixed` 的分工（刻意分开，别合并）**
+
+| | 谁读 | 内容 |
+|---|------|------|
+| `erp_fixed` | **机器**（`main.py` 只认它） | 落库值。写 `""` = 显式留空，`main.py` 会真的把模板默认值清掉（1.0.18） |
+| `preferences` | **人**（业务/agent） | 同一批字段 + **依据**，供快速核对与填写 |
+
+两者必须一致：`customer_profile.py --validate` 与 `tests/test_customer_profile.py`
+都会拦（"偏好表写留空、`erp_fixed` 还填着 1" 这种漂移，产物里会悄悄留下模板默认值）。
+
+```bash
+uv run ./scripts/customer_profile.py --prefs        # 所有客户的偏好表
+uv run ./scripts/customer_profile.py --prefs ngv    # 单看某客户
+uv run ./scripts/customer_profile.py --validate     # 一致性校验
+```
+
+现有偏好表：`igl`（6 条）/ `ngv`（15 条）。新增客户时照抄 `_template.yaml` 里的骨架。
 
 ## 3. 邮件入口 `ingest_email.py`
 
@@ -287,14 +394,19 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 它做三件事：
 
 1. 附件落到 `customer-files/pending/`（重名自动加 `__1` 后缀，不覆盖）
-2. 按**客户档案**的 `email.khdh` 规则从**邮件标题/正文**取客户单号 `KHDH`
-3. 给每个附件写 sidecar `<附件名>.meta.json`（标题/正文/发件人/单号/识别到的客户）
+2. 按**客户档案** `email:` 段声明的**每组单号规则**（`target` 指定落哪个 ERP 字段）
+   从**邮件标题/正文**取号 —— 例：NGV 的 `KHDDH`（香港单号）
+3. 给每个附件写 sidecar `<附件名>.meta.json`（标题/正文/发件人/`numbers`/识别到的客户）
 
-`main.py` 处理该附件时会**自动读取 sidecar**：客户单号优先级是
-**邮件标题/正文 → 附件列（`email.khdh.attachment_keys`）**；处理完 sidecar 会一起归档进任务目录。
+`main.py` 处理该附件时会**自动读取 sidecar**：每组单号的优先级是
+**邮件标题/正文（sidecar 的 `numbers`）→ 附件列（`attachment_keys`）→ 全表扫描的规范键**；
+处理完 sidecar 会一起归档进任务目录。
 
-**客户识别顺序**：邮件标题/正文/文件名 → 认不出就**读附件内容**再判
-（报价单里的招牌栏目比文件名可靠，例如 igl 的 `Works References For all Titles`）。
+**客户识别顺序（2026-09-24 修正）**：**表格正文优先** —— 表格类文件一律把正文文本
+一起送进识别，文件名/主题只当加分项；得分 <30（只有文件名/主题这类弱证据）会打 WARN。
+原因：NGV 那份文件名含 `Colour`，命中 igl 的 `filename_keywords`（10 分）就胜出，
+正文里 500 分的 NGV 特征**压根没被读过** → 整单字段全错。
+各客户的特征标签 / 关键词写在各自档案的 `detect:` 段，细节见对应子技能。
 
 > ⚠️ **尚未实现：IMAP 直连收信。** 需要先确认公司收信方式（IMAP 服务器 / 转发到本地 /
 > 邮箱 API），再加「取信 → 落 .eml → 调本脚本」的适配层。脚本刻意做成传输无关就是为了这步不返工。
@@ -321,8 +433,12 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 `map_fields()` 真正赋值的是：
 
 1. **档案固定值**（`erp_fixed`，igl 当前 6 个）：`CPDL` `YYS` `BZ` `PXH` `KHMBDJ` `DWMC`
-2. **规范键推导**（9 个）：`CPLB`（format 查表）、`CPMC`（CPLB+系列名）、`TZS`、
-   `CD` `KD` `GD`（尺寸/厚度计算）、`Drop_SJFX`（CD vs KD）、`JHRQ`、`WCRQ`、`KHDH`
+   —— ⚠️ 值为 `""` 的条目是**显式留空**（1.0.18）：模板自带默认值时必须靠它清掉
+   （NGV 的 `PXH`/`YYS` 就是这样，否则模板默认 `1` 会悄悄留在产物里）。见 2.7
+2. **规范键推导**：`CPLB`（format 查表）、`CPMC`（CPLB+系列名）、`TZS`、
+   `CD` `KD` `GD`（尺寸/厚度；档案可 `rules.size.zero_tops` 让套装写 0/0/0）、
+   `Drop_SJFX`（书脊方向）、`JHRQ` `WCRQ`（档案可 `mode: empty` 不落库）、
+   `KHDH` / `KHDDH`（两组单号，见子技能 `customer-quote-ngv` 第 5 节）、`CPSX`、`FSCMC`
 3. **数量档位**（0~10 个）：`CPSL1`~`CPSLn`
 4. **档案映射**：`ZDFS`（`rules.binding.enabled: true` 时，igl 已开启）
 
@@ -341,16 +457,20 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | ERP 字段 | 来源 |
 |----------|------|
 | `CPLB` | 档案 `cplb.map`（客户关键词正则 → 产品类别树节点编号）→ 命中即用；未命中退回 `product_categories.py` 查表（旧路径）→ 最后用 `product_category.fallback`（默认 `32.00;其他`）。结果一律校验是否在 `assets/cplb_tree.yaml` 里（见 4.7） |
-| `CPMC` | `<CPLB>-<series_name>` |
-| `TZS` | `number_of_titles`（非数字则 1） |
-| `CPSL1`~`CPSL10` | 数量档位（见 4.4） |
-| `CD`/`KD`/`GD` | 规范键 `size`，按档案 `size.order`（igl 是 H x W x D → CD/KD/GD）；尺寸里没给 D 时按页数+纸张算厚度 |
+| `CPMC` | 档案 `cpmc.template` 拼装（**英文表达**），占位符 `{salesperson} {cn_name} {cplb} {cplb_name} {product_name} {series_name} {fsc} {our_ref}`；默认模板 `{cplb}-{series_name}`（igl 口径）。NGV 用 `{salesperson}/Aldi {product_name}({fsc})`；**中文表达**由 `cpmc.zh_template` 渲染后落内部字段 `CPMC_ZH`（1.0.22），中文品名要人工拟 → 脚本给占位符 `【中文品名待定】` 并标 `cpmc.needs_agent: true`，**必须 agent 补全** |
+| `TZS` | `versions` + 档案 `versions.title_pattern`（如 `12 titles` → 12）；没有则退回 `number_of_titles` |
+| `YYS` | 档案 `versions.language_pattern` 从 `versions` 取（如 `5 languages` → 5）。三种口径必须分清（业务 2026-09-24）：`empty_when_single: true` 时**语言数 1 留空**；提取不到语言数时按 `versions.when_missing` **落 0**（NGV，0 = 待业务核对 —— 邮件可能后补而附件未更新）；两个开关都没声明才保留档案固定值 + WARN |
+| `CPSL1`~`CPSL10` | 按档案 `quantity.mode`：`tiers`（igl，一排档位）/ `single`（NGV，一个总数 → 只填 `CPSL1`）。见 4.4 |
+| `CD`/`KD`/`GD` | 规范键 `size`，按档案 `size.order`（igl 是 H x W x D → CD/KD/GD）；尺寸里没给 D 时按页数+纸张算厚度 —— 但档案 `rules.thickness.enabled: false` 可关掉（NGV 的 ERP 里 `GD` 恒为 0）。**套装另说**：档案 `size.zero_tops: [套装]` 时 CD/KD/GD 一律 0/0/0，附件里的盒内单件尺寸不采用（业务决定 2026-09-24） |
 | `GD`（计算） | `(extent_pp / 2) × 内页厚度 + extent_cover × 封面厚度` |
-| `Drop_SJFX` | `CD > KD` → `长书脊`，否则 `短书脊`（档案 `rules.spine`）。合法枚举见 4.6：`短书脊`/`长书脊`/`四边裁` |
-| `JHRQ` | 档案 `dates.JHRQ.from` 指定的规范键（默认 `pub_month`）→ `YYYY-MM-DD` |
-| `WCRQ` | 当前日期 + `dates.WCRQ.days` 天 → `YYYY-MM-DD` |
-| `KHDH` | 邮件标题/正文 → 附件列（见第 3 节） |
-| `ZDFS` | 档案 `binding.map` 匹配 `binding` 文本（igl 已开启）；**命中不到用 `binding.default`**，两者都必须落在 ERP 合法枚举内（见 4.6） |
+| `Drop_SJFX` | 档案 `rules.spine.mode`：`cd_vs_kd`（`CD > KD` → `长书脊`，否则 `短书脊`）/ `binding_side`（装订边 ≥ 较长边 → 长书脊；附件没给装订边则用 `spine.default` + WARN；`spine.skip_tops` 里的类别顶层直接留空，NGV 的套装就是这种）。合法枚举见 4.6：`短书脊`/`长书脊`/`四边裁` |
+| `DWMC` | 档案 `rules.unit`：按 `CPLB` 的**顶层名**定单位（NGV：书本 `本`、套装 `套`） |
+| `FSCMC` | 规范键 `fsc`（由 `rules.scan` 从纸张行扫出，如 `230 gsm art card C1S (FSC Mix)`）→ 按 ERP 枚举归一化。扫描条目带 `unique: true` 时**不唯一就留空**（多材质混用 FSC 时该填哪个推不出来，业务 2026-09-24 拍板），原因记进 `.extracted.json` 的 `scan_notes` |
+| `JHRQ` | 档案 `dates.JHRQ.from` 指定的规范键（igl 默认 `pub_month`）→ `YYYY-MM-DD`；档案 `dates.JHRQ.mode: empty` 则不落库（NGV 口径，2026-09-24） |
+| `WCRQ` | 当前日期 + `dates.WCRQ.days` 天 → `YYYY-MM-DD`；档案 `dates.WCRQ.mode: empty` 则不落库（NGV 口径） |
+| `KHDH`（客户单号） | 只来自**邮件标题/正文**（档案 `email.khdh`）。**不许拿 `our_ref`（PR-xxxxx）冒充** —— 那是我们的询价编号；也**不许**把附件里的香港单号写进来（2026-09-24 修正；NGV 的双号分流见子技能 `customer-quote-ngv` 第 5 节） |
+| `KHDDH`（香港单号） | 附件文件名/表内的「香港单号 CU…」（规范键 `khddh`）或邮件 → `email.khddh`。4 份 NGV 导出逐条核对通过 |
+| `ZDFS` | 档案 `binding.map` 匹配 `binding.match_keys`（可指定多个规范键一起拼，如 NGV 要 `binding` + `binding_instructions` 两行才够）；**命中不到用 `binding.default`**，两者都必须落在 ERP 合法枚举内（见 4.6） |
 | `CPSX` | 档案 `rules.cpsx` 推导：年龄段 ≥3/<3 岁 × 有无安全检查 → 四个中文枚举之一；推不出（缺年龄）就留空 + WARN（见 4.7） |
 | `CPMS` | ★ **脚本一律留空**，agent 亲自写（见第 5 节） |
 
@@ -380,12 +500,12 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 8 | `CPLB` | 产品类别 | `format` 查表 | `""` | ✅ |
 | 9 | `Drop_SJFX` | 书脊方向 | `CD` vs `KD` | `""` | ✅ |
 | 10 | `ZDFS` | 装订方式 | `binding`（档案映射，合法值见 4.6） | `""` | ✅ |
-| 11 | `CPMC` | 产品名称 | `CPLB` + `series_name` | `""` | ✅ |
+| 11 | `CPMC` | 产品名称（**英文表达**） | 档案 `cpmc.template` 拼装；中文表达见内部字段 `CPMC_ZH` | `""` | ✅ |
 | 12 | `TZS` | 共有款数 | `number_of_titles` | `0` | ✅ |
-| 13 | `YYS` | 每款语言数 | 档案 `erp_fixed` | `1` | 🔒 |
+| 13 | `YYS` | 每款语言数 | `versions` 提取；单语言留空 / 提取不到落 0（档案 `versions.*`） | `1` | ✅ |
 | 14 | `DWMC` | 单位 | 档案 `erp_fixed`（`本`，合法值见 4.6） | `""` | ✅ |
 | 15~24 | `CPSL1`~`CPSL10` | 产品数量 ①~⑩ | 数量档位 | `0` | ✅ |
-| 25 | `BZ` | 币种 | 档案 `erp_fixed` | `"美元"` | 🔒 |
+| 25 | `BZ` | 币种 | 档案 `erp_fixed`（业务 2026-09-24：**我们填「美元」**，导出留空由业务核对时补） | `"美元"` | 🔒 |
 | 26 | `KHMBDJ` | 客户目标价-金额 | 档案 `erp_fixed` | `0` | 🔒 |
 | 27 | `CD` | 规格-长 (mm) | `size` 第 1 段 | `0` | ✅ |
 | 28 | `KD` | 规格-宽 (mm) | `size` 第 2 段 | `0` | ✅ |
@@ -393,50 +513,61 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 30 | `BZFS` | 包装方式 | 客户要求 | `""` | ⚠️ |
 | 31 | `TBLX` | 台板类型 | 客户要求 | `""` | ⚠️ |
 | 32 | `SHFS` | 送货方式 | 客户要求 | `""` | ⚠️ |
-| 33 | `KHDH` | 客户单号 | 邮件标题/正文 → 附件列 | `""` | ✅ |
-| 34 | `JHRQ` | 交货日期 | `pub_month` → `YYYY-MM-DD` | `""` | ✅ |
-| 35 | `FSCMC` | FSC 类别 | 客户要求 | `""` | ⚠️ |
+| 33 | `KHDH` | 客户单号 | **只**来自邮件标题/正文（档案 `email.khdh`）；附件里的香港单号**不许**写这里 | `""` | ✅ |
+| 34 | `JHRQ` | 交货日期 | 档案 `dates.JHRQ`（`from: 规范键` 或 `mode: empty` 不落库） | `""` | ✅ |
+| 35 | `FSCMC` | FSC 类别 | 规范键 `fsc`（`rules.scan`，可带 `unique: true` → **不唯一就留空**，业务 2026-09-24 拍板） | `""` | ✅ |
 | 36 | `OLD_KHDDH` | 返单香港单号 | 返单时填 | `""` | ⚠️ |
-| 37 | `SFYPJ` | 是否有配件（**string**） | `Accessories` / 配件 | `""` | ⚠️ |
-| 38 | `Remark1` | 配件描述 | `SFYPJ` 有值时 | `""` | ⚠️ |
-| 39 | `PXH` | 排序号 | 档案 `erp_fixed` | `1` | 🔒 |
+| 37 | `SFYPJ` | 是否有配件（**string**） | 推不出就留空（业务 2026-09-24 拍板；写死「否」是错的） | `""` | 🔒 |
+| 38 | `Remark1` | 配件描述 | 随 `SFYPJ`，推不出就留空 | `""` | 🔒 |
+| 39 | `PXH` | 排序号 | 档案 `erp_fixed`（业务 2026-09-24：**留空**；NGV 用 `PXH: ""` 显式清掉模板默认 1） | `1` | 🔒 |
 | 40 | `CPSX` | 产品属性 | 年龄段 + 安全检查（档案 `rules.cpsx` 推导） | `""` | ✅ |
 | 41 | `CPLX` | 产品类型 | 历史订单比对 | `""` | ⚠️ |
-| 42 | `WCRQ` | 预计下单日期 | 今天 + N 天 → `YYYY-MM-DD` | `""` | ✅ |
-| 43 | `KHDDH` | 香港单号 | 返单/香港单 | `""` | ⚠️ |
+| 42 | `WCRQ` | 预计下单日期 | 档案 `dates.WCRQ`（`today_plus_days` 或 `mode: empty`） | `""` | ✅ |
+| 43 | `KHDDH` | 香港单号 | 附件「香港单号 CU…」（规范键 `khddh`）或邮件 → 档案 `email.khddh` | `""` | ✅ |
 | 44 | `chkXBJF` | 不需报价 | 开关 | `false` | 🔒 |
 | 45 | `ECPMC` | 产品英文名 | `series_name`（英文） | `""` | ⚠️ |
 | 46 | `chkZDBJF` | 有排交期 | 开关 | `false` | 🔒 |
 | 47 | `ZXLB` | 纸箱类别 | 客户要求 | `""` | ⚠️ |
-| 48 | `ZBLX` | 纸板类型 | 客户要求 | `""` | ⚠️ |
+| 48 | `ZBLX` | 纸板类型 | 客户要求（业务 2026-09-24 定：**NGV 留空**；同日给出完整下拉枚举，导出里的 `B3B普通芯` 不在枚举内） | `""` | ⚠️ |
 | 49 | `ZXFS` | 装箱方式 | 客户要求 | `""` | ⚠️ |
 | 50 | `chkBSYTB` | 不使用台板 | 开关 | `false` | 🔒 |
 | 51 | `chkBSYJZX` | 不使用集装箱 | 开关 | `false` | 🔒 |
 | 52 | `DKMC` | 底卡名称 | 客户要求 | `""` | ⚠️ |
-| 53 | `YSLX` | 运输类型 | 客户要求 | `""` | ⚠️ |
+| 53 | `YSLX` | 运输类型 | 默认留空；长期客户的实际口径写在档案「客户偏好表」（业务 2026-09-24） | `""` | 🔒 |
 | 54 | `SHDQ` | 送货地区 | 客户要求 | `""` | ⚠️ |
 | 55 | `KHDQ` | 客户地区 | 客户资料 | `""` | ⚠️ |
 | 56 | `CPMS` | 产品描述 | **agent 亲自**（脚本不生成） | `""` | 👤 |
 | 57 | `BGMS` | 补充描述 | — | `""` | ⚠️ |
 | 58 | `Remark4` | 检测项目 | — | `""` | ⚠️ |
-| 59 | `Remark3` | 修改记录 | — | `""` | ⚠️ |
+| 59 | `Remark3` | 修改记录 | 留空（我们产出的就是第一版报价，不存在修改记录，业务 2026-09-24） | `""` | 🔒 |
 
 > **注意：** v2 没有 `Remark2`。备注类是 `Remark` / `Remark1` / `Remark3` / `Remark4`。
 > `BDBH`/`YWY`/`KHZL`/`GDY`/`Remark`/`CPMX` 业务已确认**由 ERP 自动带出，留空即正确**。
 > `CPDL` 是「书**版**」不是「书**板**」。
 
-### 4.4 数量档位 `CPSL1`~`CPSL10`
+### 4.4 数量 `CPSL1`~`CPSL10`
 
-**业务确认（2026-09-23）：** 默认 `0`，取值由**客户订单的数量档位**决定 ——
-客户报价单会给出一行档位，按**从左到右**依次填 `CPSL1`、`CPSL2`…，没用到的留 `0`。
+**业务确认（2026-09-23）：** 默认 `0`，取值由**客户订单的数量**决定。
+两种客户口径由档案 `rules.quantity.mode` 决定 —— 这是本仓库里最容易搞错的一处：
 
-```
-Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
-                ↓
-CPSL1=3000 CPSL2=5000 CPSL3=7500 CPSL4=10000 CPSL5=20000 CPSL6=25000 CPSL7=30000 CPSL8~10=0
-```
+| `quantity.mode` | 客户怎么写 | 落到哪 | 例子 |
+|---|---|---|---|
+| `tiers`（默认，igl） | 一行**档位**，按从左到右依次填 | `CPSL1`…`CPSLn`，其余留 `0` | `Total Costs \| 3k \| 5k \| 7.5k \| 10k` → `CPSL1=3000 … CPSL4=10000` |
+| `single`（NGV） | **一个总数** | 只填 `CPSL1`，`CPSL2~10` 留 `0` | `512580cps` → `CPSL1=512580`；`4 x 17.500` → `CPSL1=70000` |
 
-识别规则刻意做严（**宁可漏判，不可误判**），写法由档案 `rules.quantity_tiers` 控制：
+> 两种口径的具体写法与例子见子技能（`customer-quote-igl` 用 `tiers`、
+> `customer-quote-ngv` 用 `single`）。新增客户先判它属于哪一种。
+
+`single` 的解析要点（`main.py: parse_single_quantity`）：
+
+- 欧式数字：`4 x 17.500` 是 4 × **17500**（点作千分位），`7,5` 才是 7.5 ——
+  靠位数判定（点后正好 3 位且形如 `1.234.567` → 千分位）。
+- 后缀（`cps` / `pcs`）忽略。
+- 数量为 `0` 或解析不出 → 保持默认 `0` + WARN。**这不是 bug**：
+  NGV 常在报价阶段留 `0`，真实数量在邮件里（实测 CU26051601-01 附件写 `0`，
+  ERP 里是 `193820`）。
+
+`tiers` 的识别规则刻意做严（**宁可漏判，不可误判**），写法由档案 `rules.quantity_tiers` 控制：
 
 | 判定 | 条件 |
 |------|------|
@@ -465,6 +596,21 @@ CPSL1=3000 CPSL2=5000 CPSL3=7500 CPSL4=10000 CPSL5=20000 CPSL6=25000 CPSL7=30000
 - **纸张类型**由档案 `rules.materials` 映射（`woodfree` → 书纸、`C1S artboard` → 光粉纸…），
   未命中用档案默认值并 WARN。
 
+**报价截止日期（`offer_deadline`）—— 过期必须提醒业务**（1.0.21 新增）
+
+`offer deadline / Angebotsfrist` 是**有值**的标签（不是栏目标题），抽到规范键 `offer_deadline` 后：
+
+- 它**不是 ERP 字段**（模板里没有报价截止日期）→ 落 `validation.json` 的 **`reminders`** 段，
+  并在跑完的 stdout 末尾打一个醒目块（业务 2026-09-24：「超过了报价截止日期，你记得提醒」）。
+- 判据 = 截止日期 vs **运行基准日期**：`uv run ./scripts/main.py <文件> --today 2026-09-24`
+  （默认系统当天）。**别把「今天」写进代码** —— 否则「今天没过期、明天过期了」，
+  测试与补跑都不可复现。`rules.deadline.warn_when_expired`（默认 `true`）可关。
+- 该提醒**不计入** error/warn 计数（它不是取值缺陷），但 `reminders` 为空/非空是可断言的。
+  同一内容还会落**内部字段 `Reminder`**（见 4.8）—— 产物里就有，不用翻日志。
+
+**报价截止日期检查 → 三条通道（同一来源，不会漂）**：内部字段 `Reminder` /
+`validation.json` 的 `reminders`（结构化）/ stdout 末尾醒目块。
+
 ### 4.6 ERP 表单权威字典与取值校验（1.0.14 新增）
 
 > **字典：** `assets/erp_form_schema.yaml`（59 字段 + 35 个仅表单字段）
@@ -484,15 +630,31 @@ CPSL1=3000 CPSL2=5000 CPSL3=7500 CPSL4=10000 CPSL5=20000 CPSL6=25000 CPSL7=30000
    `02` → `美元`；`CPSX001` → `三岁以上`；`快线BB书␣␣␣` → `快线BB书`。
 2. **校验**：`validate_result()` —— 三档检查，产出 `.validation.json`：
    - `error`：取值不在 ERP 合法枚举里 / 类型不对（整数、日期、布尔）/ 业务必填字段为空
-   - `warn`：建议填写字段为空 / 字段不在字典里
+   - `warn`：建议填写字段为空 / 字段不在字典里 / **档案声明的口径例外**（见下）
 3. **报警**：有 `error` 时终端打出醒目块（`!! ERP 取值校验：N 个 error !!`）+ 日志，
    提示「导入前必须处理」。
+4. **提醒**：`reminders` 段 —— 给业务的提醒（不是取值缺陷，**不计入 error/warn**）。
+   目前是「报价截止日期已过期」（见 4.5）；同一内容也会落内部字段 `Reminder`（见 4.8）。
+
+**两种「按档案放宽」，都必须在档案里显式声明（不许全局放宽）**
+
+| 段落 | 用途 | 例子 |
+|------|------|------|
+| `rules.required_empty` | 该客户**本来就该为空**的字段 → 不报必填 error | NGV：`KHDH`（报价阶段客户还没给单号）、`KHDDH`（香港单号，扫不到就空）、`Drop_SJFX`（套装没有书脊方向） |
+| `rules.enum_exceptions` | 业务拍板用、但**不在 ERP 下拉枚举里**的**字符串**取值 → 报 WARN（带业务原因）而非 error | 目前**没有客户在用**（NGV 的 `CPSX=无` 已改走 `rules.null_values` → `null`，见 4.9）；机制保留备用 |
+
+> ⚠️ **先看 `rules.null_values` 再考虑 `enum_exceptions`**：业务说「无」时，正确做法是
+> 落 JSON `null`（= 空值，天然不触发枚举校验），而不是往枚举里塞一个非法字符串。
+> `enum_exceptions` 只留给「业务坚持要用枚举外的字符串值」这种真例外。
+> 声明的豁免**只认 (字段, 取值) 这一对**：乱填的取值继续报 error；
+> 不带 `--customer` 按字典硬校验时也照样报 error（可见性不被吞掉）。
+> `main.py` 与 `erp_schema.py --check --customer <id>` 走同一份豁免。
 
 **产物**：`customer-files/processed/<task_id>/<原名>.validation.json`
 
 ```json
 { "schema": "assets/erp_form_schema.yaml", "customer": "igl",
-  "errors": [], "warnings": [], "summary": {"error": 0, "warn": 0} }
+  "errors": [], "warnings": [], "reminders": [], "summary": {"error": 0, "warn": 0} }
 ```
 
 **常用命令**
@@ -501,7 +663,8 @@ CPSL1=3000 CPSL2=5000 CPSL3=7500 CPSL4=10000 CPSL5=20000 CPSL6=25000 CPSL7=30000
 uv run ./scripts/erp_schema.py                      # 字典概览（哪些字段有枚举）
 uv run ./scripts/erp_schema.py --field ZDFS         # 单字段定义 + 别名表
 uv run ./scripts/erp_schema.py --values Drop_SJFX   # 只列合法值
-uv run ./scripts/erp_schema.py --check <ERP.json>   # 校验任意一份结果
+uv run ./scripts/erp_schema.py --check <ERP.json> --customer ngv   # 按档案豁免校验（推荐）
+uv run ./scripts/erp_schema.py --check <ERP.json>   # 按字典硬校验（会报该客户「本来就空」的字段）
 ```
 
 **存储口径：统一中文 label（业务确认 2026-09-23）**
@@ -519,7 +682,7 @@ uv run ./scripts/erp_schema.py --check <ERP.json>   # 校验任意一份结果
 | `Drop_SJFX` | 表单里选项值是数字（`0`/`1`/`2`），但按统一口径输出中文（`短书脊`/`长书脊`/`四边裁`） |
 | `ZDFS` | `快线BB书   `（三个尾随空格）—— 不改会永远匹配不上 |
 | `BZ` | 历史单据存 label（`美元`），不是 code（`02`）→ 统一口径下一致 |
-| `CPLB` | 树形下拉，值是 `<编号>;<名称>`（如 `23.01;无线胶装书`）→ 校验**编号是否为树节点**；只写到顶层（`23.00`）会给 WARN，因为太粗会影响生产/计价。名称会被树里的规范名覆盖（防「编号对、名字错」） |
+| `CPLB` | 树形下拉，值是 `<编号>;<名称>`（如 `23.01;无线胶装书`）→ 校验**编号是否为树节点**；只写到顶层（`23.00`）会给 WARN，因为太粗会影响生产/计价。名称会被树里的规范名覆盖（防「编号对、名字错」）。★ 业务 2026-09-24 拍板：**我们输出「编号;名称」**（原话：编号让用户更直观地看到任务的标识）；真实 ERP 导出存的是纯名称，纯名称输入仍判 WARN 提醒补编号 |
 | `CPSX` 产品属性 | 选项 `三岁以上`/`三岁以下(要寄第三方测试)` 就是**年龄段+安全检查的落库位**。业务确认（2026-09-23）**要落库**，规则见 4.7；但**落库不替代 CPMS** |
 | `SFYPJ` | ERP 是字符串枚举 `是`/`否`；历史单据写成布尔 `false`（错） |
 | `SHDQ`/`CPDL` | 联动下拉，静态 HTML 里取不到全量枚举（`SHDQ` 目前为空，需业务导出） |
@@ -590,12 +753,73 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 | ≥ 3 岁 | 有 | `3岁以上（要寄第三方测试）` |
 | < 3 岁 | 无 | `三岁以下` |
 | < 3 岁 | 有 | `3岁以下（要寄第三方测试）` |
-| 缺年龄段（或只有安全检查） | — | **留空 + WARN**，不猜 |
+| 缺年龄段（或只有安全检查） | — | 档案 `rules.cpsx.when_missing`：空 → **留空 + WARN**（公共默认，不猜）；非空 → 落该值（NGV 业务 2026-09-24：「CPSX 如果没有获取到就显示**无**」，再经 `rules.null_values` 翻成 **JSON `null`**，见 4.9） |
 
 实测（igl 样本 `PUZZLE COLOUR DISNEY.xlsx`：`Target Age Group=7+`、`Safety Checks=Y`）
 → `CPSX = "3岁以上（要寄第三方测试）"`。
 
+⚠️ **`when_missing` 的值可能不在 ERP 枚举里**（`无` 就不在）→ 必须同时在档案
+`rules.enum_exceptions` 里声明，否则每一单都会报 1 个 error（见 4.6 的「口径例外」）。
+
 > ⚠️ **落库不替代 `CPMS`**：产品描述里仍必须写清年龄段与安全要求（见第 5 节）。
+
+---
+
+### 4.8 内部导出字段：`ID` / `CPMC_ZH` / `Reminder`（1.0.22 起）
+
+> **声明文件：** `assets/internal_export_fields.yaml` ｜ **加载：** `scripts/internal_fields.py`
+> **业务背景（2026-09-24）：** 「导出现在缺少一份内部导出字段 `ID`，该字段标注我们的当前执行的任务，
+> 方便日志维护；将 `CPMC` 修改为存英文表达，使用 `CPMC_ZH` 来标注中文表达」；
+> 随后「（过期提醒）加一个字段做提醒」。
+
+| 键 | 值 | 说明 |
+|----|-----|------|
+| `ID` | 本次任务号 | 与**产物目录名**、日志里的「任务ID」、`validation.json` 的 `task_id` 是同一个 ID |
+| `CPMC_ZH` | 产品名称的中文表达 | `CPMC` 只放英文（业务口径），中文表达落这里 |
+| `Reminder` | 给业务的提醒文本 | 目前是「报价截止日期已过期」；没有待办时为空字符串 |
+
+**机制（四条硬规则）**
+
+1. **位置**：一律追加在 59 个 ERP 键**之后**（ERP 自己的导出也是这么干的：`Remark3` 后面挂 `产品备注`）。
+   59 键的位置一个不动 —— 下游按位置读的解析器不受影响。
+2. **断言**：`step6` 检查「前 59 键 = 模板（集合 + 顺序）」**且**「其后 = 声明的内部字段（同序）」；
+   `map_fields` 多产出任何未声明的键会当场抛错。`tests/test_pipeline.py` 有测试钉着。
+3. **校验**：内部字段**不参与** ERP 字典校验（`ID`/`CPMC_ZH` 字典里确实没有）——
+   否则每份产物都会报「字典里没有这个字段」。`erp_schema.py --check` 会自动跳过。
+4. **开关**：`--strip-internal` → 只输出 59 键（给「ERP 导入端不收未知字段」兜底）。
+
+```bash
+# 默认：59 + 2 个内部字段
+uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv
+# 纯净 59 键（导入 ERP 前若被告知「不收未知字段」）
+uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv --strip-internal
+```
+
+**加新内部字段**：在 `assets/internal_export_fields.yaml` 的 `fields:` 里加一条
+（`key` + `source`），并在 `main.py` 的 `providers` 里补上该 source 的实现（一行）。
+**ERP 要的字段不要往这里加** —— 那属于 59 键模板 + 字典。
+
+---
+
+### 4.9 「无」落 JSON `null`（`rules.null_values`，1.0.23 新增）
+
+业务 2026-09-24：「`CPSX` 或者其他值的『无』使用 json 里的 null 填充」。
+
+```yaml
+rules:
+  null_values: ["无"]        # 公共默认在 _defaults.yaml；想关掉写 []
+```
+
+- **触发条件**：某个字段的取值**整格恰好等于**声明里的词（先 trim）。长文本里的「无」
+  不受影响（`客户无需提供刀模…` 原样保留），`无特殊要求` 也不转换。
+- **为什么这样最对**：ERP 自己的导出里**空值就是 `null`**（权威导出的 `CPLD`/`KHDH`/`CPSX`
+  都是 `None`）。所以「无」落 `null` 既符合业务语言、又天然属空值 → **不触发下拉枚举校验**。
+- **实践建议**：业务说「取不到就显示无」时，档案写 `when_missing: 无` + 靠本机制翻成 `null`；
+  **不要**用 `enum_exceptions` 往枚举里塞「无」这个非法字符串。
+- 实现位置：`main.py map_fields()` 第 14 步（很靠后，所有字段都已赋值），日志会打出
+  `业务口径 null_values=['无'] → 落 JSON null 的字段: CPSX('无'→null)`。
+- ⚠️ 与「空值」的区别：**没有待办/本来就没有** → 空字符串（模板默认）；
+  **业务明确说「无」** → `null`。两者在 JSON 里长得像，但来源不同，别把 `Reminder` 也写成 null。
 
 ---
 
@@ -641,17 +865,20 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 
 被问「输出是否和处理的字段一致」时，**不要只看输出文件**。走这三步：
 
-1. **字段集合 + 顺序** —— 输出 JSON 的键必须与 `assets/add_customer_quote_request.json`
-   的 **59 个键完全一致且同序**。集合对、顺序错也算不一致。
+1. **字段集合 + 顺序** —— 输出 JSON 的**前 59 个键**必须与
+   `assets/add_customer_quote_request.json` 的 **59 个键完全一致且同序**。集合对、顺序错也算不一致。
+   其后只允许跟 `assets/internal_export_fields.yaml` 声明的**内部字段**
+   （`ID` / `CPMC_ZH` / `Reminder`），顺序同样要对；用 `--strip-internal` 则应该一个内部字段都没有。
    ```bash
    python3 - <<'PY'
    import json
    tpl = json.load(open("/home/claw/customer-quote-request/assets/add_customer_quote_request.json"))
    out = json.load(open("<输出的 ERP JSON 路径>"))
-   print("字段数一致:", len(tpl) == len(out))
-   print("键顺序一致:", list(tpl) == list(out))
-   print("缺失:", set(tpl) - set(out))
-   print("多余:", set(out) - set(tpl))
+   tpl_keys = list(tpl)
+   print("ERP 59 键顺序一致:", list(out)[:59] == tpl_keys)
+   print("内部字段:", list(out)[59:])
+   print("缺失:", set(tpl_keys) - set(out))
+   print("ERP 部分多余:", set(list(out)[:59]) - set(tpl_keys))
    PY
    ```
 2. **读生成代码，不看产物猜** —— 打开 `scripts/main.py` 的 `map_fields()`，看它真正
@@ -662,9 +889,21 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
    说明这份产物是人工/上一手填的，不是脚本跑的，不能当作流程验证通过。
 4. **核对取值合法性**（1.0.14 新增）—— 取值必须落在 ERP 合法枚举内，否则导入会丢：
    ```bash
-   uv run ./scripts/erp_schema.py --check <输出的 ERP JSON 路径>
+   uv run ./scripts/erp_schema.py --check <输出的 ERP JSON 路径> --customer ngv
    ```
    等价于读任务目录里的 `<原文件名>.validation.json`。有 `error` 就别导入。
+   内部字段（`ID`/`CPMC_ZH`）会被自动跳过，不会报「字典里没有这个字段」。
+5. ★ **与权威 ERP 导出逐字段对照**（1.0.18 新增）—— 校准客户 / 改口径后必做：
+   ```bash
+   uv run ./scripts/compare_with_erp.py --customer ngv \
+       --samples-dir customer-files/samples/ngv \
+       --accepted customers/ngv.erp_diff.json \
+       --map CU26061701=Colouring
+   ```
+   把差异分成四类：**口径已定（白名单命中）** / `0 与空` / **⚠️ 需要核对** /
+   ERP 侧多出的键。**只有「需要核对」那一类要人看**；退出码 = 该类差异条数，
+   可以当门禁。白名单是 `customers/<id>.erp_diff.json`（每条都写明为什么该不同，
+   改口径时同步它，免得差异报告被噪音淹没）。
 
 > **实战案例（2026-05，v1 时期）：** processed 里某份 ERP JSON 的 `ZDFS="无线胶装"` /
 > `DWMC="本"` / `CPLX="新产品"`，而 `main.py` 对前三个字段**根本没有任何赋值语句** →
@@ -682,16 +921,21 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 
 ```
 customer-quote-request/
-├── SKILL.md
+├── SKILL.md                            # ★ 总纲（本文件）
 ├── README.md
+├── skills/                             # ★ 客户子技能（软链到 Hermes 技能目录，见下）
+│   ├── customer-quote-igl/SKILL.md     #   IGL 专属：平铺表范式 / 口径 / 基线 / 检查清单
+│   └── customer-quote-ngv/SKILL.md     #   NGV 专属：分区表单范式 / 口径 / 语料库 / 检查清单
 ├── customers/                          # ★ 客户档案（新增客户只动这里）
 │   ├── README.md                       # 新增客户的 3 步 SOP
 │   ├── _defaults.yaml                  # 公共默认值 + 兜底档案
 │   ├── _template.yaml                  # 新客户骨架
-│   ├── igl.yaml                        # IGL（已校准）
-│   └── ngv.yaml                        # NGV（draft，待校准）
+│   ├── igl.yaml                        # IGL（已校准）—— 平铺键值对范式
+│   ├── ngv.yaml                        # NGV（已校准）—— 分区表单范式（2.6）
+│   └── ngv.erp_diff.json               # ★ NGV 的「已定口径差异」白名单（compare_with_erp 用）
 ├── assets/
 │   ├── add_customer_quote_request.json # ERP 字段模板（59 键，权威来源）
+│   ├── internal_export_fields.yaml     # ★ 内部导出字段（ID / CPMC_ZH；追加在 59 键之后）
 │   ├── erp_form_schema.yaml            # ★ ERP 表单权威字典（合法枚举 / 别名 / 类型）
 │   ├── customer_erp_mapper.xlsx        # 客户字段↔ERP 字段对照（igl 的，客户相关）
 │   ├── product_categories.xlsx         # 产品类别源表（ERP 导出，88 行，含业务定义）
@@ -700,9 +944,11 @@ customer-quote-request/
 │   └── page_thickness.xlsx             # 纸张厚度表
 ├── scripts/
 │   ├── main.py                    # ★ 主入口（档案驱动，不含客户列名）
+│   ├── compare_with_erp.py        # ★ 与权威 ERP 导出逐字段分类对照（1.0.18）
 │   ├── customer_profile.py        # ★ 档案加载 / 校验 / 自动识别（可单独跑 CLI）
 │   ├── extract_fields.py          # ★ 抽取引擎（布局策略 + 数量档位 + 文本解析）
 │   ├── erp_schema.py              # ★ ERP 取值归一化 / 校验（步骤 5b，可单独跑 CLI）
+│   ├── internal_fields.py         # ★ 内部导出字段声明加载（ID / CPMC_ZH）
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
 │   ├── calibrate_customer.py      # ★ 新客户校准器
@@ -713,15 +959,17 @@ customer-quote-request/
 │   ├── uuid_utils.py              # UUID4
 │   ├── xlsx2csv.py                # Excel → CSV
 │   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
-├── tests/                         # 132 项测试（uv run pytest）
+├── tests/                         # 210 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
 │   ├── test_erp_schema.py         # ★ ERP 枚举归一化 / 校验（含历史单据缺陷回归 + 决策钉死）
 │   ├── test_cplb_tree.py          # ★ 产品类别树（与源表一致 / 导航树全覆盖 / 档案映射有效）
+│   ├── test_ngv_profile.py        # ★ NGV 分区表单（section_pairs 机制 + 真实样本回归）
 │   ├── test_ingest_email.py       # 邮件入口
 │   └── test_pipeline.py           # 端到端回归（真实样本 + 逐字段值断言）
 ├── customer-files/                # pending / processed / failed（产物，不进仓库）
+│   └── samples/ngv/               # ★ NGV 校准语料库（真实附件 + ERP 导出 + manifest，不进仓库）
 ├── logs/                          # 任务日志（不进仓库）
 ├── pyproject.toml                 # 依赖（pandas / openpyxl / python-docx / pymupdf / pyyaml）
 └── uv.lock
@@ -756,9 +1004,16 @@ uv run ./scripts/main.py "customer-files/pending/QUOTE.xlsx" --customer igl
 uv run ./scripts/extract_fields.py "customer-files/pending/QUOTE.xlsx" --customer igl
 uv run ./scripts/extract_fields.py "customer-files/pending/QUOTE.xlsx" --json
 
-# 档案管理
+# 档案管理 / 客户偏好表
 uv run ./scripts/customer_profile.py --list
 uv run ./scripts/customer_profile.py --validate
+uv run ./scripts/customer_profile.py --prefs            # 客户偏好表（全部客户）
+uv run ./scripts/customer_profile.py --prefs ngv        # 单看某客户
+
+# 与权威 ERP 导出逐字段对照（改口径后必跑）
+uv run ./scripts/compare_with_erp.py --customer ngv \
+    --samples-dir customer-files/samples/ngv --accepted customers/ngv.erp_diff.json \
+    --map CU26061701=Colouring
 uv run ./scripts/customer_profile.py --detect "customer-files/pending/QUOTE.xlsx"
 
 # 新客户校准
@@ -811,10 +1066,15 @@ uv run pytest tests/test_pipeline.py -v
 - **客户列名只能出现在档案里。** 在 `main.py` / `extract_fields.py` 里写死某客户表头 = 重构退化。
 - **改 `customers/_defaults.yaml` 等于改所有客户** —— 改完必须对每份档案各跑一遍回归。
 - **`status: draft` 的档案不能信**（NGV 就是）：能跑出 JSON，但字段值要人工核对。
-- **两份 SKILL.md 是软链接，只需维护一份**：
-  仓库源（**改这个**）`/home/claw/customer-quote-request/SKILL.md`
-  ← 技能加载路径 `~/.hermes/profiles/igl_agent/skills/customer-quote-request/SKILL.md`。
-  用 `ls -l` 确认链接未断；断了说明有人把它换回了实体文件。
+- **三个 SKILL.md 都是软链接，仓库是唯一源（只改仓库）**：
+  `SKILL.md`（总纲）、`skills/customer-quote-igl/SKILL.md`、
+  `skills/customer-quote-ngv/SKILL.md`
+  ← 技能加载路径 `~/.hermes/profiles/igl_agent/skills/<同名技能>/SKILL.md`。
+  一份仓库源 = 一份技能文档，不存在双份漂移。用 `ls -l` 确认链接未断；
+  断了说明有人把它换回了实体文件（自愈脚本见下）。
+- **客户专属内容不许写回总纲**：附件结构、口径、坑、基线值都属于对应子技能
+  （`customer-quote-igl` / `customer-quote-ngv`）。总纲只留「引擎能力 + 机制」，
+  否则总纲会重新长成第二个客户档案。新增子技能时照抄现成的两份结构。
 - ⚠️ **`hermes skills check/update/uninstall` 会穿透软链接覆盖仓库文件** ——
   该技能在 hub 里登记过（`~/.hermes/profiles/igl_agent/skills/.hub/lock.json`，
   来源 `Senthie/customer-quote-request`）。执行这些命令前先备份仓库副本，或摘掉 hub 登记项（见 TODO）。
@@ -843,10 +1103,37 @@ uv run pytest tests/test_pipeline.py -v
   - **决策：保留 `KHDH`，输出侧不得出现 `KHCPMC`。** 理由：ERP 表单里控件名是
     `txtKHCPMC`（label「客户单号」），而隐藏区还有个 `lblKHCPMC` = 「客户产品名称」——
     同一个 `KHCPMC` 在 ERP 内部被用在两处，是 ERP 侧的命名错误。
-  - **我们的态度是不跟着错**：`KHCPMC` 与模板第 44 键 `KHDDH`（香港单号）只差一个字母，
+  - **我们的态度是不跟着错**：`KHCPMC` 与模板第 43 键 `KHDDH`（香港单号）只差一个字母，
     沿用会误导填单的人。**ERP 导入接口由 ERP 侧修改适配**（已确认，不是待办）。
   - 溯源信息保留：字典里 `KHDH.form_name = txtKHCPMC`，方便回查 ERP 页面。
   - 有测试钉着：`test_决策_客户单号用_KHDH_且不得出现_KHCPMC`。
+- ★ **`KHDH`（第 33 键，客户单号）与 `KHDDH`（第 43 键，香港单号）必须分开 —— 2026-09-24 修正。**
+  两个键只差一个字母，此前一直混用：附件文件名里的「香港单号 CU26051601-01」
+  被写进了 `KHDH`，而 `KHDDH` **永远是空的**（模板里定义了却没人填 —— 这种「定义了
+  却从不赋值」的字段就是缺陷信号）。4 份权威 ERP 导出：`KHDDH`=单号、`KHDH` 全空。
+  档案 `email:` 段用 `target` 声明落哪个字段（细节见子技能 `customer-quote-ngv` 第 5 节）。
+- ★ **客户识别必须看正文（2026-09-24 修的真 bug）。** 只凭文件名打分极度危险：
+  NGV 那份文件名含 `Colour` → 命中 igl 的 `filename_keywords`，10 分就胜过正文
+  500 分的 NGV 特征（因为正文压根没被读），整单字段全错。现在表格类文件一律把正文
+  一起送进识别；得分 <30（只有文件名/主题这类弱证据）会 WARN。各家特征见其档案 `detect:` 与子技能。
+- ✅ **`0` 与「空」已由业务定案（2026-09-24）**：未使用的 `CPSL2`~`CPSL10` 与
+  `KHMBDJ`（客户目标价）**我们落 `0` 可接受**（导出存空不算差异）。逐字段对照时
+  `compare_with_erp.py` 会把这类差异单列成「0 与空」一类，不再当缺陷噪音。
+- ★ **「显式留空」必须写 `""`，光在偏好表里写「留空」没用。** 模板自带默认值的字段
+  （`PXH`=`1`、`YYS`=`1`、`BZ`=`美元`…）如果只在 `preferences` 里标 empty 而
+  `erp_fixed` 还留着值，产物里就会悄悄带着默认值 —— 这种漂移由 `validate()` 与
+  `tests/test_customer_profile.py::test_偏好表_拦住文档与落库值不一致` 拦下。
+  正确写法：`erp_fixed: { PXH: "" }`（`main.py` 会真的清掉并对字段记账）。
+- ★ **多材质混用的字段宁可留空，也不许「取第一个命中」。** `rules.scan` 的条目加
+  `unique: true`：全文扫出多个不同取值就不落值（NGV 的 `FSCMC` 就是这种 ——
+  盒底 FSC Recycled / 盒盖 FSC Mix / 竹底座 FSC 100%，ERP 里是空的）。
+  留空的原因会记进 `.extracted.json` 的 `scan_notes` 并在日志里打 WARN，不是静默。
+- ★ **`YYS` 有三种状态，别用「空」一锅端**：有语言数 → 数字；单语言 → **留空**
+  （`empty_when_single`）；提取不到 → **`0`**（`when_missing`，代表「邮件可能后补、
+  待业务核对」）。用 0 冒充真实值、或用固定值 1 兜底，都会让业务看不出该核哪一单。
+- ⚠️ **别把 ERP 导出的「多出的键」当字段用**：CU26072302 那份导出有 60 个键
+  （多了个「产品备注」—— 业务 2026-09-24：先不需要），4 份都带 ERP 侧的 `KHCPMC` 键。
+  差异核对时先按模板的 59 键对齐，再看多出来的键是什么。
 - **`Drop_SJFX` / `ZDFS` / `DWMC` 的合法取值已由 ERP 真表单确认**（1.0.14）：
   `短书脊`/`长书脊`/`四边裁`、`胶装/PAD书` 等 10 项、单位为 `本`。
   **`无线胶装` 不是合法值** —— 历史单据就填错了（正确是 `胶装/PAD书`）。
@@ -884,6 +1171,225 @@ uv run pytest tests/test_pipeline.py -v
 | 1.0.13 | 2026-09-24 | **多客户架构重构**（见下） |
 | **1.0.14** | **2026-09-23** | **ERP 表单权威字典 + 取值校验**（见下） |
 | **1.0.15** | **2026-09-23** | **产品类别树重设计 + 四条业务决策落地**（见下） |
+| **1.0.16** | **2026-09-23** | **NGV 客户校准：分区表单范式 + `section_pairs` 策略**（见下） |
+| **1.0.17** | **2026-09-24** | **NGV 口径落地（第二批权威导出）+ 修客户识别真 bug + `KHDH`/`KHDDH` 拆分**（见下） |
+| **1.0.18** | **2026-09-24** | **NGV 第二批 10 条口径全部拍板落地 + 客户偏好表 + 「不唯一就留空」+ 对照工具**（见下） |
+| **1.0.19** | **2026-09-24** | **技能拆分：总纲 + 两个客户子技能（`customer-quote-igl` / `customer-quote-ngv`）**（见下） |
+| **1.0.20** | **2026-09-24** | **实单暴露的三处缺陷修复 + 「宁可留空不许猜」加固**（见下） |
+| **1.0.21** | **2026-09-24** | **第三批业务口径：`CPMC` 业务员=KM / `CPSX`=无（口径例外机制）/ `KHDDH` 默认空 / 报价截止过期提醒**（见下） |
+| **1.0.22** | **2026-09-24** | **内部导出字段 `ID` / `CPMC_ZH`；`CPMC` 改存英文表达**（见下） |
+| **1.0.23** | **2026-09-24** | **内部字段 `Reminder` 把提醒固化进产物；「无」落 JSON `null`（`enum_exceptions` 随之删除）**（见下） |
+
+### 1.0.23 详细变更 —— 提醒固化 + 「无」落 `null`
+
+业务 2026-09-24（第三批）：
+
+> ①「（截止日期过期提醒）加一个字段做提醒」
+> ②「igl 的先不做，后续补充真实的 ERP 信息再做处理」
+> ③「CPSX 或者其他值的『无』使用 json 里的 null 填充」
+
+**① 新增内部字段 `Reminder`（提醒）**
+
+1.0.21 的过期提醒只在 `validation.json` 的 `reminders` + stdout 末尾 —— 产物里没有。
+现在固化成一个字段：
+
+| 情况 | `Reminder` |
+|------|-----------|
+| 有提醒（如截止日期已过期） | 文本：`报价截止日期 2026-06-26 已过期 90 天（基准日 2026-09-24） —— 请与业务确认这单是否还要报价` |
+| 没有待办 | `""`（空字符串） |
+
+结构化版本仍在 `validation.json` 的 `reminders`（`kind` / `deadline` / `days_over`），stdout 醒目块也保留。
+三条通道（字段 / 报告 / 终端）同一个来源 `step6` 开头算好的 `reminders`，不会互相漂。
+
+**② 「无」→ JSON `null`（`rules.null_values`）**
+
+- 口径写在公共默认层：`rules.null_values: ["无"]` → **整格恰好等于**「无」的字段，产物里写 `null`。
+- **为什么这是最干净的解法**：ERP 自己的导出里**空值就是 `null`**（权威导出的 `CPLD`/`KHDH`/`CPSX`
+  都是 `None`）。所以「无」落 `null` 既符合业务语言，又天然属**空值**、不触发下拉枚举校验。
+- **连带简化**：1.0.21 为 `CPSX=无` 加的 `rules.enum_exceptions` 声明**随之删除** ——
+  现在 `CPSX` 是 `null`，校验直接过（实测 62 字段 **0 error / 0 warn**）。
+  机制本身保留（将来若真要用枚举外的**字符串**值再用）。
+- 只是**整格匹配**：长文本里的「无」不受影响（`客户无需提供刀模…` 原样保留）；
+  `CPMS` 仍固定留空。
+- 反例也钉住了：不是整格的 `无特殊要求` 不转换。
+
+**③ `igl` 的 `CPMC` 英文表达：暂缓**
+
+业务拍板「先不做，后续补充真实的 ERP 信息再做处理」→ igl 保持历史写法、`CPMC_ZH` 为空，
+TODO 里的 P0 项措辞改成「待真实 ERP 信息」。（NGV 已迁移，不受影响。）
+
+**实测**（PR-00091345 重出）：62 键 = 59 ERP + `ID`/`CPMC_ZH`/`Reminder`；
+`CPSX = null`；`Reminder` 带「已过期 90 天」；`--check --customer ngv` → **62 字段全过（0 error / 0 warn）**；
+`compare_with_erp` 白名单外差异 0 条。测试 **210 项全绿**。
+
+### 1.0.22 详细变更 —— 内部导出字段 + `CPMC` 中英分离
+
+业务 2026-09-24（第二批）：
+
+> 「我们的导出现在缺少一份内部导出字段 `ID`，该字段标注我们的当前执行的任务，方便日志维护；
+> 将 `CPMC` 修改为存英文表达，使用 `CPMC_ZH` 来标注中文表达。」
+
+**① 内部导出字段机制**（新文件 `assets/internal_export_fields.yaml` + `scripts/internal_fields.py`）
+
+| 决定 | 理由 |
+|------|------|
+| 内部字段**追加在 59 个 ERP 键之后** | ERP 自己也是这么干的 —— 权威导出在 `Remark3` 之后多挂 `产品备注`。59 键的位置一个不动，下游按位置读的解析器不受影响 |
+| 键序断言升级为「**前 59 键 = 模板** + **其后 = 声明的内部字段（同序）**」 | 集合对、顺序错照样红。`map_fields` 多产出任何未声明的键也会当场抛错 |
+| 内部字段不参与 ERP 字典校验 | 否则每份产物都会报「字典里没有这个字段」（`ID`/`CPMC_ZH` 字典里确实没有 —— 已核） |
+| 新增 `--strip-internal` | 产出**纯净 59 键**，给「ERP 导入端不收未知字段」兜底（默认是追加） |
+
+新增的两个字段：
+
+| 键 | 值 | 用途 |
+|----|-----|------|
+| `ID` | 本次任务号（`uuid_utils.py` 生成） | 业务原话的「标注我们的当前执行的任务」——与**产物目录名**、**日志里的「任务ID」**、`validation.json` 的 `task_id` 是同一个 ID，产物 ↔ 日志一步对回去 |
+| `CPMC_ZH` | 产品名称的中文表达 | `CPMC` 只放英文，中文表达归这里 |
+
+**② `CPMC` 中英分离**（档案 `rules.cpmc.template` + `rules.cpmc.zh_template`）
+
+```
+CPMC     = {salesperson}/Aldi {product_name}({fsc})                        ← 纯英文
+CPMC_ZH  = {salesperson}/Aldi {cn_name} {cplb_name}/{product_name}({fsc})   ← 中文表达
+```
+
+- 中文表达 = 1.0.21 之前的 `CPMC` 写法（权威导出里的历史格式），**原样迁移**，只是换了存放字段。
+- 中文品名仍是**每单**由 agent 补：脚本在 `CPMC_ZH` 里填可见占位符 `【中文品名待定】` 并在日志点名。
+- **硬不变量**：档案声明了 `zh_template` 的客户，`CPMC` 里出现中文/全角字符 → 当场 WARN
+  （写错档案不必等 ERP 报错）。
+- ⚠️ **`igl` 还没迁移**：它的 `CPMC` 历史口径是 `编号;名称-系列`（含中文类别名），
+  英文版该怎么写**要业务拍板** → 已记入第 12 节 P0，不猜（该客户 `CPMC_ZH` 暂为空）。
+
+**实测**（PR-00091345 重出）：61 键 = 59 ERP + `ID`/`CPMC_ZH`；`ID=d9ae2b3a…`（= 任务目录名）、
+`CPMC=KM/Aldi Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)`、
+`CPMC_ZH=KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)`；
+校验 **0 error / 1 warn**（CPSX=无 的口径例外）；`--strip-internal` 另跑一次 → 正好 59 键。
+测试 **208 项全绿**。
+
+### 1.0.21 详细变更 —— 第三批口径（业务 2026-09-24 逐条拍板）
+
+业务一次性给了四条，全部落地（前三条是**档案开关**，第四条是**引擎级**能力）：
+
+| 业务原话 | 落地 |
+|----------|------|
+| 「业务员使用 **KM**」 | Ngv `rules.cpmc.salesperson: KM` + `main.py` 新增 `{salesperson}` 占位符。NGV 的 `CPMC` 结构确认为 `<业务员>/Aldi <中文品名>[ <中文类别>]/<英文原文>(<FSC>)`（4 份权威导出逐字比对）。**中文品名是「每单」的**（不是客户常量）→ `{cn_name}` 留空时填可见占位符 `【中文品名待定】`，并由 needs_agent 检查在日志里点名，agent 交付前直接改产物 |
+| 「`KHDH`、`KHDDH` 香港单号默认是空」 | `rules.required_empty` 补 `KHDDH` —— 附件文件名带「香港单号 CU…」时 `rules.scan` 照常扫出来落库，扫不到就留空，**不算缺陷**（PR-00091345 只有 PR 号 → KHDDH 空是预期结果） |
+| 「`CPSX` 如果没有获取到就显示**无**」 | 新增档案开关 `rules.cpsx.when_missing`（公共默认 `""` = 留空 + WARN；NGV 设 `无`）。**配套**：`无` 不在 ERP 下拉枚举里，若按字典硬校验会**每一单都报 1 个 error**、把「0 error」这道闸门变成噪声 → 新增 `rules.enum_exceptions`（见下行） |
+| 「超过了报价截止日期，你记得提醒」 | 新增引擎能力 `check_offer_deadline()` + `validation.json` 的 **`reminders`** 段 + 跑完 stdout 末尾的醒目提醒块。判据由**基准日期**驱动：`main.py --today YYYY-MM-DD`（默认系统当天）—— 否则测试自身会随「今天几号」漂移 |
+
+**顺带修掉一个静默丢值的真 bug**（这是本轮最值钱的一条）：
+
+`offer deadline / Angebotsfrist` 那一行**是有值的**（`2026-06-26`），1.0.20 我却把它当成
+「纯标题」塞进了 `ignored_labels` —— 结果值被静默丢掉（`extracted.json` 里根本没有
+`offer_deadline`），业务要的「过期提醒」也就无从谈起。本机 5/5 份样本实测都有值：
+`CU26051601-01=2026-05-26` / `CU26061701=2026-06-17` / `CU26072301=2026-07-27` /
+`CU26072302=2026-07-27` / `PR-00091345=2026-06-26`。已改成 `sections.enquiry` 里的**有值标签**，
+并加了两条回归（逐单断言日期 + 断言它**不在** `ignored_labels` 里）。
+
+**新增机制：档案声明的「口径例外」`rules.enum_exceptions`**
+
+业务拍板的取值有时就是不在 ERP 下拉枚举里（`CPSX=无`）。三种做法的取舍：
+
+| 做法 | 问题 |
+|------|------|
+| 按字典硬报 error | **每一单**都红一次 → 「0 error」闸门失效，真缺陷被淹没 |
+| 静默放过 | 拿业务口径当没看见，导入端是否接受「无」这件事永远没人管 |
+| **档案显式声明 + 降级 WARN + 带上原因**（采纳） | `{field, value, reason}` 写在档案里，`validate_result(allow_values=…)` → WARN 并打印业务原因；**豁免只认声明过的那个值**（乱填仍报 error），不传客户档案按字典硬校验时**照样报 error**（可见性不被吞掉） |
+
+`main.py step5b` 与 `erp_schema.py --check --customer <id>` 走**同一份**豁免，CLI 与管道不会打架。
+
+**实测**（PR-00091345 重出）：59 键顺序断言通过、校验 **0 error / 1 warn**（那 1 warn 就是
+CPSX=无 的口径例外）、`CPMC=KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/Basteln&Gestalten
+Diamantsticker Nageldesign(FSC Mix)`、`CPSX=无`、`reminders` 里带「已过期 90 天」。
+测试 **204 项全绿**。
+
+### 1.0.20 详细变更 —— PR-00091345 实单暴露的缺陷
+
+用一份真实询价单（NGV `210x280 Basteln&Gestalten Diamantsticker Nageldesign`，
+PR-00091345）试跑，抓出三处缺陷 —— 都是「**静默算错**」这一类最危险的：
+
+| 项 | 缺陷 | 修复 |
+|----|------|------|
+| ★ 数量解析**静默算错** | `3 x 7000 cps. = 21.000 cps` → 落成 **3**（真值 21000）。旧实现只认整串 `^N x M$`，这种带「= 总数」的写法匹配失败后退回「取第一个数字」 | `parse_single_quantity()` 重写为三段：① `=` 后的**显式总数** → ② `N x M` 乘法 → ③ **仅当整串只有一个数字**才取它。①② 不一致 → WARN 并以总数为准；③ 不成立时**宁可留 0 报 WARN，绝不取第一个数字**。`_de_number()` 同时支持英文千分位（`17,500` → 17500） |
+| ★ `extras_found` 被**纯标签**污染 | NGV 的栏目标题（`TPS\nFormat`、`back\nRücken`…）登记在 `extras:` 里，于是它们同时出现在「CPMS 素材」清单（看起来像漏了信息）并被校准报告当作附加信息掩盖 | 新增档案段落 **`ignored_labels:`** —— 纯标题（不含值）：既不算「认不出的标签」，也不进 `extras_found`。判定「块内每一行都是标题」才算，避免误杀「标签 + 同行值」。NGV 的 35 条标签从 `extras:` 迁出，`extras: []`（该表单没有附加信息栏位） |
+| ★ 装订新写法缺失 | `Wire-O Binding` 命中不了 `binding.map` → `ZDFS` 空（warn） | 补 `wire-o / wire o / wiro / spiral / coil` → **`线圈书`**（ERP 合法值；注意不是 CPLB 树里的「蛇圈书」） |
+| 顺手加固 | `erp_schema.py --check <json>` 不知道客户档案的必填豁免，NGV 的输出每次都被误报 `KHDH` error | `--check` 新增 `--customer <id>`，按 `rules.required_empty` 豁免（`--check x.json --customer ngv` → 59 字段全过） |
+| 顺手加固 | 脚本跑完的「待 agent 亲自完成」提示只列 `extras_found`；分区表单客户（`extras` 为空）看不到「原文还有长段规格要翻译」的信号 | 该提示新增**长文本规范键**清单（≥80 字符，如 `specials`），明确指向 `extracted.json` 的 `values` |
+| 实测结论 | 该单：59 键顺序断言通过、校验 **0 error / 0 warn**；`CPLB=26.01;普通蛇圈书`、`ZDFS=线圈书`、`CPSL1=21000`、`Drop_SJFX=长书脊`、`FSCMC=FSC Mix`；`CPMS`/`CPMC` 由 agent 手写 | 学习点已回写子技能 `customer-quote-ngv` 第 3.1 节（第 5 单实测）与第 9 节坑 |
+| 测试 | 新增 5 项（数量三种写法 + 不一致告警 + 纯标签语义 + 实单 extras 回归）→ 累计 **194 项全绿** |
+
+### 1.0.19 详细变更 —— 技能按客户拆分（总纲 + 两个子技能）
+
+**动机**（业务 2026-09-24）：igl 与 ngv 的报价提取放在一个技能里不好维护 ——
+两份 SKILL.md 混着总纲、igl 细节、NGV 细节，改一家要在 1300 行里翻。
+
+**做法**：**引擎零重复**，只拆「客户专属知识」这一层。
+
+| 技能 | 内容 | 仓库源 |
+|------|------|--------|
+| `customer-quote-request`（总纲） | 架构 / 抽取引擎（两种范式）/ 邮件入口 / 字段总览 / **`CPMS` 规则** / 校验方法 / 新增客户 SOP / 客户偏好表机制 / 陷阱 / 版本历史 | `SKILL.md` |
+| `customer-quote-igl`（子技能） | IGL 附件形态（平铺 + 横向键值对）· 识别特征 · 偏好表 6 条 · 字段来源 · 与 `tests/test_pipeline.py` 一致的**逐字段基线** · 坑 · 交付检查清单 | `skills/customer-quote-igl/SKILL.md` |
+| `customer-quote-ngv`（子技能） | NGV 附件形态（`A1:K32` 分区表单结构图 + 五个坑）· 识别与文件名撞车史 · 4 单确认值 · 两批 15 条口径 · 单号分流 · `CPMC`/`Remark4` 人工环节 · 语料库与对照命令 · 交付检查清单 | `skills/customer-quote-ngv/SKILL.md` |
+
+**同时**：
+
+- 总纲把 NGV 专属段（原 2.6 / 2.6.1 / 2.6.2 / 2.6.3 共 ~5.9KB）移出，改成 2.6「客户专属知识在
+  子技能里」的**路由表** + 引擎级说明；处理文件时的顺序写成「读总纲 → 看识别结果 →
+  加载对应子技能 → 按它的口径/检查清单干活」。
+- 三个技能都是**软链接**指向仓库（仓库是唯一源）；体检 cron 同步覆盖三个。
+- 新增 `tests/test_skill_docs.py`：档案 ↔ 子技能一一对应、frontmatter 合法、
+  回指总纲、总纲路由表不漏客户 —— 以后加客户忘了写子技能会直接红。
+- 铁律新增一条：**客户专属内容不许写回总纲**（否则总纲会重新长成第二个客户档案）。
+
+### 1.0.18 详细变更 —— 第二批口径拍板落地
+
+业务把 1.0.17 末尾挂着的 **10 条 P0 待拍板项逐条给定**，全部落地为**档案开关**（不写死代码）：
+
+| 项 | 变更 |
+|----|------|
+| ★ 客户偏好表 `preferences:` | 新档案段落 + `customer_profile.py --prefs`（CLI）：把「这个客户哪些字段固定填什么、哪些就该空着」连同**依据**写在一处（业务原话：**喜爱表**，方便快速填写用户习惯）。口径只有两种：写值 → 落库；写空 → **显式留空**。与 `erp_fixed` 的一致性由 `validate()` + 4 项测试拦着（防「文档说留空、代码里还填着 1」） |
+| ★ 显式留空机制 | `main.py` 的 `erp_fixed` 循环新增：值为 `""` 时**真的把模板默认值清掉**并对字段记账（`PXH` 模板默认 `1`，不显式清就会悄悄留在产物里）。日志明确打「显式留空」「空值即正确」 |
+| ★ `rules.scan` 新增 `unique: true` | **不唯一就留空**：全文扫描该正则的所有命中，去重后只剩一个才落值；多个不同取值时不落值并把原因记进 `.extracted.json` 的 `scan_notes`（`main.py` 在 FSCMC 段把它打出来，不静默）。`rules.scan` 从 `re.search` 改成 `re.findall`（取第一个命中，语义不变） |
+| ★ `rules.versions.when_missing` | 提取不到语言数时落 **0**（NGV）：邮件可能后补而附件未更新，0 是「待业务核对」信号。与「单语言留空」（`empty_when_single`）严格区分 —— 三态：有语言数 / 单语言空 / 提取不到落 0 |
+| 逐条口径落地 | `CPLB` 输出「编号;名称」（业务定）；`BZ` 我们填「美元」、`CPDL` 我们填「书版」；`PXH` 显式留空；`SFYPJ`/`Remark1` 从 `erp_fixed` **删掉写死的「否」**（CU26072301 有配件，写死是错的）；`Remark3` 留空（第一版报价无修改记录）；`FSCMC` 不唯一留空；`YSLX` 默认留空 + 走偏好表；`CPSL2~10`/`KHMBDJ` 落 0 已确认可接受 |
+| `ZBLX` 枚举确认 | 业务给出 `txtZBLX` 完整 HTML —— 与字典转录的 6 项**完全一致** → `B3B普通芯`（4 份导出里 3 份用它）确实不在枚举内，属 ERP 侧数据。`observed_values` 备注更新，测试加断言钉住 6 项枚举 |
+| ★ 新增对照工具 `scripts/compare_with_erp.py` | 拿附件跑一遍管道与权威 ERP 导出**逐字段分类对照**（口径已定 / 0 与空 / **需要核对** / ERP 侧多出的键），退出码 = 白名单外差异数（可当门禁）。口径白名单落在 `customers/<id>.erp_diff.json`（NGV 已有）。之前是临时脚本，现已入仓 —— 校准新客户直接用它 |
+| 测试 | 新增 8 项（唯一性扫描 3 态 / YYS 三态 / PXH 显式留空 / 配件与修改记录留空 / 偏好表一致性 4 项 / ZBLX 枚举）→ 累计 **179 项全绿** |
+| 实测 | 4 份真实附件全部 0 error / 0 warn；`compare_with_erp.py` 报**白名单外差异 0 条** —— 业务拍板的口径全部生效；igl 回归无变化 |
+| 教训固化 | 「**每个客户的附件类型不一样、格式也不一样**」（业务 2026-09-24 强调）→ 已写进第 0 节铁律与新增客户 SOP：判形态（平铺 / 分区表）→ 校准 → 填档案，绝不套用上一个客户的结构 |
+
+### 1.0.17 详细变更 —— NGV 口径落地与识别 bug
+
+业务给了修正后的 4 份 ERP 导出（每单对应自己那份）与 4 条口径，逐条落地：
+
+| 项 | 变更 |
+|----|------|
+| ★ 修客户识别**真 bug** | 附表文件名含 `Colour` → 命中 igl 的 `filename_keywords`（10 分）就胜出，正文里 NGV 的 500 分特征**从未被读过**，整单字段全错（`CPLB`=32.00;其他、`erp_fixed` 全丢、日期按公共默认算）。现在表格类文件**一律把正文一起送进识别**（`customer_profile.collect_probe_texts()`），文件名只当加分项；得分 <30 打 WARN（弱证据）。回归：`test_识别必须看正文_文件名撞车也不许判错` |
+| ★ `KHDH` / `KHDDH` **拆开** | 两键只差一个字母，此前把附件的「香港单号 CU…」写进 `KHDH`，而 `KHDDH`（第 43 键，标签就是「香港单号」）**永远是空的**。4 份导出：`KHDDH`=单号、`KHDH` 全空。档案 `email:` 段改按 **`target` 声明多组规则**（`profile.number_rules()`），`ingest_email.py` 新增 `extract_numbers()` 与 sidecar 的 `numbers`/`number_sources` |
+| ★ 套装尺寸 0/0/0 | 新档案开关 `rules.size.zero_tops` —— 套装（盒子）录系统尺寸一律 0/0/0，附件里的盒内单件 TPS 不采用（业务决定） |
+| ★ 日期不落库 | 新档案开关 `dates.<字段>.mode: empty` —— NGV 的 `JHRQ`/`WCRQ` 都留空（4 份导出全空，即使附件给了 ETA） |
+| ★ 单语言不落库 | 新档案开关 `versions.empty_when_single: true` —— 附件写 `1 language` 时 `YYS` 留空而不是 1（两份单语言导出的 YYS 都是空的） |
+| ★ `ZBLX` 默认留空 | 从 `ngv.yaml` 的 `erp_fixed` 删掉「B3B普通芯」—— 导出里 3 份有 1 份空，属 ERP/业务侧手工填，不由我们产出 |
+| ★ 必填豁免 | 新档案开关 `rules.required_empty` —— `erp_schema.validate_result(result, allow_empty=...)`。NGV 豁免 `KHDH`（报价阶段取不到）与 `Drop_SJFX`（套装无书脊方向），否则每单报假 error 淹没真问题 |
+| 修正则误捕 | 客户单号正则 `\b(?:po|order)\s*(?:no)?\s*([A-Z0-9]{5,})` 把 `Postkarten` 的 `Po` 抓成 `stkarten` → 必须出现 `no/nr/number/#` 编号词。回归：`test_客户单号正则不许被单词前缀误捕` |
+| 语料库换血 | `customer-files/samples/ngv/*.erp.json` 换成修正版导出；被替换的旧文件归档到 `_superseded_20260924/`；`manifest.json` 重写成「已知差异分类表」（设计如此 / 口径待定 / 附件取不到需邮件 / ERP 导出侧） |
+| 测试 | 新增 9 项（识别回归、单号分流、正则误捕、套装尺寸、日期与 `ZBLX` 留空、扫描键改名、档案规则声明）→ 累计 **171 项全绿** |
+| 逐字段核对结果 | 4 份附件的 59 键顺序断言通过、校验 **0 error / 0 warn**。剩余差异全部归入四类（见 `manifest.json`）：设计如此（`CPMS`/`CPMC`/ERP 自动带出/`ZBLX`）、口径待定（`CPLB` 格式、`BZ`/`PXH`/`CPDL`、0 vs 空）、附件取不到需邮件（`YYS`=3、`CPSL1`=193820、`YSLX`、`Remark3`、`SFYPJ`、`FSCMC`、`KHDDH`）、ERP 导出侧（`KHCPMC` 键、多出的「产品备注」） |
+
+### 1.0.16 详细变更 —— NGV 校准（分区表单范式）
+
+| 项 | 变更 |
+|----|------|
+| ★ 新布局策略 `section_pairs` | 应对「A 列分区 + B 列标签 + C 列起值」的表单。**按行位置对齐**档案 `sections:` 声明的条目；`section_value` 取 B 列自身（合并格即值），`label` 取右侧（`value_mode: first`/`run`）。声明的 `label` 兼作**断言**，结构变了就打 WARN 并记 `unmatched_labels`，宁可空着不猜 |
+| ★ 新档案段落 `sections:` | `customers/<id>.yaml` 里按表单行序声明 `{ section_value }` / `{ label, key }`；分区名与标签都支持双语别名。`customer_profile.py` 新增 `match_section()` + 结构校验（未知规范键、缺 label、entries 为空都报错） |
+| ★ 新档案段落 `rules.scan` | 全表正则扫描：值不挂任何标签、只在某处出现一次时用。NGV 用它取 `our_ref`(PR-xxxxx) / `fsc` / `text_thickness`(mm bookblock) / `binding_side`(mm side) / `khdh`(**文件名**里的「香港单号 CU26072301」)。扫描 haystack 含单格 + 整行拼接 + 文件名 |
+| ★ NGV 档案转正 | `customers/ngv.yaml` 从占位 draft 改成 **calibrated**：10 个分区、43 个规范键、80 条别名；`quantity.mode: single`、`versions` 两个正则、`thickness.enabled: false`、`spine.mode: binding_side`、`unit`、`cpmc` 模板、`binding.match_keys`、`cplb.map`（24.03 / 23.06 / 29.04）、`erp_fixed`（含 378 字符的客户常量 `Remark4`，逐字照抄 ERP 原文，含其错别字） |
+| ★ 映射层新增能力（均档案驱动，其他客户不受影响） | `parse_single_quantity()`（德式千分位 `4 x 17.500` → 70000）；`TZS`/`YYS` 从 `versions` 提取；`CPMC` 改模板拼装（`rules.cpmc.template` + `needs_agent`）；`DWMC` 按 `CPLB` 顶层定「本/套」（`rules.unit`）；`FSCMC` 由 `rules.scan` 的 `fsc` 落地；`Drop_SJFX` 支持 `binding_side` 模式 + `skip_tops`；`rules.thickness.enabled` 可关掉厚度推算 |
+| ★ 修 3 个真 bug | ① `CustomerData.get()` 用 `values.get(key, default)` 导致 **`scanned` 永远读不到**（KHDH/FSCMC 明明扫到却是空串）；② NGV 附件没有单号时**拿 `our_ref`(PR-xxxxx) 冒充客户单号**（把 CU26061701 填成 PR-00081126）→ 档案 `attachment_keys` 只留 `khdh`；③ 档案 YAML **重复键静默丢失** → 新增 `_UniqueKeyLoader`，重复键直接报错 |
+| ★ 字典两条降级规则 | 「实测值」（在真实导出里出现但不在表单静态枚举里，如 `ZBLX=B3B普通芯`）与「纯名称 CPLB」（真实导出存 `其它套装`，我们输出 `29.04;其它套装`）从 error 降为 **WARN** —— 既不误报成缺陷，也让待确认项一直可见；明确非法的值仍是 error |
+| 回归语料库 | `customer-files/samples/ngv/`（4 份真实附件 + ERP 导出 + `manifest.json` 说明对应关系；客户原文，已被 `.gitignore` 排除） |
+| 测试 | 新增 `tests/test_ngv_profile.py`（合成用例锁 `section_pairs` 机制 + 数量解析 + 扫描 + 真实样本回归）；累计 **165 项全绿**（1.0.17 增至 171） |
+| 实测 | 4 份真实附件全部跑通：59 键顺序断言通过、校验 0 error；`CPLB` 24.03 / 29.04 / 29.04 / 23.06；`CPSL1` 0 / 512580 / 70000 / 70000；`Drop_SJFX` 长书脊 / 空 / 空 / 长书脊；`DWMC` 本 / 套 / 套 / 本 —— 逐条与 ERP 导出核对。**另发现上游 2 份 ERP 导出装错**，详见第 12 节 P0 |
+| 文档 | 新增 2.6 节（分区表单范式：结构图 + 五个坑 + 新增同类客户的做法）；4.2 表格补齐 8 个字段的新来源；4.4 改写成两种数量口径；第 12 节新增「NGV 校准新发现的待确认项」11 条 |
 
 ### 1.0.15 详细变更 —— 产品类别树重设计 + 四条决策
 
@@ -970,6 +1476,15 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
 
 - [x] ~~`KHDH` vs `KHCPMC` 试导一次~~ —— **已由业务拍板（2026-09-23）：保留 `KHDH`，
       不输出 `KHCPMC`；ERP 导入接口由 ERP 侧修改适配**（见第 10 节）。P0 关闭。
+- [x] ~~`CPSX = 无` 能否被 ERP 导入端接受~~ —— **已解决（2026-09-24，1.0.23）**：
+      「无」落 **JSON `null`**（= 空值），枚举校验与口径例外都不再需要。P0 关闭。
+- [ ] **内部字段 ERP 导入端收不收**（`ID` / `CPMC_ZH` / `Reminder`）—— 现在默认追加在 59 键之后。
+      若导入端报「未知字段」，用 `--strip-internal` 出纯净 59 键（已实现，一条命令的事）。
+- [ ] **`igl` 的 `CPMC` 英文表达**（2026-09-24 业务拍板：**先不做**）—— 原话「igl 的先不做，
+      后续补充真实的 ERP 信息再做处理」。所以 igl **保持历史写法**
+      （`23.01;无线胶装书-Puzzle & Colour Disney`，含中文类别名）、`CPMC_ZH` 为空，
+      等拿到真实 ERP 信息后再决定英文表达怎么拼（改 `customers/igl.yaml` 的
+      `rules.cpmc.template` / `zh_template` 两行即可）。**不要凭猜迁移。**
 
 ### P1 · 待业务确认（阻塞实现）
 
@@ -982,7 +1497,9 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
       `FSCMC` 候选值清单 —— **已从 ERP 真表单拿到**（`assets/erp_form_schema.yaml`）；
       仍未拿到：`SHDQ`（联动下拉，静态 HTML 为空）、`CPDL` 全量（当前只 `书版`）
 - [ ] `CPSL` 档位**顺序口径**：现为「客户表列顺序 → `CPSL1..n`」；
-      若实际是「按数量区间只填一档」，规则要重写
+      若实际是「按数量区间只填一档」，规则要重写。**NGV 侧已解决**（它的数量是
+      单一总数 → `quantity.mode: single` 落 `CPSL1`，见 4.4）；**待确认的只剩 igl** ——
+      它对「列顺序」还是「选中一档」的口径未拍板
 - [x] `CPSX` 是否承接年龄段/安全检查 —— **已确认（2026-09-23）：要落库**，
       规则见 4.7.2（年龄 ≥3/<3 岁 × 有无安全检查 → 四个中文枚举），igl/ngv 已配好
 - [x] 哪些字段要用**数字代码**而不是 label 导入 —— **已确认（2026-09-23）：统一用中文
@@ -994,34 +1511,62 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
       agent 判断）；若业务希望 ERP 下拉本身也按新结构显示，需要 ERP 侧配合（编号不变即可无缝切换）
 - [ ] **`CPLB` 顶层 vs 子类**：ERP 允许只选顶层（`23.00;胶装书`），但生产/计价需要子类；
       现在只给 WARN。若业务要求「必须选到子类」，把它升级为 error
+- [ ] **`SHDQ` 送货地区的枚举**（仍是空的联动下拉，静态 HTML 取不到）—— 业务 2026-09-24 只给了 `ZBLX`
+- [ ] **`PXH` 是否对 igl 也留空**（业务 2026-09-24 对 NGV 定的是留空；igl 现仍填 1）——
+      一行的事，等业务点头（见 `customers/igl.yaml` 的偏好表备注）
 
 ### P1 · 待实现
 
-- [ ] **NGV 档案校准** —— 拿到第一份 NGV 报价文件后按 `customers/README.md` 走 3 步，
-      把 `customers/ngv.yaml` 从 `draft` 改成 `calibrated`
-      （`fields` 别名表、`cplb.map`、`cpsx`、`binding` 都还是占位值）
+- [x] **NGV 档案校准** —— **已完成（1.0.16）**：4 份真实附件（CU26051601-01 /
+      CU26061701 / CU26072301 / CU26072302）+ 随包 ERP 导出，
+      `status: calibrated`；新增 `section_pairs` 策略与 `sections:` 分区表（细节 1.0.19 起移入子技能 `customer-quote-ngv`），
+      回归语料库 `customer-files/samples/ngv/`（客户原文，gitignored）
 - [ ] **IMAP 直连收信** —— 需要先确认公司收信方式（IMAP 服务器 / 转发到本地 / 邮箱 API），
-      再加「取信 → 落 `.eml` → 调 `ingest_email.py`」的适配层
+      再加「取信 → 落 `.eml` → 调 `ingest_email.py`」的适配层。
+      ⚠️ NGV 实测暴露出**非做不可**的理由：CU26061701 的客户单号在附件里完全不存在
+      （文件名与表内都没有），只能从邮件标题/正文取
 - [ ] `CPLX` 产品类型（新产品 / 返单产品 / …）需对接历史订单系统
-- [ ] `ECPMC` 产品英文名（可直接取 `series_name`）
-- [ ] `SFYPJ` / `Remark1` 配件判断与描述（注意 `SFYPJ` 是 string `是`/`否`）
-- [ ] `BZFS` / `TBLX` / `SHFS` 包装、台板、送货方式
-- [ ] `FSCMC` / `OLD_KHDDH` / `YSLX` / `SHDQ` / `KHDQ`
-- [ ] `ZXLB` / `ZBLX` / `ZXFS` / `DKMC` / `BGMS` / `Remark4` / `Remark3`
+- [ ] `ECPMC` 产品英文名（可直接取 `series_name`；NGV 可取 `product_name`）
+- [ ] **`YSLX` 运输类型** —— 业务 2026-09-24：**默认留空**，长期客户的实际口径写进档案
+      「客户偏好表」（`preferences`，见 2.7）。要做到自动取还需邮件入口
+      （NGV 的 `FOB(底价)` / `FOB(拼柜)` 在邮件语境里）
+- [ ] `CPMC` 的中文品名（NGV 格式是 `<业务员>/<中文品名> <类别>/<英文原文>(<FSC>)`）——
+      中文部分只能人工拟，脚本产出英文底稿 + WARN；`ngv.yaml` 已标 `cpmc.needs_agent`
+- [x] ~~`Remark3` 修改记录~~ —— 业务 2026-09-24：**留空**（我们产出的就是第一版报价）
+- [x] ~~`SFYPJ` / `Remark1` 配件判断~~ —— **业务 2026-09-24 改为「推不出就留空」**
+      （1.0.18，此前写死「否」在 CU26072301 上是错的）；真正要识别配件需来源（邮件）
+- [ ] `BZFS` / `TBLX` / `SHFS` 包装、台板、送货方式 —— **NGV 已按固定值落地**；其他客户待样本
+- [ ] `OLD_KHDDH` / `SHDQ` / `KHDQ`
+- [ ] `ZXLB` / `ZXFS` / `DKMC` / `BGMS`
 - [ ] 4 个 `chk*` 开关（确认业务是否要脚本推导）
+
+### NGV 待确认项 → 已全部关闭（明细见子技能）
+
+NGV 的两批口径（2026-09-24 共 15 条）业务已逐条拍板并落地为档案开关，
+**明细与依据在 skill `customer-quote-ngv` 第 4 节**，本文件不再重复维护
+（避免同一件事写在两处、改一处忘另一处）。
+
+仍挂着的两条：**`SHDQ` 送货地区枚举**（联动下拉，静态 HTML 取不到）、
+**`igl` 的 `PXH` 是否也留空**（业务 2026-09-24 对 NGV 定的是留空）。
 
 ### 运维 / 文档
 
 - [ ] 摘掉 hub 登记项（`skills/.hub/lock.json` 里的 `customer-quote-request`），
       避免 `hermes skills check/update` 穿透软链接把仓库 `SKILL.md` 覆盖回 GitHub 旧版
-- [x] 软链接体检 cron 已上线（`cqr_skill_link_watchdog.sh`，每小时 07 分，断链自动重建）
+- [x] 软链接体检 cron 已上线（`cqr_skill_link_watchdog.sh`，每小时 07 分）——
+      1.0.19 起**覆盖全部三个技能**（总纲 + igl + ngv）：断链/指向错误/被 `hermes skills
+      update` 换成实体文件都会自动备份并重建，另外做内容快照与未推送提醒
 - [x] 「文档 ↔ main.py ↔ 模板」三方一致性：由 `tests/` 的 59 键断言 + 逐字段值回归承担
 - [x] **「模板 ↔ ERP 表单字典」一致性**：`tests/test_erp_schema.py` 断言 59 个模板键
       在字典里都有定义（1.0.14）
 - [x] **「产品类别树 ↔ 源表 ↔ 档案映射」一致性**：`tests/test_cplb_tree.py`
       逐节点核对 + 导航树全覆盖 + 档案 `cplb.map`/`fallback` 都必须在树里（1.0.15）
-- [x] 单元测试（**132 项**，1.0.15）
-- [ ] 书脊方向按装订方式细化（当前仅按 `CD` vs `KD` 判 `长书脊`/`短书脊`；
-      `四边裁` 缺判据 —— 合法值已确认，等业务给触发条件）
+- [x] 单元测试（**179 项**，1.0.18）
+- [x] **NGV 分区表单回归**：`tests/test_ngv_profile.py`（合成用例 + 真实样本）（1.0.16）
+- [x] **档案重复键检测**：`_UniqueKeyLoader` 把 YAML 重复键变成硬错误（实测踩过：`rules.unit` 写两遍，前一份被静默吃掉）（1.0.16）
+- [x] **书脊方向按装订边细化**（NGV，1.0.16）：`rules.spine.mode: binding_side` ——
+      由附件里的 `<N> mm side` 与较长边比较决定；套装类经 `spine.skip_tops` 留空。
+      依据：CU26072302 的 145x210 + `210 mm side` → ERP `Drop_SJFX=长书脊`
+- [ ] `四边裁` 缺判据（合法值已确认，等业务给触发条件）
 - [ ] 支持更多日期格式
 - [ ] 客户档案可以再拆一层「客户 → 单据模板」（若将来同一客户有多种报价单格式）
