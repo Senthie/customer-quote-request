@@ -14,8 +14,8 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.26（2026-09-24 查看器搬进 `erp_view/` 包并改用 **Flask**：三层分离
-> `data.py` / `app.py` / `templates/index.html`，扫描根改走 `app.config`，测试改用 `test_client`）
+> **版本：** 1.0.27（2026-09-24 查看器排版重做：字段改自适应网格、长值跨行；
+> 新增「导出 PDF」= `window.print()` + `@media print`，仍然零依赖）
 
 把**客户发来的报价需求**（邮件标题/正文 + 附件，或直接给的表格/文档）转换成
 **ERP 导入用的 59 字段 JSON**（产物末尾另追加 4 个我方内部字段：`ID` / `CPMC_ZH` / `Reminder` / `version`，
@@ -159,7 +159,7 @@ uv run ./scripts/calibrate_customer.py --customer <新客户id> --file <样本�
 
 ```bash
 uv run ./scripts/main.py <样本文件> --customer <新客户id>
-uv run pytest                                      # 全部测试必须绿（当前 268 项）
+uv run pytest                                      # 全部测试必须绿（当前 274 项）
 
 # 有权威 ERP 导出时，做一次分类对照（差异原因写进 customers/<id>.erp_diff.json）
 uv run ./scripts/compare_with_erp.py --customer <新客户id> \
@@ -906,6 +906,27 @@ erp_view/
 - **已被取代**：`_superseded_*` 目录下的产物带「已被取代」标记。
 - 支持 `?path=<相对路径>` 深链接，方便把某一份产物发给别人。
 
+**排版（1.0.27 重做）与导出 PDF**
+
+业务 2026-09-24（第七批）：「每个字段单独成一行不方便阅读，其次添加一个导出为 PDF 的按钮」
+
+- **字段改成自适应网格**：同组内 `grid-template-columns: repeat(auto-fill, minmax(290px, 1fr))`
+  —— 窗口越宽列越多；**只有长值跨整行**（`.field.wide` → `grid-column: 1/-1`）。
+  宽窄由**值**决定（`fieldIsWide()`：长文本 / >40 字 / 带校验原因的跨行），不是写死字段名。
+  旧排版一个字段占一整行（左 190px 标签 + 右侧值），63 个字段要滚 ~2800px，而 `TZS=1`
+  这类短值把大半行宽度白扔了；现在短值 4 个一行（1720px 窗口），滚动长度约降到 **1/3**。
+- **标签压成一行**：中文名 + 字段代码并列（原来上下两行），省掉一半标签高度。
+- **导出 PDF**：工具栏「🖨 导出 PDF」→ `window.print()` → 浏览器「另存为 PDF」。
+  **零依赖**：不引 PDF 库（那些要 CDN，页面必须离线可用；而且引库还得再抄一份排版，跟屏幕必漂）。
+  PDF 版式 = 屏幕版式 + 一层 `@media print` 覆盖：
+  - `@page { size: A4; margin: 12mm }`；字段固定 3 列；`break-inside: avoid` 防字段被页边切断
+  - 隐藏侧栏 / 工具栏 / 原始 JSON / **字典合法取值清单**（那是查询参考，不是报价内容）
+  - `pre.long` 解除 190px 高度限制 → 长文本（`CPMS`）**全量进 PDF**
+  - 页眉的标题与横幅（`Reminder`、「未完成 · 不得交付」）**保留** —— 打印出来也要看得见待办
+- **PDF 默认文件名**：`syncTitle()` 把 `document.title` 设成
+  `ERP · 报价需求单导出查看器 · <任务号前 8 位> · <中文品名>`（非法字符换 `_`、截 120 字）——
+  不然每份 PDF 都叫「ERP · 报价需求单导出查看器」。
+
 **几处刻意的设计（改动前先读）**
 
 1. **零外部依赖**。旧页面引 `unpkg` 的 Vue3 + `jsdelivr` 的 dayjs —— 断网/内网直接白屏。
@@ -938,6 +959,12 @@ erp_view/
 8. ★ **分层不许退化**（1.0.26）：`data.py` 不许 import Flask、`scripts/erp_viewer.py` 只许是
    转发壳（有测试断言它不含 `delivery_gates`/`scan_exports` 之类的实现且不超过 40 行）。
    这次重写的风险不是「跑不起来」，而是**长回一团**。
+9. ★ **导出 PDF 不许引外部库**（1.0.27）：路子是 `window.print()`，页面保持离线可用。
+   测试钉的是**加载机制**（`<script src>` / `import` / `require` / CDN 域名），**不是禁词** ——
+   第一版写成「不许出现 jsPDF 这些字」，结果被自己注释里提到的库名绊倒
+   （跟第 7 条模板注释是同一类错误：拿词表当代理，代替不了真检查）。
+10. ★ **排版宽窄由值决定，不许写死字段名**（1.0.27）：`fieldIsWide()` 按值判断（长文本/长值/
+    带校验原因），所以新增字段不用回来改排版；写死 `["CPMS","BGMS"]` 那种清单迟早漏。
 
 > ⚠️ 页面按字典（`erp_form_schema.yaml`）顺序渲染；产物按模板（`add_customer_quote_request.json`）
 > 顺序落盘。两者**集合相同、顺序不同**（模板管位置、字典管语义），不要去强行对齐 ——
@@ -1110,7 +1137,7 @@ customer-quote-request/
 │   ├── uuid_utils.py              # UUID4
 │   ├── xlsx2csv.py                # Excel → CSV
 │   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
-├── tests/                         # 268 项测试（uv run pytest）
+├── tests/                         # 274 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
@@ -1361,6 +1388,61 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.24** | **2026-09-24** | **产物加内部字段 `version` 标识配置版本（= 2）；旧查看器按新结构重写 + 自动扫描 `processed/`**（见下） |
 | **1.0.25** | **2026-09-24** | **交付闸门：「未完成」产物不许留在 `processed/`** —— 语料库样本硬闸 + 查看器「未完成」徽章（见下） |
 | **1.0.26** | **2026-09-24** | **查看器搬进 `erp_view/` 包 + 改用 Flask**：三层分离、扫描根进 `app.config`、测试改用 `test_client`（见下） |
+| **1.0.27** | **2026-09-24** | **查看器排版重做 + 导出 PDF**：字段自适应网格（长值跨行）、标签压一行、`window.print()` 版 PDF（见下） |
+
+### 1.0.27 详细变更 —— 排版重做与导出 PDF
+
+业务 2026-09-24（第七批）：
+
+> 「我需要你对页面进行重新排版，每个字段单独成一行不方便阅读，其次添加一个导出为 PDF 的按钮」
+
+**1) 排版：一行一个 → 自适应网格**
+
+| | 之前（1.0.24–1.0.26） | 现在 |
+|---|---|---|
+| 字段容器 | 无（直接平铺 `<div>`） | `.field-grid`：`repeat(auto-fill, minmax(290px,1fr))` |
+| 标签 | 上下两行（中文名 / 代码），占 190px 宽 | 同一行并列，宽度自适应 |
+| 长值 | 跟短值一样占整行 | `.field.wide` → `grid-column: 1/-1` 跨整行 |
+| 宽窄判据 | — | `fieldIsWide(key, value)`：长文本 / >40 字 / 带校验原因（**按值，不按字段名**） |
+| 63 字段滚动长度 | ~2800px | ~1/3（1720px 窗口下 4 列，只有 6 个字段跨行） |
+
+**2) 导出 PDF：`window.print()` + `@media print`（零依赖）**
+
+刻意**不引** PDF 库：这页面必须离线可用（公司内网/断网），引 CDN 会白屏；而且引库等于再抄一份排版，
+跟屏幕上的必然漂。所以 PDF = 同一套 DOM + 一层打印覆盖规则：
+
+- `@page { size: A4; margin: 12mm }`，字段固定 3 列，`.field` 加 `break-inside: avoid` 防切断
+- 隐藏侧栏 / 工具栏 / 原始 JSON / 字典合法取值清单（查询参考，不属于报价内容）
+- `pre.long` 解除 190px 限高 → `CPMS` 长文本**全量**进 PDF
+- 页眉的标题、`Reminder` 横幅、「未完成 · 不得交付」横幅**保留**（打印件也要能看见待办）
+- `syncTitle()` 让 `document.title` = `ERP · 报价需求单导出查看器 · <任务号前8位> · <中文品名>`
+  —— 浏览器拿它当「另存为 PDF」的默认文件名，否则每份 PDF 都叫同一个名字
+
+**3) 测试 268 → 274 项**（`test_viewer.py` +6：网格排版 / 三个容器都用网格 / PDF 按钮 /
+打印样式 / 不许引外部库 / 标题随产物走）
+
+另外用 jsdom 实跑页面（服务端渲染的那一份）加了两套检查：
+
+| 脚本 | 断言 | 结果 |
+|------|------|------|
+| `/tmp/erp-viewer-check/check-layout.js` | 63/63 字段一个没丢、`.field-grid` 13 个、CPMS/CPMC_ZH 带 `.wide` 而 TZS 不带、跨行只 6/63、标签压一行、**点「导出 PDF」真的调了 `window.print()`**（stub 后点一次）、`document.title` 带任务号且无非法字符 | **22/22** |
+| `/tmp/erp-viewer-check/check-css.js` | 用 CSSOM **真解析**样式表：`@media print` 块解析出 13 条规则，含 `aside.list`/`.toolbar`/`pre.raw`/`details.legal`/`pre.long`/`.field`/`.field-grid` | 全过 |
+
+**这一轮的工具局限（如实记下）**
+
+- **没有真浏览器**：playwright 的 chromium 在（`~/.cache/ms-playwright/chromium-1223`）但缺
+  `libnspr4`/`libnss3`/`libatk`/`libcups`/`libgbm`/`libpango` 等十多条系统库，本机**无 root**
+  装不了（试过 `apt-get download` 抽 .so 塞 `LD_LIBRARY_PATH`，libnss3 在镜像里 404，放弃）。
+  → 所以**像素级的版面与真实打印输出没验过**；验到的是结构（DOM/类名/事件/CSSOM 解析）。
+  真要看效果：`uv run python -m erp_view` 打开点「导出 PDF」。
+- **jsdom 的 cssom 不建模 `@page` 的 `size`**（`cssText` 只剩 `margin: 12mm`）——
+  这一项退回模板原文校验，不是样式的问题。
+
+**又踩了一次同类错误**：「不许引 PDF 库」的第一版测试写成**禁词表**（`assert "jsPDF" not in html`），
+结果被我自己注释里提到的库名绊倒（跟 1.0.26 模板注释里写双花括号一模一样）。
+已改成检查**加载机制**（`<script src>` / `import` / `require` / CDN 域名）——
+**拿词表当代理，代替不了真检查**。
+
 
 ### 1.0.26 详细变更 —— 查看器包化 + Flask 重写
 

@@ -183,17 +183,26 @@
         .group-head .hint { font-size: .78rem; color: var(--ink-3); }
         .group.internal .group-head { background: #f7f4fe; }
 
-        .field {
-            display: grid; grid-template-columns: 190px minmax(0, 1fr);
-            gap: 4px 16px; padding: 9px 16px;
-            border-bottom: 1px dashed var(--line-2); align-items: start;
+        /* ── 字段：紧凑网格（1.0.27 排版重做）─────────────────────
+           以前一个字段独占一行（左 190px 标签 + 右侧值），63 个字段要滚 ~2800px，
+           而 TZS=1、CPSX=三岁以上 这类短值把大半行宽白扔了。
+           现在同组内按宽度自动分列（窗口越宽列越多），**只有长文本跨整行**。 */
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
         }
-        .field:last-child { border-bottom: none; }
+        .field {
+            display: flex; flex-direction: column; gap: 3px;
+            padding: 8px 16px; min-width: 0;
+            border-right: 1px dashed var(--line-2);
+            border-bottom: 1px dashed var(--line-2);
+        }
         .field:hover { background: #fafcff; }
         .field.missing { background: #fdfdfd; }
-        .field-label { display: flex; flex-direction: column; gap: 2px; }
-        .field-label .zh { font-size: .84rem; font-weight: 560; color: var(--ink-2); }
-        .field-label .code { font-family: var(--mono); font-size: .74rem; color: var(--ink-3); }
+        .field.wide { grid-column: 1 / -1; border-right: none; }
+        .field-label { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+        .field-label .zh { font-size: .82rem; font-weight: 560; color: var(--ink-2); }
+        .field-label .code { font-family: var(--mono); font-size: .72rem; color: var(--ink-3); }
         .field-value { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
         .field-value .line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
         .val { font-family: var(--mono); font-size: .84rem; color: var(--ink); word-break: break-word; }
@@ -247,6 +256,33 @@
         .hidden { display: none !important; }
         .foot { padding: 10px 14px; font-size: .74rem; color: var(--ink-3);
                 border-top: 1px solid var(--line-2); font-family: var(--mono); word-break: break-all; }
+
+        /* ── 打印 / 导出 PDF（1.0.27）─────────────────────────────
+           零依赖做法：按钮调 `window.print()`，浏览器「另存为 PDF」即得文件。
+           刻意不引 jsPDF / html2canvas 之类的库：
+             * 这页面**必须离线可用**（内网/断网），引 CDN 会白屏；
+             * 引库还得再抄一份排版，跟屏幕上的必然漂。
+           所以要打印的东西就一套 DOM + 下面这些覆盖规则。 */
+        @media print {
+            @page { size: A4; margin: 12mm; }
+            body { background: #fff; padding: 0; font-size: 11px; }
+            header.top {
+                box-shadow: none; border: none; border-radius: 0;
+                padding: 0 0 8px; margin: 0 0 10px;
+                border-bottom: 2px solid var(--ink);
+            }
+            .layout { display: block; max-width: none; }
+            /* 侧栏 / 工具栏 / 原始 JSON / 合法取值清单 —— 都是「查询用」的，不进 PDF */
+            aside.list, .toolbar, .no-print, pre.raw, details.legal { display: none !important; }
+            button { display: none !important; }        /* 展开/收起这类控件也别进 PDF */
+            main { gap: 8px; }
+            .panel { box-shadow: none; border-radius: 0; }
+            .group-head { background: #f1f5fa !important; break-after: avoid; page-break-after: avoid; }
+            .field-grid { grid-template-columns: repeat(3, 1fr); }   /* A4 竖版固定 3 列 */
+            .field { break-inside: avoid; page-break-inside: avoid; }
+            .banner { break-inside: avoid; }
+            pre.long { max-height: none; overflow: visible; background: #fff; }  /* 长文本全量打印 */
+        }
     </style>
 </head>
 <body>
@@ -272,6 +308,8 @@ const state = {
     showRaw: false,
     openPre: {},           // 长文本展开状态 { key: bool }
 };
+
+const BASE_TITLE = "ERP · 报价需求单导出查看器";
 
 /* ═══════════════════════════════════════════════════════════════════════
    小工具
@@ -313,6 +351,14 @@ function isLongText(key, value) {
     if (value.includes("\n")) return true;
     if (/^(CPMS|BGMS|Remark|CPMX|Remark1|Remark3|Remark4)$/.test(key)) return value.length > 60;
     return value.length > 160;
+}
+
+/** 这个字段在网格里要不要跨整行 —— 长值 / 长文本 / 带校验原因的都要，短值挤成多列 */
+function fieldIsWide(key, value) {
+    if (isLongText(key, value)) return true;
+    if (typeof value === "string" && value.length > 40) return true;
+    const issue = issueMap()[key];
+    return !!(issue && issue.message);
 }
 
 function fmtNum(n) {
@@ -488,6 +534,14 @@ function renderHeader() {
         el("button", {
             onclick: () => document.getElementById("fileInput").click(),
         }, "⬆️ 导入 JSON"),
+        el("button", {
+            class: "no-print",
+            disabled: !state.currentMeta,
+            onclick: () => window.print(),
+            title: "打开浏览器打印对话框 → 目标选「另存为 PDF」。"
+                 + "PDF 由浏览器生成（零依赖、离线可用），排版跟屏幕一致；"
+                 + "侧栏、工具栏、原始 JSON、字典取值清单都不会进 PDF。",
+        }, "🖨 导出 PDF"),
         el("button", {
             class: state.showRaw ? "primary" : "",
             disabled: !state.currentMeta,
@@ -715,7 +769,9 @@ function renderField(key, spec, badgeText) {
         el("span", { class: "zh", text: (zh || "（字典里没有）") }),
         el("span", { class: "code", text: key }),
     );
-    const field = el("div", { class: "field" + (missing ? " missing" : "") }, label,
+    // 长值跨整行，短值跟邻居并排（排版见 CSS 的 .field-grid / .field.wide）
+    const wide = fieldIsWide(key, cur[key]) ? " wide" : "";
+    const field = el("div", { class: "field" + wide + (missing ? " missing" : "") }, label,
         renderValue(key, cur[key], spec));
     if (badgeText) {
         label.querySelector(".zh").append(" ", el("span", { class: "badge int", text: badgeText }));
@@ -821,7 +877,7 @@ function renderGroups() {
                 el("span", { class: "badge " + (fieldCount === keys.length ? "plain" : "warn"),
                              text: fieldCount + " / " + keys.length + " 有值" }),
             ),
-            el("div", {}, keys.map((k) => renderField(k, specOf(k)))),
+            el("div", { class: "field-grid" }, keys.map((k) => renderField(k, specOf(k)))),
         ));
     }
 
@@ -836,7 +892,7 @@ function renderGroups() {
                 el("div", { class: "spacer" }),
                 el("span", { class: "badge int", text: internal.length + " 个" }),
             ),
-            el("div", {}, internal.map((f) => renderField(
+            el("div", { class: "field-grid" }, internal.map((f) => renderField(
                 f.key,
                 { label: f.label, legal: [] },
                 f.source === "config_version" ? "配置版本" : null,
@@ -854,7 +910,7 @@ function renderGroups() {
                 el("div", { class: "spacer" }),
                 el("span", { class: "badge warn", text: extra.length + " 个" }),
             ),
-            el("div", {}, extra.map((k) => renderField(k, specOf(k)))),
+            el("div", { class: "field-grid" }, extra.map((k) => renderField(k, specOf(k)))),
         ));
     }
     return el("div", { style: "display:flex;flex-direction:column;gap:14px" }, sections);
@@ -890,7 +946,20 @@ function renderEmptyState() {
 /* ═══════════════════════════════════════════════════════════════════════
    总渲染
    ═══════════════════════════════════════════════════════════════════════ */
+/** 浏览器把 `document.title` 当作「另存为 PDF」的默认文件名 → 让它有意义 */
+function syncTitle() {
+    const m = state.currentMeta;
+    if (!m) { document.title = BASE_TITLE; return; }
+    const cur = state.current || {};
+    const ident = String(cur.CPMC_ZH || cur.CPMC || cur.KHDH || "").trim();
+    const stamp = String(m.task_id || "").slice(0, 8);
+    // 文件名里不能有的字符换掉（Windows 更严），太长也截一下
+    document.title = [BASE_TITLE, stamp, ident].filter((s) => s !== "")
+        .join(" · ").replace(/[\\/:*?"<>|\n\r\t]/g, "_").slice(0, 120);
+}
+
 function render() {
+    syncTitle();
     const page = document.getElementById("page");
     const main = el("main");
     if (state.currentMeta) {

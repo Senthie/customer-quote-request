@@ -667,3 +667,63 @@ def test_端口被占用时给中文提示(capsys):
     assert rc == 1, "端口被占用要返回 1"
     assert "端口已被占用" in captured.err, captured.err
     assert "换个端口试试" in captured.err, captured.err
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 排版 + 导出 PDF（1.0.27）
+#
+# 业务 2026-09-24（第七批）：「每个字段单独成一行不方便阅读，其次添加一个导出为 PDF 的按钮」
+#   * 63 个字段一行一个要滚 ~2800px；TZS=1 这种短值把整行宽度白扔 → 改成自适应网格，
+#     只有长值跨整行（版面细节由 jsdom 实跑页面验，这里钉住结构与「不许引 PDF 库」）。
+# ═══════════════════════════════════════════════════════════════════════
+def test_字段排版是自适应网格():
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert ".field-grid" in html, "字段要装在网格容器里"
+    assert "repeat(auto-fill, minmax(" in html, "按窗口宽度自动分列（窗口越宽列越多）"
+    assert ".field.wide" in html and "grid-column: 1 / -1" in html, "长值要跨整行"
+    assert "fieldIsWide" in html, "宽窄由值决定，不是写死字段名"
+
+
+def test_三个字段容器都用了网格():
+    """ERP 分组 / 内部字段 / 多出的键 —— 漏一个就有一组还是一行一个。"""
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert html.count('class: "field-grid"') >= 3, html.count('class: "field-grid"')
+
+
+def test_有导出PDF按钮():
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "导出 PDF" in html
+    assert "window.print()" in html, "零依赖做法：交给浏览器打印 / 另存为 PDF"
+
+
+def test_打印样式定好A4并藏掉导航():
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "@media print" in html
+    block = html.split("@media print", 1)[1]
+    for must in ("@page", "size: A4", "aside.list", ".toolbar", "pre.raw", "details.legal",
+                 "pre.long", "break-inside: avoid"):
+        assert must in block, f"打印样式里少了 {must}"
+
+
+def test_导出PDF不许引外部库():
+    """页面必须离线可用：PDF 由浏览器生成。
+
+    钉的是**加载机制**（`<script src>` / `import` / `require` / CDN 域名），不是禁词 ——
+    这条最初写成「不许出现 jsPDF 这些字」，结果被自己注释里提到的库名绊倒
+    （跟 1.0.26 模板注释那次是同一类错误：拿词表当代理，代替不了真检查）。
+    """
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert not re.search(r"<script[^>]*\bsrc\s*=", html, flags=re.I), "不许外部脚本"
+    for pattern in (
+        r"\bimport\s+[^;\n]*\bfrom\s*['\"](?:jspdf|pdfmake|html2canvas|pdf-lib)",
+        r"require\(\s*['\"](?:jspdf|pdfmake|html2canvas|pdf-lib)",
+        r"cdn\.(?:jsdelivr|unpkg|cdnjs)",
+        r"unpkg\.com|jsdelivr\.net",
+    ):
+        assert not re.search(pattern, html, flags=re.I), f"匹配到外部依赖: {pattern}"
+
+
+def test_页面标题跟着产物走():
+    """浏览器拿 `document.title` 当「另存为 PDF」的默认文件名。"""
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "function syncTitle" in html and "document.title" in html
