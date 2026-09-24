@@ -2,810 +2,822 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>ERP · 书版产品录入 (Vue3 拼音映射)</title>
-    <!-- 引入 Vue 3 全局构建 -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dayjs/dayjs.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP · 报价需求单导出查看器</title>
+    <!--
+      ERP 导出 JSON 查看器（配置版本 2 结构）
+
+      为什么没有外部依赖：旧版引了 unpkg 的 Vue3 + jsdelivr 的 dayjs，
+      断网/内网环境直接白屏 —— 这是个内部生产工具，必须离线可用。
+      纯原生 JS + document.createElement，零 CDN。
+
+      数据来源（scripts/erp_viewer.py）：
+        GET /api/schema   字段字典（标签/类型/合法取值）+ 内部字段 + 分组
+        GET /api/exports  自动扫描 customer-files/processed/**/ERP_*.json
+        GET /api/export?path=…  某一份产物的完整 JSON
+      直接用 file:// 打开也能用，只是没有自动扫描（浏览器不许列目录）→ 走「导入 JSON」。
+    -->
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            font-family: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #eef1f6;
+            --card: #ffffff;
+            --ink: #0b1e3a;
+            --ink-2: #33475f;
+            --ink-3: #6b7c93;
+            --line: #d7dee8;
+            --line-2: #e8edf4;
+            --brand: #1a3a6f;
+            --brand-2: #2550a4;
+            --ok: #0f7b52;
+            --ok-bg: #e6f6ef;
+            --warn: #9a6200;
+            --warn-bg: #fff4de;
+            --bad: #b02a2a;
+            --bad-bg: #fdeced;
+            --internal: #5b3fa8;
+            --internal-bg: #f0ebfb;
+            --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         }
         body {
-            background: #e6e9f0;
-            display: flex;
-            justify-content: center;
-            padding: 24px 16px;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+                         'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            color: var(--ink);
+            font-size: 14px;
+            line-height: 1.5;
+            padding: 18px;
         }
-        #app {
-            max-width: 1500px;
-            width: 100%;
+
+        /* ── 头部 ───────────────────────────────────────────── */
+        header.top {
+            max-width: 1720px; margin: 0 auto 14px;
+            background: var(--card); border: 1px solid var(--line);
+            border-radius: 16px; padding: 16px 20px;
+            box-shadow: 0 6px 18px rgba(11, 30, 58, .06);
         }
-        .erp-card {
-            width: 100%;
-            background: #ffffff;
-            border-radius: 20px;
-            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
-            padding: 24px 28px 32px;
-            border: 1px solid #d0d7de;
+        .title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        h1 { font-size: 1.32rem; font-weight: 650; letter-spacing: .3px; }
+        h1 .sub { font-size: .8rem; font-weight: 400; color: var(--ink-3); margin-left: 6px; }
+        .spacer { flex: 1; }
+        .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        button {
+            font: inherit; font-size: .84rem; font-weight: 500;
+            padding: 7px 14px; border-radius: 30px; cursor: pointer;
+            background: #f7f9fc; border: 1px solid #c3cedd;
+            color: #1e293b; transition: .15s;
+            display: inline-flex; align-items: center; gap: 6px;
         }
-        .erp-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 22px;
-            flex-wrap: wrap;
-            gap: 12px;
-            border-bottom: 2px solid #e2e8f0;
-            padding-bottom: 16px;
+        button:hover { background: #eaf1fb; border-color: #6f9bd6; }
+        button.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+        button.primary:hover { background: var(--brand-2); }
+        button:disabled { opacity: .45; cursor: not-allowed; }
+        input[type=file] { display: none; }
+        input[type=search], input[type=text] {
+            font: inherit; font-size: .85rem; padding: 7px 11px;
+            border: 1px solid #cbd5e1; border-radius: 10px; background: #fff;
+            color: var(--ink);
         }
-        .erp-header h2 {
-            font-weight: 600;
-            font-size: 1.8rem;
-            color: #0b1e3a;
-            letter-spacing: 0.5px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
+        input[type=search]:focus, input[type=text]:focus {
+            outline: none; border-color: #2b6eb3; box-shadow: 0 0 0 3px rgba(43,110,179,.13);
         }
-        .erp-header h2 small {
-            font-size: 0.9rem;
-            font-weight: 400;
-            color: #5e6f8d;
-            margin-left: 6px;
+        .status { font-size: .8rem; color: var(--ink-3); }
+        .status.err { color: var(--bad); }
+
+        .banner {
+            margin-top: 12px; padding: 10px 14px; border-radius: 12px;
+            font-size: .85rem; border: 1px solid;
         }
-        .import-area {
-            display: flex;
-            gap: 10px;
-            align-items: center;
+        .banner.info { background: #eef4fd; border-color: #c3d8f3; color: #1c4a86; }
+        .banner.warn { background: var(--warn-bg); border-color: #f0d09a; color: var(--warn); }
+        .banner.bad  { background: var(--bad-bg); border-color: #f0b9bc; color: var(--bad); }
+        .banner code {
+            font-family: var(--mono); font-size: .8rem;
+            background: rgba(0,0,0,.05); padding: 1px 5px; border-radius: 5px;
         }
-        .btn {
-            background: white;
-            border: 1px solid #cbd5e1;
-            padding: 8px 18px;
-            border-radius: 40px;
-            font-weight: 500;
-            font-size: 0.9rem;
-            color: #1e293b;
-            cursor: pointer;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
-            transition: all 0.15s;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: #f9fbfd;
+
+        /* ── 布局 ───────────────────────────────────────────── */
+        .layout {
+            max-width: 1720px; margin: 0 auto;
+            display: grid; grid-template-columns: 330px minmax(0, 1fr);
+            gap: 14px; align-items: start;
         }
-        .btn-primary {
-            background: #1a3a6f;
-            border-color: #1a3a6f;
-            color: white;
-            box-shadow: 0 4px 10px rgba(26, 58, 111, 0.15);
+        @media (max-width: 1080px) { .layout { grid-template-columns: 1fr; } }
+
+        .panel {
+            background: var(--card); border: 1px solid var(--line);
+            border-radius: 16px; box-shadow: 0 6px 18px rgba(11, 30, 58, .05);
         }
-        .btn-primary:hover {
-            background: #2550a4;
+        aside.list { position: sticky; top: 18px; max-height: calc(100vh - 36px); display: flex; flex-direction: column; }
+        .panel-head {
+            padding: 12px 14px; border-bottom: 1px solid var(--line-2);
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
         }
-        .btn-outline-blue {
-            border-color: #9aa9bb;
+        .panel-head h2 { font-size: .92rem; font-weight: 620; }
+        .count-badge {
+            font-size: .74rem; font-weight: 600; color: var(--brand);
+            background: #e9f0fa; border: 1px solid #c8dcf5;
+            padding: 1px 8px; border-radius: 20px;
         }
-        .btn-outline-blue:hover {
-            background: #e9f0fa;
-            border-color: #3b6cb7;
+        .items { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+
+        .item {
+            text-align: left; width: 100%; display: block;
+            border: 1px solid var(--line-2); border-radius: 11px;
+            padding: 9px 11px; background: #fcfdff; cursor: pointer;
+            font: inherit; font-size: .82rem; transition: .13s;
         }
-        .btn-sm {
-            padding: 6px 14px;
-            font-size: 0.85rem;
+        .item:hover { border-color: #9dbbdf; background: #f3f8ff; }
+        .item.active { border-color: var(--brand); background: #eaf1fb; box-shadow: 0 0 0 2px rgba(26,58,111,.10); }
+        .item .l1 { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+        .item .when { font-family: var(--mono); font-size: .74rem; color: var(--ink-3); }
+        .item .tid { font-family: var(--mono); font-size: .72rem; color: var(--ink-2);
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .item .cpmc { color: var(--ink-2); font-size: .8rem; margin-top: 3px;
+                      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                      overflow: hidden; }
+        .item .l3 { margin-top: 4px; display: flex; gap: 5px; flex-wrap: wrap; }
+
+        main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+
+        /* ── 徽章 ───────────────────────────────────────────── */
+        .badge {
+            font-size: .7rem; font-weight: 600; padding: 1px 7px; border-radius: 20px;
+            border: 1px solid; white-space: nowrap; display: inline-block;
         }
-        .file-input {
-            display: none;
+        .badge.v2    { color: #fff; background: var(--brand); border-color: var(--brand); }
+        .badge.ver0  { color: var(--ink-3); background: #eef1f6; border-color: var(--line); }
+        .badge.ok    { color: var(--ok); background: var(--ok-bg); border-color: #b9e2d1; }
+        .badge.warn  { color: var(--warn); background: var(--warn-bg); border-color: #f0d09a; }
+        .badge.bad   { color: var(--bad); background: var(--bad-bg); border-color: #f0b9bc; }
+        .badge.old   { color: var(--ink-3); background: #f2f4f8; border-color: var(--line); }
+        .badge.int   { color: var(--internal); background: var(--internal-bg); border-color: #d6c9f5; }
+        .badge.plain { color: var(--ink-3); background: #f6f8fb; border-color: var(--line-2); }
+
+        /* ── 摘要 ───────────────────────────────────────────── */
+        .summary { padding: 14px 16px; }
+        .kv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 18px; }
+        .kv { display: flex; gap: 8px; align-items: baseline; border-bottom: 1px dashed var(--line-2); padding-bottom: 6px; }
+        .kv .k { color: var(--ink-3); font-size: .78rem; white-space: nowrap; min-width: 78px; }
+        .kv .v { font-family: var(--mono); font-size: .82rem; color: var(--ink); word-break: break-all; }
+        .kv .v.plain { font-family: inherit; }
+
+        /* ── 字段组 ─────────────────────────────────────────── */
+        .group { border-top: 1px solid var(--line-2); }
+        .group:first-of-type { border-top: none; }
+        .group-head {
+            padding: 11px 16px; background: #f8fafd; display: flex;
+            align-items: center; gap: 9px; flex-wrap: wrap;
+            border-bottom: 1px solid var(--line-2);
         }
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 16px 24px;
-            margin: 18px 0 12px;
+        .group-head h3 { font-size: .9rem; font-weight: 640; }
+        .group-head .hint { font-size: .78rem; color: var(--ink-3); }
+        .group.internal .group-head { background: #f7f4fe; }
+
+        .field {
+            display: grid; grid-template-columns: 190px minmax(0, 1fr);
+            gap: 4px 16px; padding: 9px 16px;
+            border-bottom: 1px dashed var(--line-2); align-items: start;
         }
-        .field-group {
-            display: flex;
-            align-items: baseline;
-            flex-wrap: wrap;
-            gap: 6px 10px;
-            border-bottom: 1px dashed #e2e8f0;
-            padding-bottom: 8px;
+        .field:last-child { border-bottom: none; }
+        .field:hover { background: #fafcff; }
+        .field.missing { background: #fdfdfd; }
+        .field-label { display: flex; flex-direction: column; gap: 2px; }
+        .field-label .zh { font-size: .84rem; font-weight: 560; color: var(--ink-2); }
+        .field-label .code { font-family: var(--mono); font-size: .74rem; color: var(--ink-3); }
+        .field-value { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .field-value .line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+        .val { font-family: var(--mono); font-size: .84rem; color: var(--ink); word-break: break-word; }
+        .val.plain { font-family: inherit; }
+        .val.empty { color: var(--ink-3); font-style: italic; }
+        .val.illegal { color: var(--bad); font-weight: 600; }
+
+        pre.long {
+            font-family: var(--mono); font-size: .79rem; line-height: 1.55;
+            background: #f8fafd; border: 1px solid var(--line-2); border-radius: 9px;
+            padding: 9px 11px; white-space: pre-wrap; word-break: break-word;
+            max-height: 190px; overflow: auto; color: var(--ink-2);
         }
-        .field-group.full-row {
-            grid-column: 1 / -1;
-            flex-wrap: nowrap;
+        pre.long.open { max-height: none; }
+
+        details.legal { font-size: .78rem; }
+        details.legal summary {
+            cursor: pointer; color: var(--brand-2); width: fit-content;
+            list-style: none; user-select: none;
         }
-        .field-label {
-            font-size: 0.88rem;
-            font-weight: 500;
-            color: #2c3e50;
-            min-width: 100px;
-            white-space: nowrap;
+        details.legal summary::-webkit-details-marker { display: none; }
+        details.legal summary::before { content: '▸ '; }
+        details.legal[open] summary::before { content: '▾ '; }
+        .legal-list {
+            margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;
+            max-height: 230px; overflow: auto; padding: 7px;
+            background: #f8fafd; border: 1px solid var(--line-2); border-radius: 9px;
         }
-        .field-control {
-            flex: 1;
-            min-width: 170px;
+        .legal-item {
+            font-family: var(--mono); font-size: .74rem; padding: 1px 7px;
+            border-radius: 20px; background: #fff; border: 1px solid var(--line);
+            color: var(--ink-2);
         }
-        .inline-combo {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
+        .legal-item.cur { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 600; }
+
+        .chk { font-size: .84rem; display: inline-flex; align-items: center; gap: 6px; }
+        .chk .box { font-size: 1rem; }
+
+        .empty-state { padding: 40px 24px; text-align: center; color: var(--ink-3); }
+        .empty-state h3 { font-size: 1rem; color: var(--ink-2); margin-bottom: 8px; }
+        .empty-state ol { text-align: left; max-width: 520px; margin: 12px auto 0; padding-left: 22px; }
+        .empty-state li { margin: 5px 0; font-size: .85rem; }
+        .empty-state code { font-family: var(--mono); background: #f1f4f9; padding: 1px 6px; border-radius: 5px; }
+
+        pre.raw {
+            font-family: var(--mono); font-size: .78rem; line-height: 1.5;
+            background: #0f1b2d; color: #d6e2f2; padding: 14px 16px;
+            border-radius: 0 0 16px 16px; overflow: auto; max-height: 620px;
+            white-space: pre; tab-size: 2;
         }
-        input,
-        select,
-        textarea {
-            width: 100%;
-            padding: 8px 10px;
-            border: 1px solid #cbd5e1;
-            border-radius: 12px;
-            font-size: 0.9rem;
-            background: #fff;
-            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.02);
-        }
-        input:focus,
-        select:focus,
-        textarea:focus {
-            border-color: #2b6eb3;
-            outline: none;
-            box-shadow: 0 0 0 3px rgba(43, 110, 179, 0.12);
-        }
-        input[type='checkbox'] {
-            width: 20px;
-            height: 20px;
-            margin-right: 4px;
-            accent-color: #1a3a6f;
-        }
-        .checkbox-group {
-            display: flex;
-            align-items: center;
-            gap: 22px;
-            flex-wrap: wrap;
-        }
-        .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            white-space: nowrap;
-        }
-        textarea {
-            min-height: 64px;
-            resize: vertical;
-        }
-        .static-text {
-            padding: 8px 0;
-            color: #0f172a;
-            font-weight: 500;
-        }
-        .action-bar {
-            margin-top: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 16px;
-            border-top: 1px solid #e2e8f0;
-            padding-top: 22px;
-        }
-        .action-buttons {
-            display: flex;
-            gap: 18px;
-        }
-        .badge-json {
-            background: #e3eaf3;
-            border-radius: 30px;
-            padding: 2px 12px;
-            font-size: 0.8rem;
-            color: #1a3a6f;
-            font-weight: 500;
-        }
-        .hint-text {
-            color: #68788c;
-            font-size: 0.8rem;
-            margin-top: 12px;
-            text-align: right;
-        }
-        select {
-            appearance: none;
-            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%234b5563"><path d="M6 9l6 6 6-6"/></svg>');
-            background-repeat: no-repeat;
-            background-position: right 10px center;
-            background-size: 14px;
-        }
-        .hint-text span {
-            opacity: 0.7;
-        }
+        .hidden { display: none !important; }
+        .foot { padding: 10px 14px; font-size: .74rem; color: var(--ink-3);
+                border-top: 1px solid var(--line-2); font-family: var(--mono); word-break: break-all; }
     </style>
 </head>
 <body>
-    <div id="app">
-        <div class="erp-card">
-            <div class="erp-header">
-                <h2>
-                    📘 书版 · 产品信息
-                    <small>拼音缩写映射 (CPDL/CPLB…)</small>
-                </h2>
-                <div class="import-area">
-                    <span class="badge-json">📎 JSON key → 字段</span>
-                    <button class="btn btn-outline-blue btn-sm" type="button" @click="loadSampleData">
-                        📋 载入示例数据
-                    </button>
-                    <button class="btn btn-primary btn-sm" type="button" @click="triggerFileInput">
-                        ⬆️ 导入 JSON 文件
-                    </button>
-                    <input
-                        ref="fileInput"
-                        type="file"
-                        class="file-input"
-                        accept=".json,application/json"
-                        @change="handleFileImport"
-                    />
-                </div>
-            </div>
+<div id="page"></div>
+<input type="file" id="fileInput" accept=".json,application/json">
 
-            <!-- 表单区域 -->
-            <form @submit.prevent>
-                <div class="form-grid">
-                    <div class="field-group">
-                        <span class="field-label">任务ID：</span>
-                        <div class="field-control">
-                            <input disabled type="text" v-model="formData.id" placedholder="任务ID：" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">创建人：</span>
-                        <div class="field-control">
-                            <input disabled type="text" v-model="formData.create_by" placeholder="创建人：" />
-                        </div>
-                    </div>
-                    <!-- 产品大类 / 产品类别 / 书脊方向 / 装订方式 -->
-                    <div class="field-group">
-                        <span class="field-label">产品大类 (CPDL)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.CPDL" placeholder="书版" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">产品类别 (CPLB)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.CPLB">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="精装书">精装书</option>
-                                <option value="平装书">平装书</option>
-                                <option value="骑马钉">骑马钉</option>
-                                <option value="儿童书">儿童书</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">书脊方向 (SJFX)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.SJFX" placeholder="长书脊" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">装订方式 (ZDFS)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.ZDFS">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="胶装">胶装</option>
-                                <option value="锁线胶装">锁线胶装</option>
-                                <option value="骑马钉">骑马钉</option>
-                                <option value="精装">精装</option>
-                            </select>
-                        </div>
-                    </div>
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════════
+   状态
+   ═══════════════════════════════════════════════════════════════════════ */
+const state = {
+    schema: null,          // /api/schema 的回应
+    exports: [],           // /api/exports 的 exports
+    scanRoot: "",
+    scanOk: false,         // 服务端可达 → 能自动扫描
+    scanError: "",
+    current: null,         // 当前选中的产物（原始对象）
+    currentMeta: null,     // 列表项（含 relpath / mtime / superseded）
+    filter: "",
+    showRaw: false,
+    openPre: {},           // 长文本展开状态 { key: bool }
+};
 
-                    <!-- 产品名称 / 款数 / 语言数 / 单位 -->
-                    <div class="field-group">
-                        <span class="field-label">产品名称 (CPMC)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.CPMC" placeholder="产品名称" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">款数 (TZS)：</span>
-                        <div class="field-control">
-                            <input type="number" v-model.number="formData.TZS" min="0" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">语言数 (YYS)：</span>
-                        <div class="field-control">
-                            <input type="number" v-model.number="formData.YYS" min="0" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">单位 (DWMC)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.DWMC">
-                                <option value="" disabled>&lt;--i--&gt;</option>
-                                <option value="本">本</option>
-                                <option value="套">套</option>
-                                <option value="册">册</option>
-                            </select>
-                        </div>
-                    </div>
+/* ═══════════════════════════════════════════════════════════════════════
+   小工具
+   ═══════════════════════════════════════════════════════════════════════ */
+function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+        if (v === null || v === undefined || v === false) continue;
+        if (k === "class") node.className = v;
+        else if (k === "text") node.textContent = String(v);
+        else if (k === "html") node.innerHTML = v;
+        else if (k.startsWith("on") && typeof v === "function") {
+            node.addEventListener(k.slice(2).toLowerCase(), v);
+        } else if (v === true) node.setAttribute(k, "");
+        else node.setAttribute(k, String(v));
+    }
+    for (const c of children.flat(Infinity)) {
+        if (c === null || c === undefined || c === false) continue;
+        node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    }
+    return node;
+}
 
-                    <!-- 客户币种 / 目标价 / 规格(长宽高) -->
-                    <div class="field-group">
-                        <span class="field-label">客户币种 (BZ)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.BZ">
-                                <option value="CNY">CNY</option>
-                                <option value="USD">USD</option>
-                                <option value="HKD">HKD</option>
-                                <option value="EUR">EUR</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">客户目标价 (KHMBJ)：</span>
-                        <div class="field-control">
-                            <input type="number" step="0.01" v-model.number="formData.KHMBJ" placeholder="0.00" />
-                        </div>
-                    </div>
-                    <div class="field-group full-row" style="grid-column: span 2">
-                        <span class="field-label">规格(MM) 长/宽/高：</span>
-                        <div class="field-control inline-combo">
-                            <input type="number" v-model.number="formData.GG_length" placeholder="长" step="0.1" style="width:85px" />
-                            <span>×</span>
-                            <input type="number" v-model.number="formData.GG_width" placeholder="宽" step="0.1" style="width:85px" />
-                            <span>×</span>
-                            <input type="number" v-model.number="formData.GG_height" placeholder="高" step="0.1" style="width:85px" />
-                            <span class="hint-text">(mm)</span>
-                        </div>
-                    </div>
+const isEmptyValue = (v) => v === null || v === undefined || v === "";
 
-                    <!-- 包装方式 / 台板类型 / 送货方式 / 客户单号 -->
-                    <div class="field-group">
-                        <span class="field-label">包装方式 (BZFS)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.BZFS">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="纸箱">纸箱</option>
-                                <option value="木箱">木箱</option>
-                                <option value="托盘">托盘</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">台板类型 (TBLX)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.TBLX">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="木质">木质</option>
-                                <option value="塑料">塑料</option>
-                                <option value="纸质">纸质</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">送货方式 (SHFS)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.SHFS">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="陆运">陆运</option>
-                                <option value="空运">空运</option>
-                                <option value="海运">海运</option>
-                                <option value="快递">快递</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">客户单号 (KHDH)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.KHDH" placeholder="PO-" />
-                        </div>
-                    </div>
+/** 值的展示文本（null / 空 都变成可读文案，不显示 "null" 这种裸值） */
+function describeValue(v) {
+    if (v === null) return { text: "null（空值）", cls: "empty" };
+    if (v === undefined) return { text: "本产物缺失该键", cls: "empty" };
+    if (v === "") return { text: "（空字符串）", cls: "empty" };
+    if (typeof v === "boolean") return { text: v ? "true（勾选）" : "false（未勾选）", cls: "plain" };
+    if (typeof v === "number") return { text: String(v), cls: "" };
+    return { text: String(v), cls: "plain" };
+}
 
-                    <!-- 交货日期 / 安全检查 / 年龄段 / 是否有配件 -->
-                    <div class="field-group">
-                        <span class="field-label">交货日期 (JHRQ)：</span>
-                        <div class="field-control">
-                            <input type="date" v-model="jhrqDate" />
-                            <div class="hint-text" style="margin-top:6px">详细: {{ timestamp2data(formData.JHRQ, 'YYYY-MM-DD HH:mm:ss') }}</div>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">安全检查：</span>
-                        <div class="field-control checkbox-group">
-                            <label class="checkbox-item">
-                                <input type="checkbox" v-model="formData.has_safety_checks" /> 需要安全检查
-                            </label>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">用户年龄段：</span>
-                        <div class="field-control">
-                            <select v-model="formData.target_age_group">
-                                <option value="">不限</option>
-                                <option value="0-3岁">0-3岁</option>
-                                <option value="4-8岁">4-8岁</option>
-                                <option value="9-14岁">9-14岁</option>
-                                <option value="青少年">青少年</option>
-                                <option value="成人">成人</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">是否有配件 (SFYPJ)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.SFYPJ">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="是">是</option>
-                                <option value="否">否</option>
-                            </select>
-                        </div>
-                    </div>
+/** 是否属于「长文本」字段（用 <pre> 渲染 + 展开按钮） */
+function isLongText(key, value) {
+    if (typeof value !== "string") return false;
+    if (value.includes("\n")) return true;
+    if (/^(CPMS|BGMS|Remark|CPMX|Remark1|Remark3|Remark4)$/.test(key)) return value.length > 60;
+    return value.length > 160;
+}
 
-                    <!-- 配件描述 / 排序号 / 产品类型 / 预计下单日期 -->
-                    <div class="field-group">
-                        <span class="field-label">配件描述 (Remark1)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.Remark1" placeholder="例如书签" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">排序号 (PXH)：</span>
-                        <div class="field-control">
-                            <input type="number" v-model.number="formData.PXH" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">产品类型 (CPLX)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.CPLX">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="常规">常规</option>
-                                <option value="定制">定制</option>
-                                <option value="加急">加急</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">预计下单日期 (WCRQ)：</span>
-                        <div class="field-control">
-                            <input type="date" v-model="wcrqDate" />
-                            <div class="hint-text" style="margin-top:6px">详细: {{ timestamp2data(formData.WCRQ, 'YYYY-MM-DD HH:mm:ss') }}</div>
-                        </div>
-                    </div>
+function fmtNum(n) {
+    if (typeof n !== "number" || !Number.isFinite(n)) return String(n);
+    return n.toLocaleString("en-US");
+}
 
-                    <!-- 香港单号 / 产品英文名 / 不需报价 / 纸箱类别 -->
-                    <div class="field-group">
-                        <span class="field-label">香港单号 (KHDDH)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.KHDDH" placeholder="HK-" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">产品英文名 (ECPMC)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.ECPMC" placeholder="English name" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">不需报价：</span>
-                        <div class="field-control checkbox-group">
-                            <label class="checkbox-item">
-                                <input type="checkbox" v-model="formData.ZDBJF" /> 不需报价
-                            </label>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">纸箱类别 (ZXLB)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.ZXLB">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="普通瓦楞">普通瓦楞</option>
-                                <option value="重型瓦楞">重型瓦楞</option>
-                            </select>
-                        </div>
-                    </div>
+/* ═══════════════════════════════════════════════════════════════════════
+   数据加载
+   ═══════════════════════════════════════════════════════════════════════ */
+async function loadFromServer() {
+    try {
+        const [schemaRes, listRes] = await Promise.all([
+            fetch("api/schema", { cache: "no-store" }),
+            fetch("api/exports", { cache: "no-store" }),
+        ]);
+        if (!schemaRes.ok) throw new Error("schema HTTP " + schemaRes.status);
+        if (!listRes.ok) throw new Error("exports HTTP " + listRes.status);
+        state.schema = await schemaRes.json();
+        const list = await listRes.json();
+        state.exports = list.exports || [];
+        state.scanRoot = list.root || "";
+        state.scanOk = true;
+        state.scanError = "";
 
-                    <!-- 纸板类型 / 装箱方式 / 台板集装 / 底卡名称 -->
-                    <div class="field-group">
-                        <span class="field-label">纸板类型 (ZBLX)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.ZBLX">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="单粉">单粉</option>
-                                <option value="双粉">双粉</option>
-                                <option value="灰板">灰板</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">装箱方式 (ZXFS)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.ZXFS" placeholder="平装" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">台板/集装 (BSYJZX)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.BSYJZX">
-                                <option value="不使用台板">不使用台板</option>
-                                <option value="不使用集装">不使用集装</option>
-                                <option value="正常使用">正常使用</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">底卡名称 (DKMC)：</span>
-                        <div class="field-control">
-                            <select v-model="formData.DKMC">
-                                <option value="" disabled>&lt;--请选择--&gt;</option>
-                                <option value="灰板">灰板</option>
-                                <option value="白卡">白卡</option>
-                            </select>
-                        </div>
-                    </div>
+        // 支持 ?path=… 深链接；否则自动选最新的一份
+        const want = new URLSearchParams(location.search).get("path");
+        const target = (want && state.exports.find((e) => e.relpath === want))
+            || state.exports.find((e) => !e.superseded)
+            || state.exports[0]
+            || null;
+        if (target) await selectExport(target);
+        render();
+    } catch (err) {
+        state.scanOk = false;
+        state.scanError = (err && err.message) || String(err);
+        state.exports = [];
+        render();
+    }
+}
 
-                    <!-- 描述区域 -->
-                    <div class="field-group full-row">
-                        <span class="field-label">产品描述 (CPMS)：</span>
-                        <div class="field-control">
-                            <textarea v-model="formData.CPMS" rows="2" placeholder="详细描述..."></textarea>
-                        </div>
-                    </div>
-                    <div class="field-group full-row">
-                        <span class="field-label">补充描述 (BCMS)：</span>
-                        <div class="field-control">
-                            <textarea v-model="formData.BCMS" rows="2"></textarea>
-                        </div>
-                    </div>
+async function selectExport(meta) {
+    try {
+        const res = await fetch("api/export?path=" + encodeURIComponent(meta.relpath), { cache: "no-store" });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || ("HTTP " + res.status));
+        }
+        const payload = await res.json();
+        state.current = payload.data || {};
+        state.currentMeta = meta;
+        state.showRaw = false;
+        state.openPre = {};
+        try {
+            history.replaceState(null, "", "?path=" + encodeURIComponent(meta.relpath));
+        } catch (_) { /* file:// 下可能不允许，忽略 */ }
+    } catch (err) {
+        state.current = {};
+        state.currentMeta = meta;
+        state.currentMeta.loadError = (err && err.message) || String(err);
+    }
+    render();
+}
 
-                    <!-- 备注字段 -->
-                    <div class="field-group">
-                        <span class="field-label">备注 (CPBZ1)：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.CPBZ1" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">预留字段 Remark4：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.Remark4" />
-                        </div>
-                    </div>
-                    <div class="field-group">
-                        <span class="field-label">预留字段 Remark3：</span>
-                        <div class="field-control">
-                            <input type="text" v-model="formData.Remark3" />
-                        </div>
-                    </div>
-                    <div class="field-group full-row">
-                        <span class="field-label">关联报价需求单：</span>
-                        <div class="field-control static-text">📎 点击列表设置关联</div>
-                    </div>
-                </div>
+/** 手动导入（没有服务端时唯一的路） */
+function importFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            state.current = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+            state.currentMeta = {
+                relpath: file.name, filename: file.name,
+                task_id: "(手动导入)", mtime_iso: new Date(file.lastModified).toLocaleString("sv-SE"),
+                size: file.size, superseded: false, key_count: Object.keys(state.current).length,
+                manual: true,
+            };
+            state.showRaw = false;
+            state.openPre = {};
+            render();
+        } catch (err) {
+            alert("JSON 解析失败：" + err.message);
+        }
+    };
+    reader.readAsText(file, "utf-8");
+}
 
-                <!-- 底部操作按钮 -->
-                <div class="action-bar">
-                    <div class="legend-note">— 列表设置 —</div>
-                    <div class="action-buttons">
-                        <button type="button" class="btn" @click="handleListSettings">📋 列表设置</button>
-                        <button type="button" class="btn btn-primary" @click="handleSave">💾 保存</button>
-                        <button type="button" class="btn" @click="handleClose">❌ 关闭</button>
-                    </div>
-                </div>
-            </form>
-            <div class="hint-text">
-                ⚡ JSON 键名如 CPDL, CPLB, SJFX … 导入时自动映射填充。支持复选框/下拉/日期。
-            </div>
-        </div>
-    </div>
+/* ═══════════════════════════════════════════════════════════════════════
+   派生：结构对照（这份产物 vs 当前 59 键结构）
+   ═══════════════════════════════════════════════════════════════════════ */
+function structuralDiff() {
+    const cur = state.current || {};
+    const schema = state.schema || {};
+    const erpKeys = (schema.erp_fields || []).map((f) => f.key);
+    const internalKeys = (schema.internal_fields || []).map((f) => f.key);
+    const actual = Object.keys(cur);
+    return {
+        erpKeys,
+        internalKeys,
+        missing: erpKeys.filter((k) => !(k in cur)),
+        extra: actual.filter((k) => !erpKeys.includes(k) && !internalKeys.includes(k)),
+        missingInternal: internalKeys.filter((k) => !(k in cur)),
+        actualCount: actual.length,
+    };
+}
 
-    <script>
-        const { createApp, ref, reactive, computed } = Vue;
+function specOf(key) {
+    const list = (state.schema && state.schema.erp_fields) || [];
+    return list.find((f) => f.key === key) || null;
+}
 
-        const app = createApp({
-            setup() {
-                // 文件input的ref
-                const fileInput = ref(null);
+function internalSpecOf(key) {
+    const list = (state.schema && state.schema.internal_fields) || [];
+    return list.find((f) => f.key === key) || null;
+}
 
-                // 表单数据 (字段名与JSON key完全一致)
-                const formData = reactive({
-                    id:"4a1c709ed3f44d0faa81b835ed99620d",
-                    create_by: "KM",
-                    CPDL: '书版',
-                    CPLB: '',
-                    SJFX: '长书脊',
-                    ZDFS: '',
-                    CPMC: 'EUR追溯',
-                    TZS: 1,
-                    YYS: 1,
-                    DWMC: '本',
-                    BZ: 'CNY',
-                    KHMBJ: null,
-                    GG_length: null,
-                    GG_width: null,
-                    GG_height: null,
-                    BZFS: '',
-                    TBLX: '',
-                    SHFS: '',
-                    KHDH: '',
-                    JHRQ: 0,
-                    has_safety_checks: false,
-                    target_age_group: '',
-                    SFYPJ: '',
-                    Remark1: '',
-                    PXH: 1,
-                    CPLX: '',
-                    WCRQ: 0,
-                    KHDDH: '',
-                    ECPMC: '',
-                    ZDBJF: false,
-                    ZXLB: '',
-                    ZBLX: '',
-                    ZXFS: '平装',
-                    BSYJZX: '不使用台板',
-                    DKMC: '',
-                    CPMS: '',
-                    BCMS: '',
-                    CPBZ1: '',
-                    Remark4: '',
-                    Remark3: ''
-                });
+/* ═══════════════════════════════════════════════════════════════════════
+   渲染：头部
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderHeader() {
+    const cfgVer = state.schema ? state.schema.config_version : null;
+    const cur = state.current || {};
+    const curVer = cur.version;
 
-                // 示例数据 (与用户提供的格式匹配)
-                const sampleData = {
-                    CPDL: '书版',
-                    CPLB: '精装书',
-                    SJFX: '长书脊',
-                    ZDFS: '锁线胶装',
-                    CPMC: 'EUR追溯',
-                    TZS: 2,
-                    YYS: 3,
-                    DWMC: '本',
-                    BZ: 'USD',
-                    KHMBJ: 12.50,
-                    GG_length: 210,
-                    GG_width: 285,
-                    GG_height: 15,
-                    BZFS: '纸箱',
-                    TBLX: '木质',
-                    SHFS: '陆运',
-                    KHDH: 'PO-2409-01',
-                    JHRQ: 1775804694450,
-                    has_safety_checks: true,
-                    target_age_group: '4-8岁',
-                    SFYPJ: '是',
-                    Remark1: '丝带书签+贴纸',
-                    PXH: 1,
-                    CPLX: '定制',
-                    WCRQ: 1744243200000,
-                    KHDDH: 'HK-8823',
-                    ECPMC: 'EUR Traceability Edition',
-                    ZDBJF: false,
-                    ZXLB: '普通瓦楞',
-                    ZBLX: '双粉',
-                    ZXFS: '平装',
-                    BSYJZX: '不使用台板',
-                    DKMC: '灰板',
-                    CPMS: 'EUR追溯系列，内文四色，封面烫金。',
-                    BCMS: '附赠电子追溯码',
-                    CPBZ1: '首批加急',
-                    Remark4: '',
-                    Remark3: '内部编码A01'
-                };
+    let verBadge;
+    if (curVer === undefined) {
+        verBadge = el("span", { class: "badge old", text: "产物无 version（第 1 代口径）" });
+    } else if (cfgVer !== null && curVer === cfgVer) {
+        verBadge = el("span", { class: "badge v2", text: "version " + curVer + "（= 当前配置）" });
+    } else {
+        verBadge = el("span", { class: "badge warn", text: "version " + curVer + "（当前配置 " + cfgVer + "）" });
+    }
 
-                // 加载示例数据
-                const loadSampleData = () => {
-                    Object.assign(formData, sampleData);
-                };
+    const status = el("span", { class: "status" + (state.scanOk ? "" : " err") });
+    if (state.scanOk) {
+        status.textContent = "已扫描 " + state.exports.length + " 份产物";
+    } else {
+        status.textContent = "未连上服务端（" + state.scanError + "）";
+    }
 
-                // 触发文件选择
-                const triggerFileInput = () => {
-                    fileInput.value?.click();
-                };
+    const toolbar = el("div", { class: "toolbar" },
+        status,
+        el("button", {
+            onclick: () => loadFromServer(),
+            title: "重新扫描 customer-files/processed",
+        }, "🔄 刷新"),
+        el("button", {
+            onclick: () => document.getElementById("fileInput").click(),
+        }, "⬆️ 导入 JSON"),
+        el("button", {
+            class: state.showRaw ? "primary" : "",
+            disabled: !state.currentMeta,
+            onclick: () => { state.showRaw = !state.showRaw; render(); },
+        }, "{ } 原始 JSON"),
+        state.current ? verBadge : null,
+    );
 
-                // 处理JSON文件导入
-                const handleFileImport = (event) => {
-                    const file = event.target.files[0];
-                    if (!file) return;
+    const head = el("header", { class: "top" },
+        el("div", { class: "title-row" },
+            el("h1", {}, "📘 ERP · 报价需求单导出",
+                el("span", { class: "sub", text: "配置版本 " + (cfgVer === null ? "?" : cfgVer) + " · 59 个 ERP 字段 + 内部字段" })),
+            el("div", { class: "spacer" }),
+            toolbar,
+        ),
+    );
 
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        try {
-                            const json = JSON.parse(e.target.result);
-                            // 只更新存在的字段，避免意外添加属性
-                            Object.keys(formData).forEach(key => {
-                                if (json.hasOwnProperty(key)) {
-                                    formData[key] = json[key];
-                                }
-                            });
-                            alert('✅ JSON 数据已导入，字段已按拼音缩写填充。');
-                        } catch (err) {
-                            alert('❌ JSON解析失败: ' + err.message);
-                        } finally {
-                            // 清空input，允许重复导入同一文件
-                            event.target.value = '';
-                        }
-                    };
-                    reader.readAsText(file, 'UTF-8');
-                };
+    if (!state.scanOk) {
+        head.append(el("div", { class: "banner warn" },
+            el("span", {},
+                "浏览器不允许 ", el("code", { text: "file://" }), " 页面列出本地目录，所以「自动扫描」需要一个小服务端。",
+                el("br"),
+                "在仓库根目录跑：", el("code", { text: "uv run ./scripts/erp_viewer.py" }),
+                " 然后打开它给出的地址（会自动开浏览器）。现在也可以点「导入 JSON」手动看单份文件。"),
+        ));
+    }
 
-                // 底部按钮交互
-                const handleListSettings = () => {
-                    alert('列表设置：可配置显示列 (演示)');
-                };
+    const reminder = cur.Reminder;
+    if (typeof reminder === "string" && reminder.trim() !== "") {
+        head.append(el("div", { class: "banner bad" },
+            el("span", { text: "⚠️ " + reminder })));
+    }
+    if (state.currentMeta && state.currentMeta.loadError) {
+        head.append(el("div", { class: "banner bad", text: "读取失败：" + state.currentMeta.loadError }));
+    }
+    return head;
+}
 
-                const handleSave = () => {
-                    console.log('📦 保存的表单数据 (拼音key):', { ...formData });
-                    alert('数据已保存至控制台，可查看详情。');
-                };
+/* ═══════════════════════════════════════════════════════════════════════
+   渲染：左侧产物列表
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderList() {
+    const q = state.filter.trim().toLowerCase();
+    const items = state.exports.filter((it) => {
+        if (!q) return true;
+        return [it.task_id, it.CPMC, it.CPMC_ZH, it.ID, it.relpath, it.KHDH,
+                String(it.version ?? ""), it.mtime_iso]
+            .some((s) => String(s ?? "").toLowerCase().includes(q));
+    });
 
-                const handleClose = () => {
-                    if (confirm('关闭面板？')) {
-                        alert('面板关闭 (演示)');
-                    }
-                };
-                function timestamp2data(timestamp, formatTemplate = 'YYYY-MM-DD HH:mm:ss dddd') {
-                    const ts = Number(timestamp);
-                    if (isNaN(ts) || !isFinite(ts)) return 'Invalid timestamp';
-                    const dateObj = dayjs(ts);
-                    if (!dateObj.isValid()) return 'Invalid date';
-                    return dateObj.format(formatTemplate);
-                }
+    const head = el("div", { class: "panel-head" },
+        el("h2", { text: "产物列表" }),
+        el("span", { class: "count-badge", text: items.length + " / " + state.exports.length }),
+    );
 
+    const search = el("div", { style: "padding:8px 10px 0" },
+        el("input", {
+            type: "search", placeholder: "按 task_id / CPMC / 单号 / 版本 过滤…",
+            value: state.filter, style: "width:100%",
+            oninput: (e) => { state.filter = e.target.value; renderListOnly(); },
+        }));
 
-                // 计算属性：把时间戳和 date 输入的 YYYY-MM-DD 互转
-                const jhrqDate = computed({
-                    get() {
-                        const ts = Number(formData.JHRQ);
-                        if (!ts) return '';
-                        const d = dayjs(ts);
-                        return d.isValid() ? d.format('YYYY-MM-DD') : '';
-                    },
-                    set(val) {
-                        if (!val) { formData.JHRQ = 0; return; }
-                        const d = dayjs(val);
-                        formData.JHRQ = d.isValid() ? d.valueOf() : 0;
-                    }
-                });
+    const box = el("div", { class: "items", id: "itemsBox" });
+    if (!state.exports.length) {
+        box.append(el("div", { class: "empty-state", style: "padding:22px 12px" },
+            el("div", { text: state.scanOk ? "processed/ 下还没有 ERP_*.json" : "未连上服务端" })));
+    }
+    for (const it of items) {
+        const active = state.currentMeta && state.currentMeta.relpath === it.relpath;
+        const badges = el("div", { class: "l3" });
+        if (it.broken) {
+            badges.append(el("span", { class: "badge bad", text: "文件损坏" }));
+        } else {
+            badges.append(it.version === undefined
+                ? el("span", { class: "badge old", text: "v1（无 version）" })
+                : el("span", { class: "badge v2", text: "v" + it.version }));
+            badges.append(el("span", {
+                class: "badge " + (it.key_count === 59 ? "plain" : "warn"),
+                text: it.key_count + " 键",
+                title: "当前结构 = 59 ERP + 内部字段",
+            }));
+            if (it.superseded) badges.append(el("span", { class: "badge old", text: "已被取代" }));
+        }
+        box.append(el("button", {
+            class: "item" + (active ? " active" : ""),
+            onclick: () => selectExport(it),
+        },
+            el("div", { class: "l1" },
+                el("span", { class: "when", text: it.mtime_iso || "" }),
+                el("div", { class: "spacer" }),
+            ),
+            el("div", { class: "tid", text: it.task_id || "" }),
+            el("div", { class: "cpmc", text: it.CPMC_ZH || it.CPMC || "（无产品名称）" }),
+            badges,
+        ));
+    }
 
-                const wcrqDate = computed({
-                    get() {
-                        const ts = Number(formData.WCRQ);
-                        if (!ts) return '';
-                        const d = dayjs(ts);
-                        return d.isValid() ? d.format('YYYY-MM-DD') : '';
-                    },
-                    set(val) {
-                        if (!val) { formData.WCRQ = 0; return; }
-                        const d = dayjs(val);
-                        formData.WCRQ = d.isValid() ? d.valueOf() : 0;
-                    }
-                });
+    const foot = el("div", { class: "foot", text: state.scanRoot || "(未连接服务端)" });
+    return el("aside", { class: "panel list", id: "listPanel" }, head, search, box, foot);
+}
 
-                // 例子
-                console.log(timestamp2data(1734163200000)); 
+/* 只刷列表，避免每次输入都重建整个页面（会丢焦点） */
+function renderListOnly() {
+    const old = document.getElementById("listPanel");
+    if (!old) return render();
+    old.replaceWith(renderList());
+}
 
-                // 页面加载后自动填充示例数据
-                loadSampleData();
+/* ═══════════════════════════════════════════════════════════════════════
+   渲染：字段值
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderValue(key, value, spec) {
+    const wrap = el("div", { class: "field-value" });
+    const isMissing = !(key in (state.current || {}));
 
-                // 返回模板中需要的数据和方法
-                return {
-                    fileInput,
-                    formData,
-                    timestamp2data,
-                    loadSampleData,
-                    triggerFileInput,
-                    handleFileImport,
-                    handleListSettings,
-                    handleSave,
-                    handleClose
-                    ,jhrqDate,wcrqDate
-                };
-            }
-        });
+    // 勾选框
+    if (typeof value === "boolean") {
+        wrap.append(el("div", { class: "line" },
+            el("span", { class: "chk" },
+                el("span", { class: "box", text: value ? "☑" : "☐" }),
+                el("span", { text: value ? "勾选" : "未勾选" })),
+        ));
+        return wrap;
+    }
 
-        app.mount('#app');
-    </script>
+    // 空值 / null / 缺失
+    if (isEmptyValue(value) && !isMissing) {
+        const d = describeValue(value);
+        wrap.append(el("span", { class: "val " + d.cls, text: d.text }));
+        return wrap;
+    }
+    if (isMissing) {
+        wrap.append(el("span", { class: "val empty", text: "本产物缺失该键" }));
+        return wrap;
+    }
+
+    // 长文本
+    if (isLongText(key, value)) {
+        const open = !!state.openPre[key];
+        const pre = el("pre", { class: "long" + (open ? " open" : ""), text: value });
+        const btn = el("button", {
+            style: "align-self:flex-start;font-size:.76rem;padding:3px 10px",
+            onclick: () => { state.openPre[key] = !open; render(); },
+        }, open ? "收起" : ("展开全文（" + value.length + " 字）"));
+        wrap.append(pre, btn);
+        return wrap;
+    }
+
+    // 普通值 + 枚举校验
+    const line = el("div", { class: "line" });
+    const text = String(value);
+    if (typeof value === "number") {
+        line.append(el("span", { class: "val", text: text }),
+            text.length > 4 ? el("span", { class: "badge plain", text: fmtNum(value) }) : null);
+    } else {
+        line.append(el("span", { class: "val plain", text: text }));
+    }
+
+    const legal = (spec && spec.legal) || [];
+    if (legal.length) {
+        if (legal.includes(text)) {
+            line.append(el("span", { class: "badge ok", text: "字典内" }));
+        } else {
+            line.append(el("span", { class: "badge bad", text: "不在字典枚举内" }));
+            line.querySelector(".val").classList.add("illegal");
+        }
+    }
+    wrap.append(line);
+
+    // 枚举字段：折叠列出合法取值（当前值高亮）—— 对 88 个类别的 CPLB 特别有用
+    if (legal.length) {
+        const listBox = el("div", { class: "legal-list" },
+            legal.map((v) => el("span", { class: "legal-item" + (v === text ? " cur" : ""), text: v })));
+        wrap.append(el("details", { class: "legal" },
+            el("summary", { text: "合法取值（" + legal.length + "）" }), listBox));
+    }
+    return wrap;
+}
+
+function renderField(key, spec, badgeText) {
+    const cur = state.current || {};
+    const missing = !(key in cur);
+    const zh = spec ? spec.label : "";
+    const label = el("div", { class: "field-label" },
+        el("span", { class: "zh", text: (zh || "（字典里没有）") }),
+        el("span", { class: "code", text: key }),
+    );
+    const field = el("div", { class: "field" + (missing ? " missing" : "") }, label,
+        renderValue(key, cur[key], spec));
+    if (badgeText) {
+        label.querySelector(".zh").append(" ", el("span", { class: "badge int", text: badgeText }));
+    }
+    return field;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   渲染：主区
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderSummary() {
+    const m = state.currentMeta || {};
+    const d = structuralDiff();
+    const cur = state.current || {};
+    const kvs = [
+        ["任务ID", m.task_id || "-"],
+        ["配置版本", cur.version === undefined ? "缺（第 1 代产物）" : String(cur.version)],
+        ["文件名", m.filename || "-"],
+        ["产出时间", m.mtime_iso || "-"],
+        ["键统计", d.actualCount + " 个（应有 " + d.erpKeys.length + " ERP"
+            + (d.internalKeys.length ? " + " + d.internalKeys.length + " 内部" : "") + "）"],
+        ["CPLB", cur.CPLB === undefined ? "缺" : String(cur.CPLB || "（空）")],
+        ["TZS / CPSL1", (cur.TZS ?? "缺") + " 款 / " + (cur.CPSL1 ?? "缺")],
+        ["KHDH", cur.KHDH === undefined ? "缺" : (cur.KHDH || "（空）")],
+    ];
+    const panel = el("section", { class: "panel" },
+        el("div", { class: "panel-head" }, el("h2", { text: "本份产物" }),
+            m.superseded ? el("span", { class: "badge old", text: "已被取代" }) : null,
+            m.manual ? el("span", { class: "badge plain", text: "手动导入" }) : null,
+            m.broken ? el("span", { class: "badge bad", text: "文件损坏" }) : null,
+        ),
+        el("div", { class: "summary" },
+            el("div", { class: "kv-grid" },
+                kvs.map(([k, v]) => el("div", { class: "kv" },
+                    el("span", { class: "k", text: k }),
+                    el("span", { class: "v", text: v })))),
+        ),
+    );
+
+    // 结构对照：缺了哪些当前结构的键 —— 旧产物一眼看出差在哪
+    const notes = el("div", { style: "padding:0 16px 14px;display:flex;flex-direction:column;gap:7px" });
+    if (d.missing.length) {
+        notes.append(el("div", { class: "banner warn", style: "margin:0" },
+            el("div", {}, el("b", { text: "缺 " + d.missing.length + " 个 ERP 字段（当前结构有、这份没有）：" })),
+            el("div", { class: "code", style: "font-family:var(--mono);font-size:.76rem", text: d.missing.join(", ") }),
+        ));
+    }
+    if (d.missingInternal.length) {
+        notes.append(el("div", { class: "banner warn", style: "margin:0" },
+            el("b", { text: "缺内部字段：" }), String(d.missingInternal.join(", "))));
+    }
+    if (d.extra.length) {
+        notes.append(el("div", { class: "banner info", style: "margin:0" },
+            el("b", { text: "多出 " + d.extra.length + " 个不在当前结构与内部清单里的键：" }),
+            " " + d.extra.join(", ")));
+    }
+    if (!d.missing.length && !d.extra.length && !d.missingInternal.length) {
+        notes.append(el("div", { class: "banner info", style: "margin:0" },
+            "✅ 键与当前结构完全一致（" + d.erpKeys.length + " ERP + " + d.internalKeys.length + " 内部）"));
+    }
+    if (notes.children.length) panel.append(notes);
+    return panel;
+}
+
+function renderGroups() {
+    const cur = state.current || {};
+    const schema = state.schema;
+    if (!schema) return el("div");
+
+    const groups = schema.groups || [];
+    const groupKeys = new Set(groups.flatMap((g) => g.keys));
+    // 字典里有、但没归组的键 → 落到「其他」，绝不静默丢掉
+    const ungrouped = (schema.erp_fields || []).map((f) => f.key).filter((k) => !groupKeys.has(k));
+
+    const sections = [];
+    for (const g of [...groups, { name: "其他（未归组）", hint: "字典里有但还没归类的字段", keys: ungrouped }]) {
+        const keys = g.keys;
+        if (!keys.length) continue;
+        const fieldCount = keys.filter((k) => k in cur).length;
+        sections.push(el("section", { class: "panel" },
+            el("div", { class: "group-head" },
+                el("h3", { text: g.name }),
+                el("span", { class: "hint", text: g.hint || "" }),
+                el("div", { class: "spacer" }),
+                el("span", { class: "badge " + (fieldCount === keys.length ? "plain" : "warn"),
+                             text: fieldCount + " / " + keys.length + " 有值" }),
+            ),
+            el("div", {}, keys.map((k) => renderField(k, specOf(k)))),
+        ));
+    }
+
+    // 内部导出字段单独成组
+    const internal = schema.internal_fields || [];
+    const ig = schema.internal_group || { name: "内部导出字段", hint: "" };
+    if (internal.length) {
+        sections.push(el("section", { class: "panel group internal" },
+            el("div", { class: "group-head" },
+                el("h3", { text: ig.name }),
+                el("span", { class: "hint", text: ig.hint || "" }),
+                el("div", { class: "spacer" }),
+                el("span", { class: "badge int", text: internal.length + " 个" }),
+            ),
+            el("div", {}, internal.map((f) => renderField(
+                f.key,
+                { label: f.label, legal: [] },
+                f.source === "config_version" ? "配置版本" : null,
+            ))),
+        ));
+    }
+
+    // 多出来的键（当前结构与内部清单都不认识）也要显示，否则会被当成没导出
+    const extra = structuralDiff().extra;
+    if (extra.length) {
+        sections.push(el("section", { class: "panel" },
+            el("div", { class: "group-head" },
+                el("h3", { text: "其他键（不在当前结构里）" }),
+                el("span", { class: "hint", text: "可能是旧版产物留下的键，核对后再决定是否清理" }),
+                el("div", { class: "spacer" }),
+                el("span", { class: "badge warn", text: extra.length + " 个" }),
+            ),
+            el("div", {}, extra.map((k) => renderField(k, specOf(k)))),
+        ));
+    }
+    return el("div", { style: "display:flex;flex-direction:column;gap:14px" }, sections);
+}
+
+function renderRaw() {
+    if (!state.showRaw) return el("span", { class: "hidden" });
+    const json = JSON.stringify(state.current, null, 2);
+    return el("section", { class: "panel" },
+        el("div", { class: "panel-head" },
+            el("h2", { text: "原始 JSON" }),
+            el("span", { class: "hint", style: "font-size:.78rem;color:var(--ink-3)",
+                         text: "键顺序 = 文件里的实际顺序（前 59 个是 ERP 键，位置不许动）" }),
+        ),
+        el("pre", { class: "raw", text: json }),
+    );
+}
+
+function renderEmptyState() {
+    return el("section", { class: "panel" },
+        el("div", { class: "empty-state" },
+            el("h3", { text: "还没有可看的产物" }),
+            el("p", { text: "左边列表是空的。" }),
+            el("ol", {},
+                el("li", {}, "跑一份报价需求：", el("code", { text: "uv run ./scripts/main.py <附件> --customer ngv" })),
+                el("li", {}, "然后点右上角", el("b", { text: "🔄 刷新" })),
+                el("li", {}, "或者点", el("b", { text: "⬆️ 导入 JSON" }), "直接看具体某个文件"),
+            ),
+        ),
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   总渲染
+   ═══════════════════════════════════════════════════════════════════════ */
+function render() {
+    const page = document.getElementById("page");
+    const main = el("main");
+    if (state.currentMeta) {
+        main.append(renderSummary(), renderGroups(), renderRaw());
+    } else {
+        main.append(renderEmptyState());
+    }
+    page.replaceChildren(
+        renderHeader(),
+        el("div", { class: "layout" }, renderList(), main),
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   启动
+   ═══════════════════════════════════════════════════════════════════════ */
+document.getElementById("fileInput").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) importFile(f);
+    e.target.value = "";
+});
+loadFromServer();
+</script>
 </body>
 </html>
