@@ -270,7 +270,7 @@ cd /home/claw/customer-quote-request
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" --customer ngv
 
 # 全量测试（含 NGV 合成用例 + 真实样本回归）
-uv run pytest -q                              # 当前 238 项
+uv run pytest -q                              # 当前 243 项
 
 # 按档案豁免校验产物（推荐 —— 不传 --customer 会误报该客户「本来就空」的字段）
 uv run ./scripts/erp_schema.py --check <ERP.json> --customer ngv

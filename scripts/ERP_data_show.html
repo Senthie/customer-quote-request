@@ -257,6 +257,7 @@ const state = {
     scanError: "",
     current: null,         // 当前选中的产物（原始对象）
     currentMeta: null,     // 列表项（含 relpath / mtime / superseded）
+    validation: null,      // 权威取值校验结果（服务端给 /api/export 带回来的）
     filter: "",
     showRaw: false,
     openPre: {},           // 长文本展开状态 { key: bool }
@@ -352,6 +353,7 @@ async function selectExport(meta) {
         }
         const payload = await res.json();
         state.current = payload.data || {};
+        state.validation = payload.validation || null;
         state.currentMeta = meta;
         state.showRaw = false;
         state.openPre = {};
@@ -360,6 +362,7 @@ async function selectExport(meta) {
         } catch (_) { /* file:// 下可能不允许，忽略 */ }
     } catch (err) {
         state.current = {};
+        state.validation = null;
         state.currentMeta = meta;
         state.currentMeta.loadError = (err && err.message) || String(err);
     }
@@ -373,6 +376,7 @@ function importFile(file) {
         try {
             const data = JSON.parse(e.target.result);
             state.current = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+            state.validation = null;   // 手动导入没有权威校验结果（页面会说明）
             state.currentMeta = {
                 relpath: file.name, filename: file.name,
                 task_id: "(手动导入)", mtime_iso: new Date(file.lastModified).toLocaleString("sv-SE"),
@@ -416,6 +420,26 @@ function specOf(key) {
 function internalSpecOf(key) {
     const list = (state.schema && state.schema.internal_fields) || [];
     return list.find((f) => f.key === key) || null;
+}
+
+/** {字段: {level, message}} —— 来自服务端的**权威**校验结果（erp_schema.validate_result
+ *  原样带过来的当次运行报告）。页面**不自己比枚举**：
+ *  `CPLB` 我们的口径是「编号;名称」，而字典的 legal 列表是 88 个裸名称 ——
+ *  前端拿字符串直接比会把每一份产物的 CPLB 都误标成非法（真踩过，2026-09-24）。 */
+function issueMap() {
+    const map = {};
+    const v = state.validation;
+    if (!v) return map;
+    for (const issue of [...(v.errors || []), ...(v.warnings || [])]) {
+        const f = issue && issue.field;
+        if (!f) continue;
+        const level = issue.level === "error" ? "error" : "warn";
+        // 同一字段多条：error 优先
+        if (!map[f] || (map[f].level === "warn" && level === "error")) {
+            map[f] = { level, message: issue.message || "" };
+        }
+    }
+    return map;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -532,6 +556,19 @@ function renderList() {
                 text: it.key_count + " 键",
                 title: "当前结构 = 59 ERP + 内部字段",
             }));
+            // 当次运行的校验结果（没有报告就不标，别拿现算的吓人）
+            const v = it.validation;
+            if (v) {
+                badges.append(el("span", {
+                    class: "badge " + (v.error ? "bad" : (v.warn ? "warn" : "ok")),
+                    text: v.error || v.warn ? `${v.error}e/${v.warn}w` : "校验通过",
+                    title: "本次运行的取值校验（erp_schema）"
+                        + (it.customer ? "，客户档案 " + it.customer : ""),
+                }));
+            }
+            if (it.customer) {
+                badges.append(el("span", { class: "badge plain", text: it.customer }));
+            }
             if (it.superseded) badges.append(el("span", { class: "badge old", text: "已被取代" }));
         }
         box.append(el("button", {
@@ -610,22 +647,30 @@ function renderValue(key, value, spec) {
     }
 
     const legal = (spec && spec.legal) || [];
-    if (legal.length) {
-        if (legal.includes(text)) {
-            line.append(el("span", { class: "badge ok", text: "字典内" }));
-        } else {
-            line.append(el("span", { class: "badge bad", text: "不在字典枚举内" }));
-            line.querySelector(".val").classList.add("illegal");
+    const issue = issueMap()[key];
+    if (issue) {
+        // 权威校验结果：error 红 / warn 黄，带后端给的原因
+        line.append(el("span", {
+            class: "badge " + (issue.level === "error" ? "bad" : "warn"),
+            text: issue.level === "error" ? "校验 error" : "校验 warn",
+            title: issue.message,
+        }));
+        if (issue.message) {
+            wrap.append(el("div", {
+                style: "font-size:.77rem;color:" + (issue.level === "error"
+                    ? "var(--bad)" : "var(--warn)") + ";line-height:1.45",
+                text: issue.message,
+            }));
         }
     }
     wrap.append(line);
 
-    // 枚举字段：折叠列出合法取值（当前值高亮）—— 对 88 个类别的 CPLB 特别有用
+    // 枚举字段：折叠列出字典里的合法取值，纯参考（**不做判定** —— 认定交给 erp_schema）
     if (legal.length) {
         const listBox = el("div", { class: "legal-list" },
             legal.map((v) => el("span", { class: "legal-item" + (v === text ? " cur" : ""), text: v })));
         wrap.append(el("details", { class: "legal" },
-            el("summary", { text: "合法取值（" + legal.length + "）" }), listBox));
+            el("summary", { text: "字典合法取值（" + legal.length + "）" }), listBox));
     }
     return wrap;
 }
@@ -649,6 +694,23 @@ function renderField(key, spec, badgeText) {
 /* ═══════════════════════════════════════════════════════════════════════
    渲染：主区
    ═══════════════════════════════════════════════════════════════════════ */
+/** 取值校验徽章 —— 用服务端权威结果（run_report 最可信） */
+function validBadge() {
+    const v = state.validation;
+    if (!v) return el("span", { class: "badge plain", text: "无校验结果" });
+    const e = (v.errors || []).length;
+    const w = (v.warnings || []).length;
+    if (v.source === "unavailable") return el("span", { class: "badge warn", text: "校验不可用" });
+    const src = v.source === "run_report"
+        ? ("本次运行报告" + (v.customer ? "·客户 " + v.customer : ""))
+        : "现场重算（未按档案豁免）";
+    return el("span", {
+        class: "badge " + (e ? "bad" : (w ? "warn" : "ok")),
+        text: "校验 " + e + " error / " + w + " warn（" + src + "）",
+        title: v.note || "",
+    });
+}
+
 function renderSummary() {
     const m = state.currentMeta || {};
     const d = structuralDiff();
@@ -669,6 +731,7 @@ function renderSummary() {
             m.superseded ? el("span", { class: "badge old", text: "已被取代" }) : null,
             m.manual ? el("span", { class: "badge plain", text: "手动导入" }) : null,
             m.broken ? el("span", { class: "badge bad", text: "文件损坏" }) : null,
+            validBadge(),
         ),
         el("div", { class: "summary" },
             el("div", { class: "kv-grid" },

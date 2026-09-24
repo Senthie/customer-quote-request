@@ -147,6 +147,74 @@ def read_config_version() -> Optional[int]:
 
 
 # ── 扫描 ────────────────────────────────────────────────────────────────
+def _sibling_validation(export_path: Path) -> Optional[dict[str, Any]]:
+    """找产物同目录下的 `*.validation.json`（当次运行的权威校验报告）。
+
+    注意：报告的文件名跟着**输入文件**（`<附件名>.validation.json`），
+    不跟产物名（`ERP_<task_id>_<时间戳>.json`）—— 所以只能按目录找，不能按 stem 配。
+    一个任务目录正常情况下恰好一份；多份取最新的。
+    """
+    try:
+        cands = [p for p in export_path.parent.glob("*.validation.json") if p.is_file()]
+    except OSError:
+        return None
+    if not cands:
+        return None
+    newest = max(cands, key=lambda p: p.stat().st_mtime)
+    try:
+        with open(newest, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001 —— 报告坏了不该影响看产物
+        return None
+
+
+def build_validation_payload(export_path: Path, data: dict[str, Any]) -> dict[str, Any]:
+    """这份产物的取值校验结果。
+
+    ★ 为什么不让页面自己比枚举（真踩过的坑，2026-09-24）：
+      `CPLB` 我们的口径是「编号;名称」（`26.01;普通蛇圈书`），而 `legal_values("CPLB")`
+      返回的是树里 88 个**裸名称**。页面拿字符串直接比 → **每一份产物的 CPLB 都会被
+      误标成「不在字典枚举内」**。真正认可这种写法的是 `erp_schema.validate_result()`
+      （它按 `;` 切出编号再查树）。所以：校验只有一个权威实现，页面只负责显示。
+
+    取值优先级：
+      1. 产物同目录的 `*.validation.json` —— **当次运行**的权威报告（含客户档案豁免）
+      2. 没有报告（旧产物 / 手动导入）→ 现算一次，但要标明「未按客户档案豁免必填」
+    """
+    issues_module = _load_module("erp_schema")
+    internal_keys = [f["key"] for f in _load_module("internal_fields").load_internal_fields()]
+
+    report = _sibling_validation(export_path)
+    if report is not None:
+        return {
+            "source": "run_report",
+            "customer": report.get("customer"),
+            "checked_fields": report.get("checked_fields"),
+            "errors": report.get("errors") or [],
+            "warnings": report.get("warnings") or [],
+            "reminders": report.get("reminders") or [],
+            "note": None,
+        }
+
+    try:
+        issues = issues_module.validate_result(data, internal_fields=internal_keys)
+    except Exception as exc:  # noqa: BLE001 —— 校验器出错不该让产物看不了
+        return {"source": "unavailable", "customer": None, "checked_fields": None,
+                "errors": [], "warnings": [], "reminders": [],
+                "note": f"现算校验失败: {type(exc).__name__}: {exc}"}
+    return {
+        "source": "recomputed",
+        "customer": None,
+        "checked_fields": len([k for k in data if k not in internal_keys]),
+        "errors": [i for i in issues if i.get("level") == "error"],
+        "warnings": [i for i in issues if i.get("level") != "error"],
+        "reminders": [],
+        "note": "无当次运行报告（旧产物或手动导入）→ 现场重算，**未按客户档案豁免必填**"
+                "（如 NGV 的 KHDH 本来就该空）；有 error 先看是不是这个原因。",
+    }
+
+
 def _summarize(path: Path, root: Path) -> dict[str, Any]:
     """读一份产物，抽出列表页要用的摘要。文件坏了也要能列出来（标 broken）。"""
     rel = path.relative_to(root)
@@ -163,6 +231,21 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         "superseded": any(p.startswith(SUPERSEDED_PREFIX) for p in rel.parts),
         "broken": None,
     }
+
+    # 当次运行的校验报告（有就带上，列表页能一眼看出哪份有 error）
+    report = _sibling_validation(path)
+    if report is not None:
+        summary = report.get("summary") or {}
+        item["customer"] = report.get("customer")
+        item["validation"] = {
+            "source": "run_report",
+            "error": int(summary.get("error") or 0),
+            "warn": int(summary.get("warn") or 0),
+        }
+    else:
+        item["customer"] = None
+        item["validation"] = None
+
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -312,7 +395,15 @@ class Handler(SimpleHTTPRequestHandler):
                     data = json.load(f)
             except Exception as exc:  # noqa: BLE001
                 return self._send_error_json(f"解析失败: {type(exc).__name__}: {exc}", 422)
-            return self._send_json({"relpath": relpath, "data": data})
+            if not isinstance(data, dict):
+                return self._send_error_json(
+                    f"顶层不是对象（是 {type(data).__name__}），看不了字段", 422)
+            return self._send_json({
+                "relpath": relpath,
+                "data": data,
+                # 取值校验用权威实现（erp_schema.validate_result），页面不自己比枚举
+                "validation": build_validation_payload(target, data),
+            })
         if route == "/api/schema":
             return self._send_json(build_schema_payload())
 

@@ -282,8 +282,80 @@ def test_页面调用的接口都存在():
 def test_页面认得出内部字段与空值口径():
     html = PAGE_PATH.read_text(encoding="utf-8")
     assert "null（空值）" in html, "「无」→ JSON null 的展示口径"
-    assert "不在字典枚举内" in html, "非法枚举值要标出来"
     assert "已被取代" in html, "_superseded 目录要标出来"
+    assert "校验 error" in html and "校验 warn" in html, "要能显示权威校验结果"
+
+
+def test_页面不自己判定枚举合法性():
+    """回归（2026-09-24 真 bug）：页面曾拿值直接和字典 legal 列表比字符串，
+    而 `CPLB` 我们的口径是「编号;名称」、字典里是 88 个**裸名称** →
+    **每一份产物的 CPLB 都被误标成「不在字典枚举内」**。
+    认定必须交给 erp_schema.validate_result（它按 `;` 切编号查树），页面只显示结论。
+    """
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "legal.includes(text)" not in html, "别在前端重写枚举判定"
+    assert "不在字典枚举内" not in html, "前端不该有这种判定文案"
+    assert "校验 error" in html, "应改为显示服务端给的校验结论"
+
+
+def test_校验载荷_优先用当次运行报告(tmp_path):
+    """产物同目录有 `*.validation.json`（文件名跟**输入**、不跟产物名）→ 原样采用。"""
+    p = _make_export(tmp_path, "t1", {"CPDL": "书版", "version": 2})
+    report = {"customer": "ngv", "checked_fields": 63,
+              "errors": [], "warnings": [], "summary": {"error": 0, "warn": 0},
+              "reminders": [{"kind": "offer_deadline_expired"}]}
+    (p.parent / "QUOTE.validation.json").write_text(
+        json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    payload = ev.build_validation_payload(p, {"CPDL": "书版", "version": 2})
+    assert payload["source"] == "run_report"
+    assert payload["customer"] == "ngv"
+    assert payload["errors"] == [] and payload["warnings"] == []
+    assert payload["note"] is None, "用了权威报告就不需要免责声明"
+
+    # 列表摘要也要带上客户与 error/warn 计数
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["customer"] == "ngv"
+    assert item["validation"] == {"source": "run_report", "error": 0, "warn": 0}
+
+
+def test_校验载荷_报告坏掉不影响看产物(tmp_path):
+    p = _make_export(tmp_path, "t2", {"CPDL": "书版"})
+    (p.parent / "QUOTE.validation.json").write_text("{ 坏 json", encoding="utf-8")
+    payload = ev.build_validation_payload(p, {"CPDL": "书版"})
+    assert payload["source"] == "recomputed", "报告坏了应回退到现算，而不是报错"
+    assert payload["note"], "回退时必须说明「未按客户档案豁免」"
+
+
+def test_校验载荷_无报告时现算并声明局限(tmp_path):
+    p = _make_export(tmp_path, "t3", {"CPDL": "书版", "KHDH": ""})
+    payload = ev.build_validation_payload(p, {"CPDL": "书版", "KHDH": ""})
+    assert payload["source"] == "recomputed"
+    assert "未按客户档案豁免" in payload["note"]
+    assert payload["customer"] is None
+
+
+def test_校验载荷_CPLB编号写法不算非法(tmp_path):
+    """★ 这个 bug 的根：CPLB 输出「编号;名称」，字典 legal 是裸名称。
+    权威校验器认得编号写法（按 `;` 切），所以要判为「不是 error」。
+    """
+    p = _make_export(tmp_path, "t4", {"CPLB": "26.01;普通蛇圈书", "version": 2})
+    (p.parent / "QUOTE.validation.json").write_text(
+        json.dumps({"customer": "ngv", "errors": [], "warnings": [],
+                    "summary": {"error": 0, "warn": 0}}, ensure_ascii=False),
+        encoding="utf-8")
+    payload = ev.build_validation_payload(p, {"CPLB": "26.01;普通蛇圈书", "version": 2})
+    assert payload["errors"] == [], f"CPLB 编号写法不许判 error: {payload['errors']}"
+
+    # 现算那条路也不许把编号写法判成 error
+    (p.parent / "QUOTE.validation.json").unlink()
+    payload2 = ev.build_validation_payload(p, {"CPLB": "26.01;普通蛇圈书", "version": 2})
+    assert [i for i in payload2["errors"] if i.get("field") == "CPLB"] == [], payload2["errors"]
+
+    # 而真正不存在的编号必须报出来（否则就是漏判）
+    payload3 = ev.build_validation_payload(
+        p, {"CPLB": "99.99;不存在的类别", "version": 2})
+    assert [i for i in payload3["errors"] if i.get("field") == "CPLB"], payload3["errors"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -346,6 +418,9 @@ def test_http_export_返回内容(viewer):
     assert payload["data"]["CPMC"] == "产品甲"
     assert payload["data"]["CPSX"] is None, "「无」→ null 要原样带过来"
     assert payload["data"]["version"] == 2
+    # 取值校验由服务端权威实现给出，页面只显示
+    assert "validation" in payload, "要带上校验结果，页面不自己判枚举"
+    assert payload["validation"]["source"] in {"run_report", "recomputed", "unavailable"}
 
 
 def test_http_export_拒绝越界(viewer):

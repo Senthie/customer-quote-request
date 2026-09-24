@@ -855,8 +855,8 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
 | 接口 | 作用 |
 |------|------|
 | `GET /` | 页面本体（`scripts/ERP_data_show.html`） |
-| `GET /api/exports` | 递归扫描结果（每份产物的摘要，**最新的在前**） |
-| `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON（`path` 做 resolve 后前缀校验，出不了 `processed/`） |
+| `GET /api/exports` | 递归扫描结果（每份产物的摘要，**最新的在前**）+ 当次运行的校验计数与客户档案 |
+| `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON + **权威取值校验结果**（`validation`） |
 | `GET /api/schema` | ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组 |
 
 **页面能看出什么**
@@ -865,8 +865,10 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
   一致 / 不一致 / 产物根本没有 `version`（= 第 1 代口径）三种状态分开显示。
 - **结构对照**：这份产物 vs 当前 59 键结构 —— 缺了哪些键、多出哪些键、内部字段缺哪几个。
   历史产物（40 键的手填单、59 键的中间版本）都能正常打开，缺失处明确标注而不是留白。
-- **枚举校验**：下拉字段的取值不在 `erp_form_schema.yaml` 合法枚举内 → 标红「不在字典枚举内」，
-  并可展开看该字段的完整合法取值（`CPLB` 88 个类别、`DWMC` 65 个单位都在这）。
+- **取值校验**：显示 `erp_schema.validate_result()` 的结论（见下「刻意设计 5」）——
+  顶部「校验 0 error / 0 warn（本次运行报告·客户 ngv）」徽章，有问题的字段行单独标
+  `校验 error` / `校验 warn` 并带出后端给的原因原文。
+- **枚举参考**：折叠列出字典里的合法取值（`CPLB` 88 类、`DWMC` 65 单位），**纯参考、不做判定**。
 - **空值口径**：`null` 显示成「null（空值）」，跟空字符串「（空字符串）」区分开（§4.9）。
 - **`Reminder`**：非空时页面顶部弹醒目横幅。
 - **已被取代**：`_superseded_*` 目录下的产物带「已被取代」标记。
@@ -881,6 +883,17 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
    没归组的会落到「其他（未归组）」组，仍然可见。
 3. **字段元数据来自 `assets/erp_form_schema.yaml`**，不另抄一份（测试比对同源）。
 4. **容错**：坏 JSON 也列出来并标「文件损坏」，不让用户以为「没产出」。
+5. ★ **取值校验只有一份实现，页面只负责显示**。
+   页面**不许**自己拿值和字典的 `legal` 列表比字符串 —— `CPLB` 我们的口径是「编号;名称」
+   （`26.01;普通蛇圈书`），而字典 `legal` 是树里 88 个**裸名称**，前端直接比会把
+   **每一份产物的 `CPLB` 都误标成非法**（这个 bug 真的写出来过，2026-09-24 用 jsdom 实跑才发现）。
+   `erp_schema.validate_result()` 才是权威（它按 `;` 切编号再查树）。
+   服务端给 `/api/export` 带一个 `validation` 段，取值优先级：
+   - `source: run_report` —— 产物同目录的 `*.validation.json`（**当次运行**的原始报告，
+     含客户档案豁免，最可信）。注意报告文件名跟**输入文件**、不跟产物名，只能按目录找。
+   - `source: recomputed` —— 没有报告（旧产物 / 手动导入）→ 现场重算，并**明确标注**
+     「未按客户档案豁免必填」（NGV 的 `KHDH` 本来就该空，会误报）。
+   - `source: unavailable` —— 校验器本身出错，如实标注，不让产物看不了。
 
 > ⚠️ 页面按字典（`erp_form_schema.yaml`）顺序渲染；产物按模板（`add_customer_quote_request.json`）
 > 顺序落盘。两者**集合相同、顺序不同**（模板管位置、字典管语义），不要去强行对齐 ——
@@ -1026,7 +1039,7 @@ customer-quote-request/
 │   ├── uuid_utils.py              # UUID4
 │   ├── xlsx2csv.py                # Excel → CSV
 │   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
-├── tests/                         # 238 项测试（uv run pytest）
+├── tests/                         # 243 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
@@ -1293,10 +1306,23 @@ uv run pytest tests/test_pipeline.py -v
   `_superseded_*` 标记、`?path=` 深链接。
 - 字段分组放在 `erp_viewer.py` 的 `FIELD_GROUPS`，并有测试断言
   「恰好覆盖 59 个字段各一次」—— 防止加了字段却漏配分组、页面上悄悄不显示。
+- **取值校验只有一个实现**（同日修掉的真 bug）：页面最初自己拿值和字典 `legal` 列表比字符串，
+  而 `CPLB` 我们的口径是「编号;名称」、字典里是 88 个裸名称 →
+  **每一份产物的 `CPLB` 都被误标成「不在字典枚举内」**。改为服务端调用权威的
+  `erp_schema.validate_result()`，`/api/export` 带回 `validation` 段（优先用产物同目录的
+  当次运行报告 `*.validation.json`，没有则现算并声明「未按客户档案豁免」），页面只显示结论。
+  ⚠️ 这个 bug 是**用 jsdom 真跑页面**才发现的 —— 静态看一眼不会发现，因为文案和渲染都「正常」。
 
-**3) 测试 210 → 238 项**（新增 `tests/test_viewer.py`）。
+**3) 测试 210 → 243 项**（新增 `tests/test_viewer.py`）。
 顺手修掉一个真 bug：`scan_exports(root=PROCESSED_DIR)` 的默认参数在**定义时**就固化了，
 导致 `--dir` 与测试 monkeypatch 全部失效 → 改成默认 `None`、函数内回落。
+
+**4) 重跑上一单实单（业务要求）**
+
+`version` 加好后，PR-00091345 那单的产物**仍是旧版**（无 `version`）——
+只跑新样本做验证是不够的，交付物必须重跑：新任务 `3cf2194baaf24cc99c2ef75775d5bf05`，
+59 个 ERP 字段与上一版**逐字节一致**，`version: 2`，`CPMS` 由 agent 手写补齐（2128 字），
+旧产物归档到 `_superseded_20260924/afcc93fd…/`。
 
 ### 1.0.23 详细变更 —— 提醒固化 + 「无」落 `null`
 
