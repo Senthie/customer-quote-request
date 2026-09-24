@@ -4,6 +4,9 @@
 # 背景（业务 2026-09-24）：
 #   * 「导出现在缺少一份内部导出字段 ID，该字段标注我们的当前执行的任务，方便日志维护」
 #   * 「将 CPMC 修改为存英文表达，使用 CPMC_ZH 来标注中文表达」
+#   * 「给导出的 json 再添加一个字段 version，标识当前配置的版本，目前设置版本为 2」
+#
+#   当前清单：ID / CPMC_ZH / Reminder / version（= 本文件 fields: 的顺序 = 产物顺序）
 #
 # 这些东西 ERP 字典里都没有（`uv run ./scripts/erp_schema.py --field ID` 查不到），
 # 所以它们**不属于那 59 键**，规则如下：
@@ -63,3 +66,18 @@ fields:
     notes: >-
       报价截止日期过期等需要业务确认的事项。跑完也会打在 stdout 末尾的醒目块里。
       没有待办时为空字符串。
+
+  # ── version：配置版本（哪一代口径跑出来的）────────────────────────────
+  # 业务 2026-09-24：「给导出的 json 再添加一个字段 version，标识当前配置的版本，
+  # 目前设置版本为 2，这样方便我们的技能迭代」。
+  # 取值来源 = 客户档案顶层 `version:`（公共默认值写在 customers/_defaults.yaml，
+  # 客户档案可覆盖）—— 所以它标记的是**跑出这份产物的那份档案配置**，不是脚本版本。
+  # 口径一变就 +1；历史产物没有这个字段（= 第 1 代口径）。
+  # 实现：`source: config_version` → main.py 从 CustomerProfile.version 取。
+  - key: version
+    label: 配置版本
+    source: config_version
+    notes: >-
+      当前配置（客户档案）的版本号。业务看产物时靠它判断是哪一代口径，
+      不用去翻日志或 git。改口径 → customers/_defaults.yaml 的 version +1。
+      --strip-internal 时一起去掉（它也是我方自用字段，ERP 字典里没有）。

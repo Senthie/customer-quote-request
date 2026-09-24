@@ -1283,6 +1283,9 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
         "task_id": task_id,
         "cpmc_zh": cpmc_zh,
         "reminder": reminder_text,
+        # 配置版本：来自客户档案顶层 version（公共默认值在 customers/_defaults.yaml）。
+        # 业务 2026-09-24：产物要能一眼看出是哪一代口径跑出来的，方便技能迭代。
+        "config_version": profile.version,
     }
     for spec in internal_fields:
         key, source = str(spec["key"]), str(spec.get("source", ""))

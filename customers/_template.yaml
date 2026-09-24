@@ -17,6 +17,10 @@ id: NEWCUSTOMER              # 必填，与文件名一致，小写
 name: 新客户名称              # 必填，用于日志/报告
 priority: 10                 # 自动识别冲突时的优先级，越大越优先
 status: draft                # draft | calibrated
+# version 不用写 —— 从 customers/_defaults.yaml 继承（当前 = 2）。
+# 它决定产物内部字段 `version` 的值（业务 2026-09-24 要的「当前配置的版本」）。
+# 只有「这个客户的口径单独分叉了」才需要在这里覆盖；改口径就 +1。
+# version: 2
 notes: >
   一句话说明这个客户的报价单长什么样（表格布局、语言、单位习惯）。
 

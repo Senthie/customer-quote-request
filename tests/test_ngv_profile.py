@@ -471,7 +471,7 @@ def test_真实样本_产出与模板键完全一致():
         keys = [k for k in result if not k.startswith("_")]
         assert keys == template_keys, f"{pair['order']} 的 ERP 键顺序/数量与模板不一致"
         # 内部字段在 step6 才追加（map_fields 只产出 59 键 + 下划线键）
-        assert internal_keys == ["ID", "CPMC_ZH", "Reminder"]
+        assert internal_keys == ["ID", "CPMC_ZH", "Reminder", "version"]
 
 
 # ── 端到端：客户识别必须看正文 ──────────────────────────────────────────

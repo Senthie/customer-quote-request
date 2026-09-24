@@ -8,6 +8,8 @@ internal_fields.py - 内部导出字段（我方自用，不是 ERP 表单字段
 用途（业务 2026-09-24）：
   * `ID`      —— 标注本次执行的任务，方便「产物 ↔ 日志」对回去
   * `CPMC_ZH` —— 产品名称的中文表达（`CPMC` 只放英文表达）
+  * `Reminder`—— 给业务的提醒（如报价截止日已过期）
+  * `version` —— 当前配置的版本，方便技能迭代时辨认产物出自哪一代口径
 
 用法：
     from internal_fields import load_internal_fields, internal_field_keys

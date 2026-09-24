@@ -181,6 +181,10 @@ class CustomerProfile:
     name: str
     priority: int
     status: str
+    # 配置版本（业务 2026-09-24）：产物内部字段 `version` 的取值来源。
+    # 公共默认值在 customers/_defaults.yaml（= 2）；客户档案可覆盖。
+    # 历史产物没有这个字段 = 第 1 代口径。
+    version: Any
     detect: dict
     fields: dict
     erp_fixed: dict
@@ -207,6 +211,7 @@ class CustomerProfile:
             name=str(raw.get("name", "")).strip(),
             priority=int(raw.get("priority", 0) or 0),
             status=str(raw.get("status", "draft")).strip() or "draft",
+            version=raw.get("version"),
             detect=raw.get("detect") or {},
             fields=raw.get("fields") or {},
             erp_fixed=raw.get("erp_fixed") or {},
@@ -490,6 +495,12 @@ class CustomerProfile:
         if self.status not in ("draft", "calibrated"):
             problems.append(f"status 取值非法: {self.status}（应为 draft / calibrated）")
 
+        # 配置版本（产物内部字段 version 的取值来源）：必须是个正整数
+        if self.version is None:
+            problems.append("缺少 version（配置版本；公共默认值见 customers/_defaults.yaml）")
+        elif not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
+            problems.append(f"version 取值非法: {self.version!r}（应为 >=1 的整数）")
+
         # 规范键校验
         for canonical in self.fields:
             if canonical not in CANONICAL_KEYS:
@@ -599,6 +610,7 @@ class CustomerProfile:
             f"  状态: {self.status}"
             f"{'  ⚠️ 未校准，字段值需人工核对' if not self.is_calibrated else ''}",
             f"  优先级: {self.priority}",
+            f"  配置版本: {self.version}（产物内部字段 version 的取值）",
             f"  文件: {self.source_path or '(内置)'}",
             f"  别名: {len(self._alias_index)} 条 / 规范键 {len(self.fields)} 个",
             f"  布局策略: {self.rule('layout.strategies', [])}",

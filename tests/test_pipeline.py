@@ -82,7 +82,8 @@ def pipeline_run(tmp_path_factory):
 def test_键集合与顺序等于模板(pipeline_run):
     """前 59 键必须与 ERP 模板完全一致（键集合 + 顺序），其后只追加声明的内部字段。
 
-    业务 2026-09-24：产物追加内部字段 `ID`（本次任务）/ `CPMC_ZH`（产品名称中文表达）。
+    业务 2026-09-24：产物追加内部字段 `ID`（本次任务）/ `CPMC_ZH`（产品名称中文表达）
+    / `Reminder`（给业务的提醒）/ `version`（当前配置的版本）。
     ERP 键一个都不许动位置 —— 下游解析器按位置读。
     """
     from internal_fields import load_internal_fields
@@ -90,7 +91,8 @@ def test_键集合与顺序等于模板(pipeline_run):
     template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
     out = pipeline_run["erp"]
     internal_keys = [str(f["key"]) for f in load_internal_fields()]
-    assert internal_keys == ["ID", "CPMC_ZH", "Reminder"], "内部字段的键与顺序由声明文件决定"
+    assert internal_keys == ["ID", "CPMC_ZH", "Reminder", "version"], \
+        "内部字段的键与顺序由声明文件决定"
 
     assert list(out) == list(template) + internal_keys
     assert list(out)[:59] == list(template), "59 个 ERP 键的位置不许动"
@@ -162,11 +164,11 @@ def test_未触碰字段等于模板默认值(pipeline_run):
         assert out[key] == template[key], f"{key}: 不应被脚本改写"
 
 
-# ── 内部导出字段：ID / CPMC_ZH（业务 2026-09-24）──────────────────────
+# ── 内部导出字段：ID / CPMC_ZH / Reminder / version（业务 2026-09-24）──
 def test_step6_内部字段追加与_strip_internal(tmp_path):
     """两种输出模式都要对：
 
-    * 默认       → 59 个 ERP 键 + 追加内部字段（`ID` / `CPMC_ZH`）
+    * 默认       → 59 个 ERP 键 + 追加内部字段（`ID` / `CPMC_ZH` / `Reminder` / `version`）
     * --strip    → 只有 59 个 ERP 键（给「ERP 导入端不收未知字段」兜底）
 
     直接调 step6（不跑子进程），逐键核对顺序与取值。
@@ -177,7 +179,7 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
 
     template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
     tpl_keys = list(template)
-    internal_keys = ["ID", "CPMC_ZH", "Reminder"]
+    internal_keys = ["ID", "CPMC_ZH", "Reminder", "version"]
     profile = load_profile("ngv")
 
     def _run(tag: str, strip: bool, cpmc_zh: str, deadline: dict | None = None) -> dict:
@@ -205,6 +207,10 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
     # Reminder：把「每次跑都会自动出来」的提醒固化进产物（业务 2026-09-24）
     assert "已过期 90 天" in erp["Reminder"], erp["Reminder"]
     assert "还要报价" in erp["Reminder"], erp["Reminder"]
+    # version：标识当前配置的版本，方便技能迭代时辨认产物出自哪一代口径
+    # （业务 2026-09-24「目前设置版本为 2」）。取值来自客户档案顶层 version。
+    assert erp["version"] == 2, erp["version"]
+    assert erp["version"] == profile.version
     for key in tpl_keys:
         assert key in erp, key
 

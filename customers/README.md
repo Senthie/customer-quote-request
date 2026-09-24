@@ -53,11 +53,13 @@ uv run ./scripts/main.py <样本文件> --customer <新客户id>
 必须看到两行才算通过：
 
 ```
-字段一致性断言: 通过（ERP 59 字段顺序与模板一致，其后追加内部字段 ['ID', 'CPMC_ZH']）
+字段一致性断言: 通过（ERP 59 字段顺序与模板一致，其后追加内部字段 ['ID', 'CPMC_ZH', 'Reminder', 'version']）
 选定客户档案: <新客户id>（来源: 显式指定 | 自动识别）
 ```
 
 再逐个核对输出 JSON 的字段值是否合理（`CPMS` 除外 —— 那个永远由 agent 手写）。
+想看产物结构对不对，跑 `uv run ./scripts/erp_viewer.py` 在浏览器里看（SKILL.md 4.10）：
+它会标出「缺哪些键 / 多哪些键 / 哪个值不在 ERP 枚举里」。
 
 **有权威 ERP 导出时**（客户给的「标准答案」），做一次分类对照 —— 这是最省时间的
 一步，它会把差异分成「口径已定 / 0 与空 / ⚠️ 需要核对 / ERP 侧多出的键」：
@@ -147,5 +149,7 @@ rules:
    `materials` / `cplb.map` 的节点编号等）。写错的值导入时会被静默丢弃 ——
    历史单据 `ZDFS="无线胶装"` 就是这么错的，合法值是 `胶装/PAD书`。
    `main.py` 步骤 5b 会归一化 + 校验并写 `.validation.json`。
-   **万一业务就是要用枚举外的值**（NGV 的 `CPSX=无`）：不许硬报 error，也不许静默放过 ——
-   在档案 `rules.enum_exceptions` 里显式声明 `{field, value, reason}`（见上）。
+   **万一业务说的是「无 / 没有」**：不要往枚举里塞「无」这个非法字符串 ——
+   用 `rules.null_values: ["无"]` 落 JSON `null`（`null` 属空值，天然不触发枚举校验，见 SKILL.md 4.9）。
+   只有「业务坚持要用枚举外的**字符串**值」这种真例外，才用 `rules.enum_exceptions`
+   声明 `{field, value, reason}`（机制保留备用，**目前没有客户在用**）。
