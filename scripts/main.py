@@ -42,6 +42,9 @@ from internal_fields import internal_field_keys, load_internal_fields  # noqa: E
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = REPO_ROOT / "assets" / "add_customer_quote_request.json"
 
+# 客户校准语料库（真实客户原文，**不进仓库** —— .gitignore 里有它）
+SAMPLES_DIR = REPO_ROOT / "customer-files" / "samples"
+
 # 布局/取值兜底常量
 DEFAULT_UNIT = "mm"
 
@@ -1119,6 +1122,36 @@ def move_file(source: Path, dest_dir: Path, new_name: str = None) -> Path:
 
 
 # ── 步骤 ─────────────────────────────────────────────────────────────────
+def sample_run_guard(input_path: Path, args) -> Optional[str]:
+    """语料库样本不许跑进真交付区。返回错误文本 = 拒绝执行；None = 放行。
+
+    为什么是**硬闸**而不是步骤 1 里那句 WARN：`main.py` 跑完会把**输入文件移走**
+    （`[文件 5/5] 原始文件归档`），而 `customer-files/samples/<客户>/` 是 .gitignore
+    掉的**真实客户原文** —— 移走就是永久丢失，相关测试随即大面积 FileNotFoundError。
+    这个坑 2026-09-24 踩了两次；第二次还顺手往 `processed/` 里留下一份 CPMS 为空的
+    「未完成」产物（业务问出来才发现）。当时脚本只打了 WARN 就继续跑了。
+
+    放行条件：把**两个**归档目录都指到语料库之外（`--processed-dir` + `--failed-dir`），
+    也就是 SKILL 第 10 节给的写法。只想抽取/校准就直接用 `extract_fields.py`。
+    """
+    try:
+        input_path.resolve().relative_to(SAMPLES_DIR.resolve())
+    except (ValueError, OSError):
+        return None                     # 不关它的事
+    missing = [flag for flag, value in (("--processed-dir", args.processed_dir),
+                                        ("--failed-dir", args.failed_dir)) if not value]
+    if not missing:
+        return None                     # 两个归档目录都在语料库之外，安全
+    return (
+        f"拒绝执行：输入是语料库样本 —— {input_path}\n"
+        f"  main.py 跑完会把输入文件**移走**归档，而 samples/ 是 .gitignore 掉的客户原文，丢了找不回。\n"
+        f"  要么把归档目录指到语料库之外（缺 {' '.join(missing)}）：\n"
+        f"      uv run ./scripts/main.py \"{input_path}\" -c <客户> \\\n"
+        f"          --processed-dir /tmp/cqr_scratch/processed --failed-dir /tmp/cqr_scratch/failed\n"
+        f"  要么只做抽取/校准（不动原文件）：uv run ./scripts/extract_fields.py \"{input_path}\" -c <客户>"
+    )
+
+
 def step1_input_validation(input_path: Path, logger: Logger) -> bool:
     logger.section("步骤 1: 输入验证")
     logger.info(f"输入文件: {input_path}")
@@ -1443,6 +1476,12 @@ def main():
 
     processed_dir = Path(args.processed_dir) if args.processed_dir else customer_files_dir / "processed"
     failed_dir = Path(args.failed_dir) if args.failed_dir else customer_files_dir / "failed"
+
+    # 语料库样本不许跑进真交付区（会把客户原文移走 + 留下未完成产物）
+    guard_error = sample_run_guard(input_path, args)
+    if guard_error:
+        print(f"!! {guard_error}", file=sys.stderr)
+        return 1
 
     log_dir = REPO_ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

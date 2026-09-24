@@ -91,6 +91,7 @@
         .banner.info { background: #eef4fd; border-color: #c3d8f3; color: #1c4a86; }
         .banner.warn { background: var(--warn-bg); border-color: #f0d09a; color: var(--warn); }
         .banner.bad  { background: var(--bad-bg); border-color: #f0b9bc; color: var(--bad); }
+        .banner .gate { margin-top: 3px; padding-left: 2px; }
         .banner code {
             font-family: var(--mono); font-size: .8rem;
             background: rgba(0,0,0,.05); padding: 1px 5px; border-radius: 5px;
@@ -258,6 +259,7 @@ const state = {
     current: null,         // 当前选中的产物（原始对象）
     currentMeta: null,     // 列表项（含 relpath / mtime / superseded）
     validation: null,      // 权威取值校验结果（服务端给 /api/export 带回来的）
+    incomplete: null,      // 交付闸门：CPMS 未写 / 中文品名占位符（服务端算，页面只显示）
     filter: "",
     showRaw: false,
     openPre: {},           // 长文本展开状态 { key: bool }
@@ -354,6 +356,7 @@ async function selectExport(meta) {
         const payload = await res.json();
         state.current = payload.data || {};
         state.validation = payload.validation || null;
+        state.incomplete = payload.incomplete || [];
         state.currentMeta = meta;
         state.showRaw = false;
         state.openPre = {};
@@ -363,6 +366,7 @@ async function selectExport(meta) {
     } catch (err) {
         state.current = {};
         state.validation = null;
+        state.incomplete = null;   // 取不到产物 → 交付状态未知，不瞎标
         state.currentMeta = meta;
         state.currentMeta.loadError = (err && err.message) || String(err);
     }
@@ -377,6 +381,7 @@ function importFile(file) {
             const data = JSON.parse(e.target.result);
             state.current = data && typeof data === "object" && !Array.isArray(data) ? data : {};
             state.validation = null;   // 手动导入没有权威校验结果（页面会说明）
+            state.incomplete = null;   // 交付闸门也只在服务端算 → 手动导入判不了，不瞎标
             state.currentMeta = {
                 relpath: file.name, filename: file.name,
                 task_id: "(手动导入)", mtime_iso: new Date(file.lastModified).toLocaleString("sv-SE"),
@@ -502,6 +507,19 @@ function renderHeader() {
         ));
     }
 
+    // ★ 未完成 · 不得交付 —— 比下面的「提醒」更严重，放上头
+    //   （CPMS / 中文品名这两处脚本刻意不写，管道刚跑完的产物天然是这个状态）
+    if (Array.isArray(state.incomplete) && state.incomplete.length) {
+        const gate = el("div", { class: "banner bad" },
+            el("div", {},
+                el("b", { text: "❗ 未完成 · 不得交付" }),
+                el("span", { text: " —— 产物里还有必须由 agent 亲自补的地方：" })));
+        for (const why of state.incomplete) {
+            gate.append(el("div", { class: "gate", text: "· " + why }));
+        }
+        head.append(gate);
+    }
+
     const reminder = cur.Reminder;
     if (typeof reminder === "string" && reminder.trim() !== "") {
         head.append(el("div", { class: "banner bad" },
@@ -568,6 +586,12 @@ function renderList() {
             }
             if (it.customer) {
                 badges.append(el("span", { class: "badge plain", text: it.customer }));
+            }
+            if (it.incomplete && it.incomplete.length) {
+                badges.append(el("span", {
+                    class: "badge bad", text: "未完成",
+                    title: "不得交付：" + it.incomplete.join("；"),
+                }));
             }
             if (it.superseded) badges.append(el("span", { class: "badge old", text: "已被取代" }));
         }

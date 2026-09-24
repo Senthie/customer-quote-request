@@ -14,7 +14,8 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.24（2026-09-24 产物加内部字段 `version` 标识配置版本；旧查看器按新结构重写并支持自动扫描）
+> **版本：** 1.0.25（2026-09-24 交付闸门落地：`processed/` 只许放补完的产物 —— 语料库样本硬闸
+> + 查看器「未完成」徽章；事故见 §5 末尾）
 
 把**客户发来的报价需求**（邮件标题/正文 + 附件，或直接给的表格/文档）转换成
 **ERP 导入用的 59 字段 JSON**（产物末尾另追加 4 个我方内部字段：`ID` / `CPMC_ZH` / `Reminder` / `version`，
@@ -158,7 +159,7 @@ uv run ./scripts/calibrate_customer.py --customer <新客户id> --file <样本�
 
 ```bash
 uv run ./scripts/main.py <样本文件> --customer <新客户id>
-uv run pytest                                      # 全部测试必须绿（当前 179 项）
+uv run pytest                                      # 全部测试必须绿（当前 259 项）
 
 # 有权威 ERP 导出时，做一次分类对照（差异原因写进 customers/<id>.erp_diff.json）
 uv run ./scripts/compare_with_erp.py --customer <新客户id> \
@@ -425,6 +426,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | **5b** | **按 ERP 表单权威字典归一化 + 校验取值**（`assets/erp_form_schema.yaml`） | `[归一化]`、`[ERP字典] ERROR/WARN`、`校验通过` |
 | 6 | 输出：CSV / 抽取明细 / ERP JSON / **校验报告** / 原始文件归档 | **59 键断言** |
 | 7 | ★ **CPMS 由 agent 亲自撰写**（脚本之外，必做） | 脚本会打印提醒与产物路径 |
+| 8 | ★ **交付前过交付闸门**（1.0.25）：`CPMS` 非空 + `CPMC_ZH` 不含 `【中文品名待定】` | `uv run ./scripts/erp_viewer.py --no-open`（带「未完成」红徽章的就是没补完） |
 
 日志：`logs/quote_request_<时间戳>.log`；任务目录：`customer-files/processed/<task_id>/`。
 
@@ -871,6 +873,10 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
 - **枚举参考**：折叠列出字典里的合法取值（`CPLB` 88 类、`DWMC` 65 单位），**纯参考、不做判定**。
 - **空值口径**：`null` 显示成「null（空值）」，跟空字符串「（空字符串）」区分开（§4.9）。
 - **`Reminder`**：非空时页面顶部弹醒目横幅。
+- ★ **交付闸门**：`CPMS` 没写 / `CPMC_ZH` 还是占位符 `【中文品名待定】` → 列表上打红徽章
+  **「未完成」**、详情页顶部弹 **「❗ 未完成 · 不得交付」** 横幅并逐条列出原因。
+  这两处是脚本**刻意不写**的（agent 的活），所以**管道刚跑完的产物天然是未完成状态** ——
+  以前这个状态只活在文档里，结果一份未完成产物在 `processed/` 里躺了半天（见 §5）。
 - **已被取代**：`_superseded_*` 目录下的产物带「已被取代」标记。
 - 支持 `?path=<相对路径>` 深链接，方便把某一份产物发给别人。
 
@@ -894,6 +900,11 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
    - `source: recomputed` —— 没有报告（旧产物 / 手动导入）→ 现场重算，并**明确标注**
      「未按客户档案豁免必填」（NGV 的 `KHDH` 本来就该空，会误报）。
    - `source: unavailable` —— 校验器本身出错，如实标注，不让产物看不了。
+
+6. ★ **交付闸门同理：服务端算一份（`erp_viewer.py: delivery_gates()`），页面只显示**。
+   `/api/exports` 的每一项带 `incomplete`（空列表 = 可交付），`/api/export` 也带一份。
+   页面**不许**自己判「CPMS 是不是空的」—— 占位符文案改了、或者以后又多一处 agent 手填的字段，
+   前端抄的那份就会跟服务端漂。`tests/test_viewer.py` 有 9 项钉着（含「页面里不许出现第二份判定」）。
 
 > ⚠️ 页面按字典（`erp_form_schema.yaml`）顺序渲染；产物按模板（`add_customer_quote_request.json`）
 > 顺序落盘。两者**集合相同、顺序不同**（模板管位置、字典管语义），不要去强行对齐 ——
@@ -932,6 +943,22 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
 4. **写回** `ERP_<task_id>_<时间戳>.json` 的 `CPMS` 字段
 5. **自检**：`CPMS` 非空；`safety_checks` / `target_age_group` 已写进【安全合规要求】；
    `extras_found` 里的附加信息一条不漏
+6. ★ **交付闸门自检（1.0.25 新增）**：产物落在 `customer-files/processed/<task_id>/`
+   就算「交付区」，`CPMS` 为空 / `CPMC_ZH` 还是 `【中文品名待定】` 的产物**不许留在那里**。
+   查一遍（一条命令）：
+
+   ```bash
+   uv run ./scripts/erp_viewer.py --no-open      # 列表上没写 CPMS 的会带红徽章「未完成」
+   ```
+
+   或者肉眼：`processed/` 里除 `_superseded_*` 外，每份 `ERP_*.json` 的 `CPMS` 都必须非空。
+
+> ★ **未完成产物的事故记录（2026-09-24）**：拿语料库样本试跑管道（`main.py` 直接喂
+> `customer-files/samples/ngv/…`，没把归档目录指到临时区）→ ①样本被移出语料库（gitignored，
+> 差点找不回）②`processed/` 里留下一份 `CPMS=""` + `【中文品名待定】` 的产物。
+> 脚本当时只打了 WARN 就继续跑了。**这个坑踩了两次** → 1.0.25 起 `main.py` 加了硬闸
+> `sample_run_guard()`（见 §10），查看器加了交付闸门徽章（见 §4.10）。
+> 业务是看 `processed/` 时问出来的：「为什么你导出的 json 里会缺少 CPMS？」
 
 > **`CPMS` 为空的 JSON 视为未完成，不得交付。**
 > v2 已删除 `has_safety_checks` / `target_age_group` 两个独立字段 ——
@@ -982,6 +1009,13 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
    ERP 侧多出的键。**只有「需要核对」那一类要人看**；退出码 = 该类差异条数，
    可以当门禁。白名单是 `customers/<id>.erp_diff.json`（每条都写明为什么该不同，
    改口径时同步它，免得差异报告被噪音淹没）。
+
+6. ★ **交付闸门**（1.0.25 新增）—— 上面 5 步都过了还不够：产物里有两处是**脚本刻意不写**的
+   （`CPMS`、`CPMC_ZH` 里的中文品名），必须 agent 亲手补完才算「可交付」。一条命令看：
+   ```bash
+   uv run ./scripts/erp_viewer.py --no-open    # 列表上带红徽章「未完成」的就是还没补
+   ```
+   判据与展示见 §4.10 的交付闸门；事故来历见 §5 末尾。
 
 > **实战案例（2026-05，v1 时期）：** processed 里某份 ERP JSON 的 `ZDFS="无线胶装"` /
 > `DWMC="本"` / `CPLX="新产品"`，而 `main.py` 对前三个字段**根本没有任何赋值语句** →
@@ -1039,7 +1073,7 @@ customer-quote-request/
 │   ├── uuid_utils.py              # UUID4
 │   ├── xlsx2csv.py                # Excel → CSV
 │   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
-├── tests/                         # 243 项测试（uv run pytest）
+├── tests/                         # 259 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
@@ -1165,14 +1199,26 @@ uv run pytest tests/test_pipeline.py -v
   来源 `Senthie/customer-quote-request`）。执行这些命令前先备份仓库副本，或摘掉 hub 登记项（见 TODO）。
 - ⚠️ **别拿语料库里的原始文件直接跑 `main.py`** —— 跑完会把输入**移走**（归档进任务目录，
   `[文件 5/5] 原始文件归档`），`customer-files/samples/<客户>/` 就被破坏，相关测试随即大面积报
-  `FileNotFoundError`。要跑就先复制一份到临时目录，或者把归档目标指到别处：
+  `FileNotFoundError`。**1.0.25 起这里已经是硬闸**（`main.py: sample_run_guard()`）：
+  输入在 `customer-files/samples/` 下、而归档目录没全指到外面 → **直接拒绝执行**（退出码 1），
+  并把可照抄的命令打出来。放行条件是 `--processed-dir` **和** `--failed-dir` **都**指到语料库之外
+  （只指一个不够：失败时文件照样会被移进默认的 `failed/`）。
 
   ```bash
-  # ✅ 想让样本原地不动：把归档目录也指到临时区
+  # ✅ 想让样本原地不动：两个归档目录都指到临时区
   uv run ./scripts/main.py "customer-files/samples/ngv/<附件>.xlsx" -c ngv \
-      --processed-dir /tmp/scratch/processed --failed-dir /tmp/scratch/failed
+      --processed-dir /tmp/cqr_scratch/processed --failed-dir /tmp/cqr_scratch/failed
+  # ✅ 只想抽取/校准、不产出交付物（更常用）：extract_fields.py 本来就不动原文件
+  uv run ./scripts/extract_fields.py "customer-files/samples/ngv/<附件>.xlsx" -c ngv
   # 已经吃掉了？从任务目录把原文件拷回 samples/ 即可（mtime 会保留）
   ```
+
+  **为什么从 WARN 升级成硬闸**：原来的 WARN（`文件不在 pending 目录，可能已被处理`）拦不住人 ——
+  2026-09-24 这个坑踩了两次；第二次还顺手往 `processed/` 里留了一份 `CPMS` 为空的「未完成」产物，
+  被业务看见才暴露。语料库是 **gitignored 的真实客户原文**，丢了就是永久丢失。
+- ⚠️ **`processed/` 是交付区，不是工作区**：跑管道做验证时把归档目录指到 `/tmp/...`，
+  别让「样本试跑」在 `processed/` 里留下痕迹 —— 产物一旦落在那里就会被当成交付物。
+  `CPMS` 为空 / 中文品名还是占位符的产物**不得留在 `processed/`**（判定与展示见 §4.10 交付闸门）。
 
 **解析**
 
@@ -1275,6 +1321,48 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.22** | **2026-09-24** | **内部导出字段 `ID` / `CPMC_ZH`；`CPMC` 改存英文表达**（见下） |
 | **1.0.23** | **2026-09-24** | **内部字段 `Reminder` 把提醒固化进产物；「无」落 JSON `null`（`enum_exceptions` 随之删除）**（见下） |
 | **1.0.24** | **2026-09-24** | **产物加内部字段 `version` 标识配置版本（= 2）；旧查看器按新结构重写 + 自动扫描 `processed/`**（见下） |
+| **1.0.25** | **2026-09-24** | **交付闸门：「未完成」产物不许留在 `processed/`** —— 语料库样本硬闸 + 查看器「未完成」徽章（见下） |
+
+### 1.0.25 详细变更 —— 交付闸门（未完成产物不许留在 processed/）
+
+业务 2026-09-24（第五批）：
+
+> 「为什么你导出的 json 里会缺少 `CPMS`？你应该严格按照技能的流程去执行」
+
+**查出来的事实**：交付物本身没问题（`3cf2194b…` 的 `CPMS` 2128 字、`CPMC_ZH` 已补中文品名、
+63 键顺序断言通过、`--check --customer ngv` 63 字段全过）。**问题在 `processed/` 里多了一份**
+`2302b811…` —— `CPMS=""`、`CPMC_ZH` 还是 `【中文品名待定】`、63 键、`version: 2`。
+
+它是**拿语料库样本试跑留下的**：`main.py` 直接喂
+`customer-files/samples/ngv/香港单号 CU26072301 …xlsx`，没把归档目录指到临时区。日志里两句自证：
+
+```
+07:31:15 [WARN] 文件不在 pending 目录，可能已被处理: customer-files/samples/ngv/…
+07:31:16 [WARN] CPMS 留空 —— 脚本不生成产品描述，必须由 agent 亲自补写
+```
+
+脚本**当场 WARN 了两次**，我还是跑完了 → ①样本被移出语料库（后来从任务目录拷回，md5 一致，
+无损失）②`processed/` 里躺下一份「未完成」产物，直到业务问才暴露。
+**踩的是 §10 已经写明的坑，第二次。**
+
+**落地三件事**
+
+| 项 | 内容 |
+|----|------|
+| ① 交付闸门（机制） | `erp_viewer.py: delivery_gates(data)` —— `CPMS` 空/缺失/纯空白、或 `CPMC_ZH` 含占位符 `【中文品名待定】` → 返回原因列表。`/api/exports` 每项带 `incomplete`（空 = 可交付）+ `cpms_len`；`/api/export` 也带一份。页面：列表红徽章**「未完成」**（tooltip 列出原因）、详情页顶部横幅**「❗ 未完成 · 不得交付」**。判定**只在服务端算一份**，页面只显示（同 §4.10 设计 5 的枚举校验口径） |
+| ② 语料库硬闸 | `main.py: sample_run_guard()` —— 输入在 `customer-files/samples/` 下、而 `--processed-dir` / `--failed-dir` 没**都**指到语料库之外 → **拒绝执行**（退出码 1）并打出可照抄的命令。从 WARN 升级为硬闸的理由：语料库是 gitignored 的**真实客户原文**，移走 = 永久丢失；而这个 WARN 已经拦不住人两次了 |
+| ③ 状态清理 | `2302b811…` 从 `processed/` 移到 `/tmp/cqr_scratch/`（它是样本试跑的副产物，不是交付物，一条命令可复现）；`processed/` 现在只剩真交付（`0e39e2e2` 历史单 / `3cf2194b` 本单 / `_superseded_20260924/`）。语料库 4 份 xlsx 齐全，md5 与任务目录里的副本一致 |
+
+**回归**：测试 **243 → 259 项**（`test_pipeline.py` +6：样本闸 5 项单测 + 1 项真跑集成，
+断言「拒绝执行 + 样本仍在原处 + md5 不变」；`test_viewer.py` +10：交付闸门 9 项 + 页面显示 1 项）。
+另用 jsdom 真跑页面（`/tmp/erp-viewer-check/check-gate.js`，18 项断言）：
+未完成产物 → 列表红徽章 + 详情横幅（点名 CPMS 与中文品名）；真交付产物 → **无**横幅、
+仍显示 `Reminder` 横幅、`CPMS` 长文本正常渲染（2148 字），零 console 错误。
+
+> ⚠️ 写这条检查脚本时**又踩了一次「搜错范围」**：头两条断言分别搜了 `header`（CPMS 正文在字段区）
+> 和 `body`（把 `<script>` 源码也算进去）—— 一个假失败、一个假通过。这已经是**同一类错误第三次**
+> （前两次见 §11 的 1.0.24）。**jsdom 断言必须明确指到承载该信息的那个元素**。
+
 
 ### 1.0.24 详细变更 —— 配置版本 + 产物查看器重写
 

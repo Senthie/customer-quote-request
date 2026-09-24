@@ -46,6 +46,9 @@ PROCESSED_DIR = REPO_ROOT / "customer-files" / "processed"
 PAGE_PATH = SCRIPT_DIR / "ERP_data_show.html"
 SUPERSEDED_PREFIX = "_superseded"
 
+# `main.py` 给 CPMC_ZH 里的中文品名留的可见占位符（档案 cpmc.needs_agent）
+CPMC_ZH_PLACEHOLDER = "【中文品名待定】"
+
 # 产物文件名：ERP_<task_id>_<YYYYmmdd>_<HHMMSS>.json
 EXPORT_NAME_RE = re.compile(r"^ERP_(?P<task_id>.+)_(?P<date>\d{8})_(?P<time>\d{6})\.json$")
 
@@ -215,6 +218,29 @@ def build_validation_payload(export_path: Path, data: dict[str, Any]) -> dict[st
     }
 
 
+def delivery_gates(data: dict[str, Any]) -> list[str]:
+    """交付闸门：产物里「必须由 agent 亲自填」的地方还是空的 → 未完成，不得交付。
+
+    两处刻意不写（都不是缺陷，是分工）：
+
+    1. `CPMS` —— 1.0.11 起脚本一律不生成（业务确认无法用 Python 统一处理，
+       `build_cpms_draft` / `CPMS_SECTIONS` 已删除）。
+    2. `CPMC_ZH` 里的中文品名 —— 1.0.22 起由 agent 每单拟，脚本只留可见占位符。
+
+    所以**管道刚跑完的产物天然处在「未完成」状态**。「CPMS 为空的 JSON 视为未完成，
+    不得交付」此前只活在文档里 —— 结果 2026-09-24 一份样本试跑的未完成产物在
+    `processed/` 里躺了半天，是业务问出来的。现在把它做成看得见的闸门。
+    """
+    gates: list[str] = []
+    cpms = data.get("CPMS")
+    if not isinstance(cpms, str) or not cpms.strip():
+        gates.append("CPMS 未写 —— 脚本不生成，必须 agent 亲自补写（SKILL 第 5 节）")
+    cpmc_zh = data.get("CPMC_ZH")
+    if isinstance(cpmc_zh, str) and CPMC_ZH_PLACEHOLDER in cpmc_zh:
+        gates.append(f"CPMC_ZH 仍是占位符 {CPMC_ZH_PLACEHOLDER} —— 中文品名必须 agent 拟")
+    return gates
+
+
 def _summarize(path: Path, root: Path) -> dict[str, Any]:
     """读一份产物，抽出列表页要用的摘要。文件坏了也要能列出来（标 broken）。"""
     rel = path.relative_to(root)
@@ -254,6 +280,8 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         item["broken"] = f"{type(exc).__name__}: {exc}"
         item["key_count"] = 0
+        item["cpms_len"] = 0
+        item["incomplete"] = []   # 读不出来就没法判交付状态（列表上另有「文件损坏」徽章）
         return item
 
     item.update({
@@ -270,6 +298,9 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         "KHDH": data.get("KHDH"),
         "CPSL1": data.get("CPSL1"),
         "TZS": data.get("TZS"),
+        # ★ 交付闸门（CPMS 未写 / 中文品名还是占位符）—— 空列表 = 可以交付
+        "cpms_len": len(data["CPMS"]) if isinstance(data.get("CPMS"), str) else 0,
+        "incomplete": delivery_gates(data),
     })
     return item
 
@@ -403,6 +434,8 @@ class Handler(SimpleHTTPRequestHandler):
                 "data": data,
                 # 取值校验用权威实现（erp_schema.validate_result），页面不自己比枚举
                 "validation": build_validation_payload(target, data),
+                # 交付闸门同样只在服务端算一份（页面只显示）
+                "incomplete": delivery_gates(data),
             })
         if route == "/api/schema":
             return self._send_json(build_schema_payload())

@@ -361,3 +361,72 @@ def test_抽取明细里列出_CPMS_素材(pipeline_run):
 def test_输入文件已从_pending_移出(pipeline_run):
     target = pipeline_run["workdir"] / "pending" / "PUZZLE COLOUR DISNEY.xlsx"
     assert not target.exists(), "处理完成后原始文件应从 pending 移出（防重复处理）"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 语料库样本闸：samples/ 是 .gitignore 掉的客户原文，被移走 = 永久丢失
+#
+# 背景（2026-09-24）：拿 samples/ngv/ 的样本直接跑 main.py，脚本打了
+# 「文件不在 pending 目录」的 WARN 就继续跑了 —— 结果 ①样本被移出语料库
+# ②processed/ 里留下一份 CPMS 为空的「未完成」产物（业务问出来才发现）。
+# 这个坑踩了两次，所以从 WARN 升级为硬闸。
+# ═══════════════════════════════════════════════════════════════════════
+def _guard_args(processed=None, failed=None):
+    from types import SimpleNamespace
+    return SimpleNamespace(processed_dir=processed, failed_dir=failed)
+
+
+def test_样本闸_不带归档参数直接拒绝():
+    from main import sample_run_guard
+    err = sample_run_guard(REPO_ROOT / "customer-files" / "samples" / "ngv" / "a.xlsx",
+                           _guard_args())
+    assert err, "样本跑进真交付区必须拒绝"
+    assert "拒绝执行" in err
+    assert "--processed-dir" in err and "--failed-dir" in err, "要给出可照抄的命令"
+
+
+def test_样本闸_只指一个归档目录也拒绝():
+    """只指 --processed-dir 不够：失败时样本照样会被移进默认的 failed/。"""
+    from main import sample_run_guard
+    err = sample_run_guard(REPO_ROOT / "customer-files" / "samples" / "ngv" / "a.xlsx",
+                           _guard_args(processed="/tmp/x"))
+    assert err and "缺 --failed-dir" in err
+
+
+def test_样本闸_两个归档目录都指到外面才放行():
+    from main import sample_run_guard
+    assert sample_run_guard(REPO_ROOT / "customer-files" / "samples" / "ngv" / "a.xlsx",
+                            _guard_args(processed="/tmp/x", failed="/tmp/y")) is None
+
+
+def test_样本闸_不管普通文件():
+    from main import sample_run_guard
+    assert sample_run_guard(REPO_ROOT / "customer-files" / "pending" / "a.xlsx",
+                            _guard_args()) is None
+    assert sample_run_guard(Path("/tmp/任意报价单.xlsx"), _guard_args()) is None
+
+
+def test_样本闸_路径绕行也拦得住():
+    """`samples/../samples/x` 这种绕法也要认出来（判的是 resolve 后的真实路径）。"""
+    from main import sample_run_guard
+    sneaky = REPO_ROOT / "customer-files" / "pending" / ".." / "samples" / "ngv" / "a.xlsx"
+    assert sample_run_guard(sneaky, _guard_args())
+
+
+def test_样本闸_真跑一次要拦住且原文件不动(tmp_path):
+    """集成：真起 main.py —— 退出码非 0，且语料库里的样本一格没动。"""
+    import hashlib
+    samples = REPO_ROOT / "customer-files" / "samples" / "ngv"
+    if not samples.exists():
+        pytest.skip("缺少 NGV 语料库（真实客户数据，不入库）")
+    sample = next((p for p in sorted(samples.glob("*.xlsx"))), None)
+    if sample is None:
+        pytest.skip("语料库里没有 xlsx 样本")
+
+    before = hashlib.md5(sample.read_bytes()).hexdigest()
+    run = subprocess.run(["uv", "run", "./scripts/main.py", str(sample), "-c", "ngv"],
+                         cwd=REPO_ROOT, capture_output=True, text=True, timeout=300)
+    assert run.returncode != 0, f"应当拒绝执行，却成功了：\n{run.stdout}"
+    assert "拒绝执行" in (run.stdout + run.stderr)
+    assert sample.exists(), "★ 样本被移走了 —— 这正是要防的事故"
+    assert hashlib.md5(sample.read_bytes()).hexdigest() == before, "样本内容变了"

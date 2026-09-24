@@ -465,3 +465,87 @@ def test_字典与模板键集合一致():
         f"只在模板里: {sorted(set(tpl_keys) - set(schema_keys))}；"
         f"只在字典里: {sorted(set(schema_keys) - set(tpl_keys))}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 交付闸门：「CPMS 为空的 JSON 视为未完成，不得交付」要看得见
+#
+# 背景（2026-09-24，业务问出来的）：CPMS 与 CPMC_ZH 的中文品名都是 agent 亲手填的，
+# 所以**管道刚跑完的产物天然是「未完成」**。以前这个状态只写在文档里 —— 一份样本
+# 试跑的未完成产物在 processed/ 里躺了半天，最后是业务问「为什么这份缺少 CPMS」。
+# 现在服务端算一份（delivery_gates），列表与详情页都要标出来。
+# ═══════════════════════════════════════════════════════════════════════
+def test_交付闸门_CPMS没写要报出来():
+    gates = ev.delivery_gates({"CPMS": "", "CPMC_ZH": "KM/Aldi 甲乙丙 普通蛇圈书"})
+    assert len(gates) == 1
+    assert "CPMS" in gates[0]
+
+
+def test_交付闸门_CPMS键整个缺失也算未写():
+    """第 1 代产物 / 被剥掉内部字段的产物 —— 不能因为「没有这个键」就当通过。"""
+    assert ev.delivery_gates({})
+
+
+def test_交付闸门_空白CPMS算未写():
+    assert ev.delivery_gates({"CPMS": "   \n\t "})
+
+
+def test_交付闸门_中文品名占位符要报出来():
+    gates = ev.delivery_gates({
+        "CPMS": "【项目基本信息】…",
+        "CPMC_ZH": "KM/Aldi 【中文品名待定】 其它套装/Postkarten in Box mit Aufsteller",
+    })
+    assert len(gates) == 1
+    assert "中文品名" in gates[0] and "占位符" in gates[0]
+
+
+def test_交付闸门_两处都补齐才算可交付():
+    assert ev.delivery_gates({
+        "CPMS": "【项目基本信息】…",
+        "CPMC_ZH": "KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/Basteln&Gestalten…",
+    }) == []
+
+
+def test_交付闸门_历史产物没有CPMC_ZH键不误报():
+    """第 1 代 40 键产物里没有 CPMC_ZH；只按 CPMS 判，不拿「键不存在」报警。"""
+    assert ev.delivery_gates({"CPMS": "老的产品描述", "CPSX": None}) == []
+
+
+def test_扫描结果带交付闸门(tmp_path):
+    _make_export(tmp_path, "unfinished", {"version": 2, "CPMS": "",
+                                          "CPMC_ZH": "KM/Aldi 【中文品名待定】 x"},
+                 stamp="20260924_010203", mtime=1_700_000_100)
+    _make_export(tmp_path, "done", {"version": 2, "CPMS": "【项目基本信息】…",
+                                    "CPMC_ZH": "KM/Aldi 甲 乙"},
+                 stamp="20260924_020203", mtime=1_700_000_200)
+    items = {it["task_id"]: it for it in ev.scan_exports(tmp_path)}
+    assert len(items["unfinished"]["incomplete"]) == 2, "CPMS + 中文品名两处都没补"
+    assert items["unfinished"]["cpms_len"] == 0
+    assert items["done"]["incomplete"] == []
+    assert items["done"]["cpms_len"] > 0
+
+
+def test_坏文件不报交付闸门(tmp_path):
+    """读不出来就没法判交付状态 —— 交回空列表，让「文件损坏」徽章去说事。"""
+    d = tmp_path / "tid"
+    d.mkdir(parents=True)
+    (d / "ERP_tid_20260924_010203.json").write_text("{不是 json", encoding="utf-8")
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["broken"]
+    assert item["incomplete"] == []
+
+
+def test_http_export_带回交付闸门(viewer):
+    base, _ = viewer
+    status, body = _get(base + "/api/export?path=tid1/ERP_tid1_20260924_010203.json")
+    assert status == 200
+    payload = json.loads(body)
+    assert "incomplete" in payload, "页面不自己判交付状态，必须由服务端给"
+    assert payload["incomplete"], "tid1 没写 CPMS → 必须报未完成"
+
+
+def test_页面显示交付闸门():
+    """页面只负责显示，判定逻辑不许抄一份到前端（会跟服务端漂）。"""
+    page = PAGE_PATH.read_text(encoding="utf-8")
+    assert "未完成 · 不得交付" in page
+    assert "incomplete" in page
