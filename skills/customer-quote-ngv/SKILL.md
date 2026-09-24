@@ -121,6 +121,7 @@ metadata:
 | `CPMC_ZH` | `KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)` | 内部字段：**中文表达**；中文品名由 agent 补 |
 | `ID` | 本次任务号 | 内部字段：= 产物目录名 = 日志里的「任务ID」 |
 | `Reminder` | `报价截止日期 2026-06-26 已过期 90 天（基准日 2026-09-24） —— 请与业务确认这单是否还要报价` | 内部字段：把提醒固化进产物（1.0.23 起） |
+| `version` | `2` | 内部字段：当前配置的版本（1.0.24 起）；来源 = 档案顶层 `version:`，改口径就 +1 |
 
 本单还暴露了六个问题，均已修复：数量解析（第 9 节）、Wire-O 装订映射、`extras_found`
 被纯标签污染、**`offer deadline` 被误当纯标题导致值被静默丢掉**、**`CPMC` 里中英混排**、
@@ -179,7 +180,7 @@ metadata:
 
 > ✅ **`CPSX` 已无待确认项**：落 `null`（= 空值）与 4 份权威导出完全一致，
 > 导入端按空值处理，不需要业务再拍板「无 vs 其他」。
-> 唯一遗留是**内部字段**（`ID`/`CPMC_ZH`/`Reminder`）导入端收不收 —— 若报「未知字段」，
+> 唯一遗留是**内部字段**（`ID`/`CPMC_ZH`/`Reminder`/`version`）导入端收不收 —— 若报「未知字段」，
 > 用 `--strip-internal` 出纯净 59 键。
 
 
@@ -269,7 +270,7 @@ cd /home/claw/customer-quote-request
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" --customer ngv
 
 # 全量测试（含 NGV 合成用例 + 真实样本回归）
-uv run pytest -q                              # 当前 210 项
+uv run pytest -q                              # 当前 238 项
 
 # 按档案豁免校验产物（推荐 —— 不传 --customer 会误报该客户「本来就空」的字段）
 uv run ./scripts/erp_schema.py --check <ERP.json> --customer ngv

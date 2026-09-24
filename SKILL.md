@@ -14,10 +14,10 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.23（2026-09-24 内部字段 `Reminder` 固化提醒；「无」落 JSON null）
+> **版本：** 1.0.24（2026-09-24 产物加内部字段 `version` 标识配置版本；旧查看器按新结构重写并支持自动扫描）
 
 把**客户发来的报价需求**（邮件标题/正文 + 附件，或直接给的表格/文档）转换成
-**ERP 导入用的 59 字段 JSON**（产物末尾另追加 3 个我方内部字段：`ID` / `CPMC_ZH` / `Reminder`，
+**ERP 导入用的 59 字段 JSON**（产物末尾另追加 4 个我方内部字段：`ID` / `CPMC_ZH` / `Reminder` / `version`，
 可用 `--strip-internal` 去掉 —— 见 1.0.22 / 1.0.23 与 `assets/internal_export_fields.yaml`）。
 
 ---
@@ -765,18 +765,32 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 
 ---
 
-### 4.8 内部导出字段：`ID` / `CPMC_ZH` / `Reminder`（1.0.22 起）
+### 4.8 内部导出字段：`ID` / `CPMC_ZH` / `Reminder` / `version`（1.0.22 起）
 
 > **声明文件：** `assets/internal_export_fields.yaml` ｜ **加载：** `scripts/internal_fields.py`
 > **业务背景（2026-09-24）：** 「导出现在缺少一份内部导出字段 `ID`，该字段标注我们的当前执行的任务，
 > 方便日志维护；将 `CPMC` 修改为存英文表达，使用 `CPMC_ZH` 来标注中文表达」；
-> 随后「（过期提醒）加一个字段做提醒」。
+> 随后「（过期提醒）加一个字段做提醒」；再「给导出的 json 再添加一个字段 `version`，
+> 标识当前配置的版本，目前设置版本为 2，这样方便我们的技能迭代」。
 
 | 键 | 值 | 说明 |
 |----|-----|------|
 | `ID` | 本次任务号 | 与**产物目录名**、日志里的「任务ID」、`validation.json` 的 `task_id` 是同一个 ID |
 | `CPMC_ZH` | 产品名称的中文表达 | `CPMC` 只放英文（业务口径），中文表达落这里 |
 | `Reminder` | 给业务的提醒文本 | 目前是「报价截止日期已过期」；没有待办时为空字符串 |
+| `version` | 当前配置的版本（**现在 = 2**） | 跑出这份产物的那份**客户档案配置**的版本；口径一变就 +1 |
+
+**`version` 的取值来源**：客户档案顶层 `version:` —— 公共默认值写在 `customers/_defaults.yaml`（= 2），
+客户档案可覆盖（deep-merge 会带上）。改口径就 +1，判别语义：
+
+| 版本 | 含义 |
+|------|------|
+| （无该键） | 第 1 代口径：多客户架构之前 / 2026-09-24 之前的产物 |
+| `1` | 保留值，未实际使用 |
+| `2` | 2026-09-24 这批：多客户档案架构 + 内部字段 `ID`/`CPMC_ZH`/`Reminder`/`version` + 「无」→ `null` + NGV 分区表单范式 |
+
+`CustomerProfile.validate()` 会拦非法值（必须是 ≥1 的整数）；`customer_profile.py --show <id>`
+会打印「配置版本」。**页面上也显示**（见 §4.10），所以业务拿到一份产物能立刻判断是不是最新口径跑出来的。
 
 **机制（四条硬规则）**
 
@@ -784,12 +798,12 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
    59 键的位置一个不动 —— 下游按位置读的解析器不受影响。
 2. **断言**：`step6` 检查「前 59 键 = 模板（集合 + 顺序）」**且**「其后 = 声明的内部字段（同序）」；
    `map_fields` 多产出任何未声明的键会当场抛错。`tests/test_pipeline.py` 有测试钉着。
-3. **校验**：内部字段**不参与** ERP 字典校验（`ID`/`CPMC_ZH` 字典里确实没有）——
+3. **校验**：内部字段**不参与** ERP 字典校验（`ID`/`CPMC_ZH`/`version` 字典里确实没有）——
    否则每份产物都会报「字典里没有这个字段」。`erp_schema.py --check` 会自动跳过。
 4. **开关**：`--strip-internal` → 只输出 59 键（给「ERP 导入端不收未知字段」兜底）。
 
 ```bash
-# 默认：59 + 2 个内部字段
+# 默认：59 + 4 个内部字段（ID / CPMC_ZH / Reminder / version）
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv
 # 纯净 59 键（导入 ERP 前若被告知「不收未知字段」）
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv --strip-internal
@@ -820,6 +834,57 @@ rules:
   `业务口径 null_values=['无'] → 落 JSON null 的字段: CPSX('无'→null)`。
 - ⚠️ 与「空值」的区别：**没有待办/本来就没有** → 空字符串（模板默认）；
   **业务明确说「无」** → `null`。两者在 JSON 里长得像，但来源不同，别把 `Reminder` 也写成 null。
+
+---
+
+### 4.10 产物查看器 `ERP_data_show.html` + `erp_viewer.py`（1.0.24 新增）
+
+业务 2026-09-24：「有一个旧的展示 ERP JSON 格式的 html，但是我们的导出结构发生了变化，
+需要修改它；让它可以自动扫描 `customer-files/processed` 的导出 ERP 文件」。
+
+```bash
+uv run ./scripts/erp_viewer.py                    # 起服务 + 自动开浏览器（默认 127.0.0.1:8765）
+uv run ./scripts/erp_viewer.py --port 9000        # 换端口
+uv run ./scripts/erp_viewer.py --no-open          # 无头/远程：不开浏览器
+uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
+```
+
+**为什么需要一个服务端**：浏览器**不允许** `file://` 页面列出本地目录。所以「自动扫描」只能是
+一个本地 HTTP 服务把目录列表喂给页面。服务端只用标准库（`http.server`），零依赖。
+
+| 接口 | 作用 |
+|------|------|
+| `GET /` | 页面本体（`scripts/ERP_data_show.html`） |
+| `GET /api/exports` | 递归扫描结果（每份产物的摘要，**最新的在前**） |
+| `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON（`path` 做 resolve 后前缀校验，出不了 `processed/`） |
+| `GET /api/schema` | ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组 |
+
+**页面能看出什么**
+
+- **配置版本**：顶部徽章显示当前配置版本（读 `_defaults.yaml`），并和产物里的 `version` 对照 ——
+  一致 / 不一致 / 产物根本没有 `version`（= 第 1 代口径）三种状态分开显示。
+- **结构对照**：这份产物 vs 当前 59 键结构 —— 缺了哪些键、多出哪些键、内部字段缺哪几个。
+  历史产物（40 键的手填单、59 键的中间版本）都能正常打开，缺失处明确标注而不是留白。
+- **枚举校验**：下拉字段的取值不在 `erp_form_schema.yaml` 合法枚举内 → 标红「不在字典枚举内」，
+  并可展开看该字段的完整合法取值（`CPLB` 88 个类别、`DWMC` 65 个单位都在这）。
+- **空值口径**：`null` 显示成「null（空值）」，跟空字符串「（空字符串）」区分开（§4.9）。
+- **`Reminder`**：非空时页面顶部弹醒目横幅。
+- **已被取代**：`_superseded_*` 目录下的产物带「已被取代」标记。
+- 支持 `?path=<相对路径>` 深链接，方便把某一份产物发给别人。
+
+**几处刻意的设计（改动前先读）**
+
+1. **零外部依赖**。旧页面引 `unpkg` 的 Vue3 + `jsdelivr` 的 dayjs —— 断网/内网直接白屏。
+   这是内部生产工具，改成纯原生 JS。`tests/test_viewer.py` 钉着「不许再出现外部 `<script src>`」。
+2. **字段分组在 `erp_viewer.py` 的 `FIELD_GROUPS`，不在 HTML 里**。加了新 ERP 字段却忘了归组，
+   页面上会**悄悄不显示**；所以有一条测试断言「分组恰好覆盖 59 个字段各一次」，漏了就红。
+   没归组的会落到「其他（未归组）」组，仍然可见。
+3. **字段元数据来自 `assets/erp_form_schema.yaml`**，不另抄一份（测试比对同源）。
+4. **容错**：坏 JSON 也列出来并标「文件损坏」，不让用户以为「没产出」。
+
+> ⚠️ 页面按字典（`erp_form_schema.yaml`）顺序渲染；产物按模板（`add_customer_quote_request.json`）
+> 顺序落盘。两者**集合相同、顺序不同**（模板管位置、字典管语义），不要去强行对齐 ——
+> `tests/test_viewer.py::test_字典与模板键集合一致` 只钉集合。
 
 ---
 
@@ -935,7 +1000,7 @@ customer-quote-request/
 │   └── ngv.erp_diff.json               # ★ NGV 的「已定口径差异」白名单（compare_with_erp 用）
 ├── assets/
 │   ├── add_customer_quote_request.json # ERP 字段模板（59 键，权威来源）
-│   ├── internal_export_fields.yaml     # ★ 内部导出字段（ID / CPMC_ZH；追加在 59 键之后）
+│   ├── internal_export_fields.yaml     # ★ 内部导出字段（ID / CPMC_ZH / Reminder / version）
 │   ├── erp_form_schema.yaml            # ★ ERP 表单权威字典（合法枚举 / 别名 / 类型）
 │   ├── customer_erp_mapper.xlsx        # 客户字段↔ERP 字段对照（igl 的，客户相关）
 │   ├── product_categories.xlsx         # 产品类别源表（ERP 导出，88 行，含业务定义）
@@ -948,7 +1013,9 @@ customer-quote-request/
 │   ├── customer_profile.py        # ★ 档案加载 / 校验 / 自动识别（可单独跑 CLI）
 │   ├── extract_fields.py          # ★ 抽取引擎（布局策略 + 数量档位 + 文本解析）
 │   ├── erp_schema.py              # ★ ERP 取值归一化 / 校验（步骤 5b，可单独跑 CLI）
-│   ├── internal_fields.py         # ★ 内部导出字段声明加载（ID / CPMC_ZH）
+│   ├── internal_fields.py         # ★ 内部导出字段声明加载（ID / CPMC_ZH / Reminder / version）
+│   ├── erp_viewer.py              # ★ 产物查看器服务端（自动扫描 processed/，1.0.24）
+│   ├── ERP_data_show.html         # ★ 查看器页面（零依赖原生 JS，1.0.24 按新结构重写）
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
 │   ├── calibrate_customer.py      # ★ 新客户校准器
@@ -959,7 +1026,7 @@ customer-quote-request/
 │   ├── uuid_utils.py              # UUID4
 │   ├── xlsx2csv.py                # Excel → CSV
 │   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
-├── tests/                         # 210 项测试（uv run pytest）
+├── tests/                         # 238 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
@@ -967,6 +1034,7 @@ customer-quote-request/
 │   ├── test_cplb_tree.py          # ★ 产品类别树（与源表一致 / 导航树全覆盖 / 档案映射有效）
 │   ├── test_ngv_profile.py        # ★ NGV 分区表单（section_pairs 机制 + 真实样本回归）
 │   ├── test_ingest_email.py       # 邮件入口
+│   ├── test_viewer.py             # ★ 产物查看器（扫描 / 路径安全 / 分组覆盖 / HTTP 端点）
 │   └── test_pipeline.py           # 端到端回归（真实样本 + 逐字段值断言）
 ├── customer-files/                # pending / processed / failed（产物，不进仓库）
 │   └── samples/ngv/               # ★ NGV 校准语料库（真实附件 + ERP 导出 + manifest，不进仓库）
@@ -1018,6 +1086,10 @@ uv run ./scripts/customer_profile.py --detect "customer-files/pending/QUOTE.xlsx
 
 # 新客户校准
 uv run ./scripts/calibrate_customer.py --customer ngv --file <样本> --layout
+
+# 看产物（自动扫描 customer-files/processed，浏览器里看）
+uv run ./scripts/erp_viewer.py                      # 起服务 + 自动开浏览器
+uv run ./scripts/erp_viewer.py --no-open --port 9000 # 远程/无头
 
 # 邮件投递
 uv run ./scripts/ingest_email.py --eml mail.eml
@@ -1078,6 +1150,16 @@ uv run pytest tests/test_pipeline.py -v
 - ⚠️ **`hermes skills check/update/uninstall` 会穿透软链接覆盖仓库文件** ——
   该技能在 hub 里登记过（`~/.hermes/profiles/igl_agent/skills/.hub/lock.json`，
   来源 `Senthie/customer-quote-request`）。执行这些命令前先备份仓库副本，或摘掉 hub 登记项（见 TODO）。
+- ⚠️ **别拿语料库里的原始文件直接跑 `main.py`** —— 跑完会把输入**移走**（归档进任务目录，
+  `[文件 5/5] 原始文件归档`），`customer-files/samples/<客户>/` 就被破坏，相关测试随即大面积报
+  `FileNotFoundError`。要跑就先复制一份到临时目录，或者把归档目标指到别处：
+
+  ```bash
+  # ✅ 想让样本原地不动：把归档目录也指到临时区
+  uv run ./scripts/main.py "customer-files/samples/ngv/<附件>.xlsx" -c ngv \
+      --processed-dir /tmp/scratch/processed --failed-dir /tmp/scratch/failed
+  # 已经吃掉了？从任务目录把原文件拷回 samples/ 即可（mtime 会保留）
+  ```
 
 **解析**
 
@@ -1179,6 +1261,42 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.21** | **2026-09-24** | **第三批业务口径：`CPMC` 业务员=KM / `CPSX`=无（口径例外机制）/ `KHDDH` 默认空 / 报价截止过期提醒**（见下） |
 | **1.0.22** | **2026-09-24** | **内部导出字段 `ID` / `CPMC_ZH`；`CPMC` 改存英文表达**（见下） |
 | **1.0.23** | **2026-09-24** | **内部字段 `Reminder` 把提醒固化进产物；「无」落 JSON `null`（`enum_exceptions` 随之删除）**（见下） |
+| **1.0.24** | **2026-09-24** | **产物加内部字段 `version` 标识配置版本（= 2）；旧查看器按新结构重写 + 自动扫描 `processed/`**（见下） |
+
+### 1.0.24 详细变更 —— 配置版本 + 产物查看器重写
+
+业务 2026-09-24（第四批）：
+
+> ①「在 `scripts/ERP_data_show.html` 有一个旧的展示 ERP JSON 格式的 html，但是我们的导出结构
+> 发生了变化，我需要你修改它」
+> ②「并且让它可以自动扫描 `customer-files/processed` 的导出 ERP 文件」
+> ③「给导出的 json 再添加一个字段 `version`，标识当前配置的版本，目前设置版本为 2，
+> 这样方便我们的技能迭代」
+
+**1) 配置版本 `version`（= 2）**
+
+- 单一真源：`customers/_defaults.yaml` 顶层 `version: 2` → `CustomerProfile.version` →
+  `main.py` 的 provider `config_version` → 产物内部字段 `version`（追加在最后）。
+- 客户档案可覆盖（deep-merge 带上）；`validate()` 拦非整数或 <1 的值；`--show <id>` 会打印。
+- 语义：**改口径就 +1**。历史产物没有该键 = 第 1 代口径。
+
+**2) 查看器重写（`scripts/ERP_data_show.html` + 新增 `scripts/erp_viewer.py`）**
+
+- 旧页面的字段名全是**上一代结构**（`SJFX` / `KHMBJ` / `GG_length` / `has_safety_checks` /
+  `create_by` …）—— 对着新产物根本填不出来。已按 59 键 + 4 内部字段全部重写。
+- **自动扫描**必须有本地 HTTP 服务（浏览器不许 `file://` 页面列目录），
+  新增 `erp_viewer.py`（纯标准库）：`/` 页面、`/api/exports` 扫描、`/api/export?path=` 取单份、
+  `/api/schema` 字典。`path` 做 resolve + 前缀校验，出不了 `processed/`。
+- **零外部依赖**：旧页面引 unpkg(Vue3) + jsdelivr(dayjs)，断网/内网白屏 → 改纯原生 JS。
+- 页面新增能力：配置版本徽章（与产物 `version` 对照）、**结构对照**（缺/多哪些键，
+  历史 40 键产物也能打开）、**枚举校验标红** + 展开合法取值、`null` 与空串区分显示、
+  `_superseded_*` 标记、`?path=` 深链接。
+- 字段分组放在 `erp_viewer.py` 的 `FIELD_GROUPS`，并有测试断言
+  「恰好覆盖 59 个字段各一次」—— 防止加了字段却漏配分组、页面上悄悄不显示。
+
+**3) 测试 210 → 238 项**（新增 `tests/test_viewer.py`）。
+顺手修掉一个真 bug：`scan_exports(root=PROCESSED_DIR)` 的默认参数在**定义时**就固化了，
+导致 `--dir` 与测试 monkeypatch 全部失效 → 改成默认 `None`、函数内回落。
 
 ### 1.0.23 详细变更 —— 提醒固化 + 「无」落 `null`
 
