@@ -14,8 +14,8 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.25（2026-09-24 交付闸门落地：`processed/` 只许放补完的产物 —— 语料库样本硬闸
-> + 查看器「未完成」徽章；事故见 §5 末尾）
+> **版本：** 1.0.26（2026-09-24 查看器搬进 `erp_view/` 包并改用 **Flask**：三层分离
+> `data.py` / `app.py` / `templates/index.html`，扫描根改走 `app.config`，测试改用 `test_client`）
 
 把**客户发来的报价需求**（邮件标题/正文 + 附件，或直接给的表格/文档）转换成
 **ERP 导入用的 59 字段 JSON**（产物末尾另追加 4 个我方内部字段：`ID` / `CPMC_ZH` / `Reminder` / `version`，
@@ -159,7 +159,7 @@ uv run ./scripts/calibrate_customer.py --customer <新客户id> --file <样本�
 
 ```bash
 uv run ./scripts/main.py <样本文件> --customer <新客户id>
-uv run pytest                                      # 全部测试必须绿（当前 259 项）
+uv run pytest                                      # 全部测试必须绿（当前 268 项）
 
 # 有权威 ERP 导出时，做一次分类对照（差异原因写进 customers/<id>.erp_diff.json）
 uv run ./scripts/compare_with_erp.py --customer <新客户id> \
@@ -426,7 +426,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | **5b** | **按 ERP 表单权威字典归一化 + 校验取值**（`assets/erp_form_schema.yaml`） | `[归一化]`、`[ERP字典] ERROR/WARN`、`校验通过` |
 | 6 | 输出：CSV / 抽取明细 / ERP JSON / **校验报告** / 原始文件归档 | **59 键断言** |
 | 7 | ★ **CPMS 由 agent 亲自撰写**（脚本之外，必做） | 脚本会打印提醒与产物路径 |
-| 8 | ★ **交付前过交付闸门**（1.0.25）：`CPMS` 非空 + `CPMC_ZH` 不含 `【中文品名待定】` | `uv run ./scripts/erp_viewer.py --no-open`（带「未完成」红徽章的就是没补完） |
+| 8 | ★ **交付前过交付闸门**（1.0.25）：`CPMS` 非空 + `CPMC_ZH` 不含 `【中文品名待定】` | `uv run python -m erp_view --no-open`（带「未完成」红徽章的就是没补完） |
 
 日志：`logs/quote_request_<时间戳>.log`；任务目录：`customer-files/processed/<task_id>/`。
 
@@ -839,27 +839,53 @@ rules:
 
 ---
 
-### 4.10 产物查看器 `ERP_data_show.html` + `erp_viewer.py`（1.0.24 新增）
+### 4.10 产物查看器 `erp_view/` 包（Flask，1.0.24 新增 / 1.0.26 改 Flask）
 
 业务 2026-09-24：「有一个旧的展示 ERP JSON 格式的 html，但是我们的导出结构发生了变化，
-需要修改它；让它可以自动扫描 `customer-files/processed` 的导出 ERP 文件」。
+需要修改它；让它可以自动扫描 `customer-files/processed` 的导出 ERP 文件」，
+随后：「将 `erp_viewer.py` 创建一个 `erp_view` 文件夹，然后使用 flask 重新编写」。
 
 ```bash
-uv run ./scripts/erp_viewer.py                    # 起服务 + 自动开浏览器（默认 127.0.0.1:8765）
-uv run ./scripts/erp_viewer.py --port 9000        # 换端口
-uv run ./scripts/erp_viewer.py --no-open          # 无头/远程：不开浏览器
-uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
+uv run python -m erp_view                         # 起服务 + 自动开浏览器（默认 127.0.0.1:8765）
+uv run python -m erp_view --port 9000             # 换端口
+uv run python -m erp_view --no-open               # 无头/远程：不开浏览器
+uv run python -m erp_view --dir <其它目录>         # 改扫描根目录
+uv run ./scripts/erp_viewer.py …                  # 等价（`scripts/erp_viewer.py` 已只是转发壳）
 ```
 
+**包结构（三层，刻意分开）**
+
+```
+erp_view/
+├── data.py               ← 唯一实现：扫描 / 路径安全 / ERP 字典 / 取值校验 / 交付闸门（**不 import Flask**）
+├── app.py                ← 只管 HTTP：create_app() 工厂 + 4 个路由 + CLI main()
+├── templates/index.html  ← 只管显示（零依赖原生 JS；**刻意不含 Jinja 语法**）
+└── __main__.py           ← `python -m erp_view`
+```
+
+| 层 | 文件 | 职责 | 不许做什么 |
+|----|------|------|-----------|
+| 逻辑 | `data.py` | 扫描、路径校验、字典、`validate_result`、`delivery_gates` | 不许 import Flask（要能脱离服务端单独测） |
+| HTTP | `app.py` | 路由、状态码、缓存头、把 `data` 的结果 jsonify | 不许写业务判定 |
+| 显示 | `templates/index.html` | 渲染、折叠、徽章 | 不许自己判枚举合法性/交付闸门；不许出现 Jinja 变量 |
+
+> ⚠️ **扫描根在 `app.config["PROCESSED_DIR"]`，不再是模块级全局**（1.0.26）。
+> 旧版靠 `global PROCESSED_DIR` 让 `--dir` 覆盖 —— 全局既脏又不可测，两个 app 会互相污染。
+> 现在 `create_app(processed_dir=…)` 显式传入，测试用 `app.test_client()` 就够，不用抢端口。
+
 **为什么需要一个服务端**：浏览器**不允许** `file://` 页面列出本地目录。所以「自动扫描」只能是
-一个本地 HTTP 服务把目录列表喂给页面。服务端只用标准库（`http.server`），零依赖。
+一个本地 HTTP 服务把目录列表喂给页面。
 
 | 接口 | 作用 |
 |------|------|
-| `GET /` | 页面本体（`scripts/ERP_data_show.html`） |
+| `GET /` | 页面本体（`erp_view/templates/index.html`，Jinja 渲染） |
 | `GET /api/exports` | 递归扫描结果（每份产物的摘要，**最新的在前**）+ 当次运行的校验计数与客户档案 |
-| `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON + **权威取值校验结果**（`validation`） |
+| `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON + **权威取值校验结果**（`validation`）+ **交付闸门**（`incomplete`） |
 | `GET /api/schema` | ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组 |
+
+> **JSON 口径**：`PrettyJSONProvider` 定死三件事 —— `ensure_ascii=False`（中文不转义，
+> `curl` 直读）、`sort_keys=False`（保持我们构造的键序）、`compact=False`（缩进 2 格）。
+> 默认 provider 会转义中文 + 按字母重排键 + 输出紧凑格式，`curl` 看着很难受。
 
 **页面能看出什么**
 
@@ -884,7 +910,7 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
 
 1. **零外部依赖**。旧页面引 `unpkg` 的 Vue3 + `jsdelivr` 的 dayjs —— 断网/内网直接白屏。
    这是内部生产工具，改成纯原生 JS。`tests/test_viewer.py` 钉着「不许再出现外部 `<script src>`」。
-2. **字段分组在 `erp_viewer.py` 的 `FIELD_GROUPS`，不在 HTML 里**。加了新 ERP 字段却忘了归组，
+2. **字段分组在 `erp_view/data.py` 的 `FIELD_GROUPS`，不在页面里**。加了新 ERP 字段却忘了归组，
    页面上会**悄悄不显示**；所以有一条测试断言「分组恰好覆盖 59 个字段各一次」，漏了就红。
    没归组的会落到「其他（未归组）」组，仍然可见。
 3. **字段元数据来自 `assets/erp_form_schema.yaml`**，不另抄一份（测试比对同源）。
@@ -901,10 +927,17 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
      「未按客户档案豁免必填」（NGV 的 `KHDH` 本来就该空，会误报）。
    - `source: unavailable` —— 校验器本身出错，如实标注，不让产物看不了。
 
-6. ★ **交付闸门同理：服务端算一份（`erp_viewer.py: delivery_gates()`），页面只显示**。
+6. ★ **交付闸门同理：服务端算一份（`erp_view/data.py: delivery_gates()`），页面只显示**。
    `/api/exports` 的每一项带 `incomplete`（空列表 = 可交付），`/api/export` 也带一份。
    页面**不许**自己判「CPMS 是不是空的」—— 占位符文案改了、或者以后又多一处 agent 手填的字段，
    前端抄的那份就会跟服务端漂。`tests/test_viewer.py` 有 9 项钉着（含「页面里不许出现第二份判定」）。
+7. ★ **模板里不许出现 Jinja 语法**（1.0.26 新增的坑）。页面数据**全部**走 `/api/*` fetch，
+   模板里一旦写下双花括号，Jinja 会把它当变量：轻则渲染报错、重则把一部分 JS 吃掉，
+   而且报错位置很难查。有测试断言模板里不含双花括号/百分号花括号/井号花括号三种写法。
+   **第一条注释就误写过一次**（描述这条规矩时把符号写出来了），当场被那条测试拦下。
+8. ★ **分层不许退化**（1.0.26）：`data.py` 不许 import Flask、`scripts/erp_viewer.py` 只许是
+   转发壳（有测试断言它不含 `delivery_gates`/`scan_exports` 之类的实现且不超过 40 行）。
+   这次重写的风险不是「跑不起来」，而是**长回一团**。
 
 > ⚠️ 页面按字典（`erp_form_schema.yaml`）顺序渲染；产物按模板（`add_customer_quote_request.json`）
 > 顺序落盘。两者**集合相同、顺序不同**（模板管位置、字典管语义），不要去强行对齐 ——
@@ -948,7 +981,7 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
    查一遍（一条命令）：
 
    ```bash
-   uv run ./scripts/erp_viewer.py --no-open      # 列表上没写 CPMS 的会带红徽章「未完成」
+   uv run python -m erp_view --no-open           # 列表上没写 CPMS 的会带红徽章「未完成」
    ```
 
    或者肉眼：`processed/` 里除 `_superseded_*` 外，每份 `ERP_*.json` 的 `CPMS` 都必须非空。
@@ -1013,7 +1046,7 @@ uv run ./scripts/erp_viewer.py --dir <其它目录>    # 改扫描根目录
 6. ★ **交付闸门**（1.0.25 新增）—— 上面 5 步都过了还不够：产物里有两处是**脚本刻意不写**的
    （`CPMS`、`CPMC_ZH` 里的中文品名），必须 agent 亲手补完才算「可交付」。一条命令看：
    ```bash
-   uv run ./scripts/erp_viewer.py --no-open    # 列表上带红徽章「未完成」的就是还没补
+   uv run python -m erp_view --no-open         # 列表上带红徽章「未完成」的就是还没补
    ```
    判据与展示见 §4.10 的交付闸门；事故来历见 §5 末尾。
 
@@ -1054,6 +1087,11 @@ customer-quote-request/
 │   ├── cplb_tree.yaml                  # ★ 产品类别权威树 + 重设计导航树（由脚本生成）
 │   ├── cplb_tree.html                  # ★ 产品类别可视化选取器（可搜索、点击复制）
 │   └── page_thickness.xlsx             # 纸张厚度表
+├── erp_view/                           # ★ 产物查看器包（Flask，1.0.26 从 scripts/ 搬来）
+│   ├── data.py                         #   逻辑：扫描 / 路径安全 / ERP 字典 / 校验 / 交付闸门（不 import Flask）
+│   ├── app.py                          #   Flask 工厂 + 4 路由 + CLI（create_app / main）
+│   ├── __main__.py                     #   `uv run python -m erp_view`
+│   └── templates/index.html             #   页面本体（零依赖原生 JS；刻意不含 Jinja 语法）
 ├── scripts/
 │   ├── main.py                    # ★ 主入口（档案驱动，不含客户列名）
 │   ├── compare_with_erp.py        # ★ 与权威 ERP 导出逐字段分类对照（1.0.18）
@@ -1061,8 +1099,7 @@ customer-quote-request/
 │   ├── extract_fields.py          # ★ 抽取引擎（布局策略 + 数量档位 + 文本解析）
 │   ├── erp_schema.py              # ★ ERP 取值归一化 / 校验（步骤 5b，可单独跑 CLI）
 │   ├── internal_fields.py         # ★ 内部导出字段声明加载（ID / CPMC_ZH / Reminder / version）
-│   ├── erp_viewer.py              # ★ 产物查看器服务端（自动扫描 processed/，1.0.24）
-│   ├── ERP_data_show.html         # ★ 查看器页面（零依赖原生 JS，1.0.24 按新结构重写）
+│   ├── erp_viewer.py              # ★ 只是转发壳 → erp_view/app.py（1.0.26 起，逻辑不在 scripts/ 了）
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
 │   ├── calibrate_customer.py      # ★ 新客户校准器
@@ -1073,7 +1110,7 @@ customer-quote-request/
 │   ├── uuid_utils.py              # UUID4
 │   ├── xlsx2csv.py                # Excel → CSV
 │   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
-├── tests/                         # 259 项测试（uv run pytest）
+├── tests/                         # 268 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
@@ -1086,7 +1123,7 @@ customer-quote-request/
 ├── customer-files/                # pending / processed / failed（产物，不进仓库）
 │   └── samples/ngv/               # ★ NGV 校准语料库（真实附件 + ERP 导出 + manifest，不进仓库）
 ├── logs/                          # 任务日志（不进仓库）
-├── pyproject.toml                 # 依赖（pandas / openpyxl / python-docx / pymupdf / pyyaml）
+├── pyproject.toml                 # 依赖（pandas / openpyxl / python-docx / pymupdf / pyyaml / **flask**）
 └── uv.lock
 ```
 
@@ -1135,8 +1172,9 @@ uv run ./scripts/customer_profile.py --detect "customer-files/pending/QUOTE.xlsx
 uv run ./scripts/calibrate_customer.py --customer ngv --file <样本> --layout
 
 # 看产物（自动扫描 customer-files/processed，浏览器里看）
-uv run ./scripts/erp_viewer.py                      # 起服务 + 自动开浏览器
-uv run ./scripts/erp_viewer.py --no-open --port 9000 # 远程/无头
+uv run python -m erp_view                           # 起服务 + 自动开浏览器
+uv run python -m erp_view --no-open --port 9000     # 远程/无头
+uv run ./scripts/erp_viewer.py --no-open            # 等价（那个文件只是转发壳）
 
 # 邮件投递
 uv run ./scripts/ingest_email.py --eml mail.eml
@@ -1322,6 +1360,51 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.23** | **2026-09-24** | **内部字段 `Reminder` 把提醒固化进产物；「无」落 JSON `null`（`enum_exceptions` 随之删除）**（见下） |
 | **1.0.24** | **2026-09-24** | **产物加内部字段 `version` 标识配置版本（= 2）；旧查看器按新结构重写 + 自动扫描 `processed/`**（见下） |
 | **1.0.25** | **2026-09-24** | **交付闸门：「未完成」产物不许留在 `processed/`** —— 语料库样本硬闸 + 查看器「未完成」徽章（见下） |
+| **1.0.26** | **2026-09-24** | **查看器搬进 `erp_view/` 包 + 改用 Flask**：三层分离、扫描根进 `app.config`、测试改用 `test_client`（见下） |
+
+### 1.0.26 详细变更 —— 查看器包化 + Flask 重写
+
+业务 2026-09-24（第六批）：
+
+> 「将 `erp_viewer.py` 创建一个 `erp_view` 文件夹，然后使用 flask 重新编写」
+
+**做法：整块搬进包，顺手把三层拆开（不是把 `http.server` 换成 Flask 就完事）**
+
+| 之前（1.0.24 起） | 现在（1.0.26） |
+|------------------|--------------|
+| `scripts/erp_viewer.py`（501 行，逻辑 + HTTP 混在一起） | `erp_view/data.py`（逻辑，**不 import Flask**）+ `erp_view/app.py`（工厂 + 4 路由 + CLI） |
+| `scripts/ERP_data_show.html`（静态文件，`read_bytes()` 送出） | `erp_view/templates/index.html`（`render_template`，**刻意零 Jinja 语法**） |
+| `global PROCESSED_DIR`，`--dir` 改全局 | `app.config["PROCESSED_DIR"]`，`create_app(processed_dir=…)` 显式传 |
+| 测试：每个 HTTP 用例真起 `ThreadingHTTPServer` + 抢端口 | 测试：`app.test_client()`（WSGI 直连）；**真 socket 另有一条**兜底 |
+| `json.dumps(..., ensure_ascii=False, indent=2)` | `PrettyJSONProvider`（`ensure_ascii=False` / `sort_keys=False` / `compact=False`） |
+| 入口：`uv run ./scripts/erp_viewer.py` | `uv run python -m erp_view`（`scripts/erp_viewer.py` 保留为**转发壳**，老命令照旧） |
+
+**为什么保留那个转发壳**：SKILL 与 `customers/README.md` 里 6 处命令都写着它，业务也按这个敲；
+壳子里**没有一行逻辑**（测试断言它不含 `delivery_gates`/`scan_exports`/`FIELD_GROUPS`/`http.server`
+且 < 40 行），不存在两份实现漂移的问题。
+
+**新增依赖**：`flask 3.1.3`（`uv add flask`，连带 blinker / click / itsdangerous / jinja2 / markupsafe / werkzeug）。
+这是本仓库第一个 Web 框架依赖 —— 之前查看器刻意用标准库，是为了**零依赖**；业务明确要求 Flask 后，
+「零依赖」这条约束转移到**页面**上（页面仍然零 CDN、离线可用，`tests/test_viewer.py` 钉着）。
+
+**踩到的两个坑（都当场被测试拦住）**
+
+1. ★ **模板注释里写出了双花括号**：给模板加「不许出现 Jinja 语法」这条说明时，把符号本身写进去了 ——
+   Jinja 会把它当空表达式（渲染直接报错）。`test_模板里不许出现Jinja语法` 立刻红。已改成文字描述。
+2. ★ **`app.json.indent` 在 Flask 2.3 起不存在**（`compact` 也改语义了）：先写了 `dumps()` 覆写，
+   读源码后发现正路是 `compact = False` —— Flask 自己就会 `indent=2`，不用自己接管序列化。
+   另外默认 provider 会 `sort_keys=True` 按字母重排键、`ensure_ascii=True` 转义中文，
+   都得显式关掉（否则 `curl` 直读全是 `\uXXXX`、键序跟业务顺序对不上）。
+
+**回归**：测试 **259 → 268 项**（`test_viewer.py` +9：真服务器连通性、两个应用扫描根互不干扰、
+`data.py` 不依赖 Flask、转发壳无逻辑、模板无 Jinja 语法、JSON 口径、`python -m erp_view --help`、
+缓存头、端口占用中文提示）。
+另用 jsdom 对着**Flask 后端 + Jinja 渲染出来的页面**重跑交付闸门检查（`/tmp/erp-viewer-check/check-gate.js`）
+**18/18 通过** —— 页面改成模板后渲染没走形。
+
+> ⚠️ 顺带记一笔：检查脚本原来读本地 html 文件，搬包后路径失效（`ENOENT`）。
+> 已改成**从服务端取页面**（`GET /`）—— 这样测的是 Jinja 的真实渲染结果，比读文件更准。
+
 
 ### 1.0.25 详细变更 —— 交付闸门（未完成产物不许留在 processed/）
 

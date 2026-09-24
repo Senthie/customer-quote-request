@@ -1,17 +1,19 @@
-"""ERP 导出查看器（scripts/erp_viewer.py + scripts/ERP_data_show.html）回归测试。
+"""ERP 导出查看器（`erp_view/` 包：data.py + app.py + templates/index.html）回归测试。
 
-业务 2026-09-24 三件事：
+业务 2026-09-24 四件事：
   ① 旧 HTML 是按**上一代**结构写的（SJFX / KHMBJ / GG_length…），全错，要按新结构重写；
   ② 要能**自动扫描** customer-files/processed 下的导出产物；
-  ③ 产物要加内部字段 `version` 标识当前配置版本（目前 = 2）。
+  ③ 产物要加内部字段 `version` 标识当前配置版本（目前 = 2）；
+  ④ 把 `scripts/erp_viewer.py` 搬进 `erp_view/` 文件夹、用 Flask 重写。
 
 这里钉住的是**机制**，不是某一份产物的具体值：
   * 扫描能递归找到全部 ERP_*.json、最新在前、_superseded 目录会被标出来
-  * `path` 参数出不了 processed 目录（路径穿越）
+  * `path` 参数出不了扫描根（路径穿越）
   * 字段分组必须**恰好覆盖** 59 个 ERP 字段各一次 —— 加了字段忘了归组会直接红，
     避免新字段在页面上悄悄不显示
   * 页面不许再引外部 <script src>（旧版引 unpkg/jsdelivr，断网白屏）
-  * HTTP 四个端点真的能应答
+  * 四个端点真的能应答；取值校验与交付闸门**只有服务端一份实现**
+  * 分层不许退化：`data.py` 不 import Flask、页面不许有判定逻辑、转发壳里不许有业务逻辑
 """
 from __future__ import annotations
 
@@ -19,19 +21,20 @@ import json
 import os
 import re
 import threading
-import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
-import erp_viewer as ev
+import erp_view as ev
 import erp_schema
+from erp_view import create_app
 from main import TEMPLATE_PATH
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PAGE_PATH = REPO_ROOT / "scripts" / "ERP_data_show.html"
+PKG_DIR = REPO_ROOT / "erp_view"
+PAGE_PATH = PKG_DIR / "templates" / "index.html"
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -273,10 +276,10 @@ def test_页面调用的接口都存在():
     html = PAGE_PATH.read_text(encoding="utf-8")
     for endpoint in ("api/schema", "api/exports", "api/export?path="):
         assert endpoint in html, f"页面没调用 {endpoint}"
-    # 服务端真的实现了这些路由
-    server_src = (REPO_ROOT / "scripts" / "erp_viewer.py").read_text(encoding="utf-8")
-    for route in ('"/api/exports"', '"/api/export"', '"/api/schema"'):
-        assert route in server_src, f"服务端没实现 {route}"
+    # 服务端真的实现了这些路由 —— 直接问 Flask 的路由表（比 grep 源码稳）
+    rules = {str(r) for r in create_app().url_map.iter_rules()}
+    for route in ("/api/exports", "/api/export", "/api/schema", "/"):
+        assert route in rules, f"服务端没实现 {route}；现有: {sorted(rules)}"
 
 
 def test_页面认得出内部字段与空值口径():
@@ -362,57 +365,53 @@ def test_校验载荷_CPLB编号写法不算非法(tmp_path):
 # HTTP 端到端
 # ═══════════════════════════════════════════════════════════════════════
 @pytest.fixture
-def viewer(tmp_path, monkeypatch):
-    """起一个真实（临时目录的）服务端，返回 (base_url, processed_dir)。"""
+def viewer(tmp_path):
+    """两份产物（一份最新 + 一份 _superseded）+ Flask 应用 → 返回 (test_client, 扫描根)。
+
+    为什么不再起真 HTTP 服务（1.0.26 前的写法）：Flask 的 `test_client()` 直接走 WSGI，
+    不用抢端口也不会偶发超时，测试从 2 秒级掉到毫秒级。**真服务器**的连通性另有一条
+    测试（`test_真实服务器能起来并回应`），别让「测试全绿但其实起不来」蒙过去。
+    """
     _make_export(tmp_path, "tid1", {"version": 2, "CPMC": "产品甲", "CPLB": "26.01;普通蛇圈书",
                                     "CPSX": None, "ID": "tid1", "CPMC_ZH": "产品甲（中）",
                                     "Reminder": "报价截止日期 2026-06-26 已过期 90 天"},
                  stamp="20260924_010203", mtime=1_700_000_300)   # 较新
     _make_export(tmp_path, "tid0", {"CPMC": "老产物"}, rel_dir="_superseded_x/tid0",
                  stamp="20260924_010000", mtime=1_700_000_100)   # 较旧 + 已被取代
-    monkeypatch.setattr(ev, "PROCESSED_DIR", tmp_path)
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), ev.Handler)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    try:
-        yield f"http://127.0.0.1:{srv.server_address[1]}", tmp_path
-    finally:
-        srv.shutdown()
-        srv.server_close()
-        t.join(timeout=5)
+    app = create_app(processed_dir=tmp_path)
+    app.config["TESTING"] = True
+    return app.test_client(), tmp_path
 
 
-def _get(url: str) -> tuple[int, str]:
-    try:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            return r.status, r.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8")
+def _get(client, path: str) -> tuple[int, str]:
+    r = client.get(path)
+    return r.status_code, r.get_data(as_text=True)
 
 
 def test_http_首页返回页面(viewer):
-    base, _ = viewer
-    status, body = _get(base + "/")
+    client, _ = viewer
+    status, body = _get(client, "/")
     assert status == 200
     assert "ERP" in body and "api/exports" in body
 
 
 def test_http_exports_列出产物(viewer):
-    base, processed_dir = viewer
-    status, body = _get(base + "/api/exports")
+    client, processed_dir = viewer
+    status, body = _get(client, "/api/exports")
     assert status == 200
     payload = json.loads(body)
     assert payload["count"] == 2
     assert payload["exports"][0]["task_id"] == "tid1", "最新在前"
     assert payload["exports"][0]["version"] == 2
     assert payload["exports"][1]["superseded"] is True
-    assert payload["root"] == str(processed_dir), "要回显真正在扫的目录，方便排错"
+    assert Path(payload["root"]) == Path(processed_dir).resolve(), \
+        "要回显真正在扫的目录，方便排错"
 
 
 def test_http_export_返回内容(viewer):
-    base, _ = viewer
+    client, _ = viewer
     rel = "tid1/ERP_tid1_20260924_010203.json"
-    status, body = _get(f"{base}/api/export?path={rel}")
+    status, body = _get(client, f"/api/export?path={rel}")
     assert status == 200
     payload = json.loads(body)
     assert payload["data"]["CPMC"] == "产品甲"
@@ -424,15 +423,15 @@ def test_http_export_返回内容(viewer):
 
 
 def test_http_export_拒绝越界(viewer):
-    base, _ = viewer
+    client, _ = viewer
     for bad in ("../etc/passwd", "..%2F..%2Fetc%2Fpasswd", "/etc/passwd", ""):
-        status, _ = _get(f"{base}/api/export?path={bad}")
+        status, _ = _get(client, f"/api/export?path={bad}")
         assert status == 404, f"{bad!r} 应该 404"
 
 
 def test_http_schema_含配置版本(viewer):
-    base, _ = viewer
-    status, body = _get(base + "/api/schema")
+    client, _ = viewer
+    status, body = _get(client, "/api/schema")
     assert status == 200
     payload = json.loads(body)
     assert payload["config_version"] == 2
@@ -442,8 +441,17 @@ def test_http_schema_含配置版本(viewer):
 
 
 def test_http_未知路径404(viewer):
-    base, _ = viewer
-    assert _get(base + "/api/nope")[0] == 404
+    client, _ = viewer
+    status, body = _get(client, "/api/nope")
+    assert status == 404
+    assert "未知路径" in json.loads(body)["error"], "错误也回 JSON，且文案是中文"
+
+
+def test_http_响应不许被缓存(viewer):
+    """内部工具：每跑一单 processed/ 就变，浏览器缓存住会看到旧产物。"""
+    client, _ = viewer
+    r = client.get("/api/exports")
+    assert r.headers.get("Cache-Control") == "no-store"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -536,8 +544,8 @@ def test_坏文件不报交付闸门(tmp_path):
 
 
 def test_http_export_带回交付闸门(viewer):
-    base, _ = viewer
-    status, body = _get(base + "/api/export?path=tid1/ERP_tid1_20260924_010203.json")
+    client, _ = viewer
+    status, body = _get(client, "/api/export?path=tid1/ERP_tid1_20260924_010203.json")
     assert status == 200
     payload = json.loads(body)
     assert "incomplete" in payload, "页面不自己判交付状态，必须由服务端给"
@@ -549,3 +557,113 @@ def test_页面显示交付闸门():
     page = PAGE_PATH.read_text(encoding="utf-8")
     assert "未完成 · 不得交付" in page
     assert "incomplete" in page
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Flask 版分层（1.0.26）：逻辑一份、路由一份、显示一份
+#
+# 这次重写的风险不是「能不能跑」，而是**长回一团**：把 Flask 路由和扫描逻辑混在
+# 一个文件里、或者页面又自己算一遍判定。下面几条就是钉住分层别退化。
+# ═══════════════════════════════════════════════════════════════════════
+def test_真实服务器能起来并回应(tmp_path):
+    """`test_client` 走 WSGI、绕过了真 socket —— 这里真起一次服务，确认连得上。
+
+    别让「测试全绿但其实起不来」蒙过去（旧版是每个 HTTP 测试都起真服务，所以天然覆盖）。
+    """
+    from werkzeug.serving import make_server
+
+    _make_export(tmp_path, "tid1", {"version": 2, "CPMS": "已写", "CPMC_ZH": "甲"},
+                 stamp="20260924_010203")
+    server = make_server("127.0.0.1", 0, create_app(processed_dir=tmp_path), threaded=True)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(base + "/api/exports", timeout=15) as r:
+            assert json.loads(r.read().decode("utf-8"))["count"] == 1
+        with urllib.request.urlopen(base + "/", timeout=15) as r:
+            assert b"<!DOCTYPE html>" in r.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        t.join(timeout=5)
+
+
+def test_两个应用的扫描根互不干扰(tmp_path):
+    """旧版靠 `global PROCESSED_DIR` 改全局：`--dir` 与测试会互相污染。
+
+    现在扫描根在 `app.config` 里，两个应用各扫各的。
+    """
+    dir_a, dir_b = tmp_path / "a", tmp_path / "b"
+    _make_export(dir_a, "ta", {"CPMS": "甲"}, stamp="20260924_010203")
+    _make_export(dir_b, "tb", {"CPMS": "乙"}, stamp="20260924_010203")
+    _make_export(dir_b, "tb2", {"CPMS": "丙"}, stamp="20260924_010204")
+    client_a, client_b = create_app(dir_a).test_client(), create_app(dir_b).test_client()
+    assert client_a.get("/api/exports").get_json()["count"] == 1
+    assert client_b.get("/api/exports").get_json()["count"] == 2
+    # 再问一次 a：不许被 b 带跑
+    assert client_a.get("/api/exports").get_json()["count"] == 1
+
+
+def test_data层不依赖flask():
+    """`data.py` 是纯逻辑（可单独测、可被别处复用）；Flask 只许出现在 app.py。"""
+    src = (PKG_DIR / "data.py").read_text(encoding="utf-8")
+    assert "from flask" not in src and "import flask" not in src
+
+
+def test_转发壳里没有业务逻辑():
+    """`scripts/erp_viewer.py` 只剩转发 —— 逻辑搬进 erp_view/ 后不许两处各留一份。"""
+    src = (REPO_ROOT / "scripts" / "erp_viewer.py").read_text(encoding="utf-8")
+    assert "from erp_view.app import main" in src
+    for leaked in ("delivery_gates", "def scan_exports", "FIELD_GROUPS", "http.server"):
+        assert leaked not in src, f"转发壳里不该有实现: {leaked}"
+    assert len(src.splitlines()) < 40, "转发壳要够短，别又长回一个应用"
+
+
+def test_模板里不许出现Jinja语法():
+    """页面数据全部走 `/api/*` fetch。模板里一旦出现 `{{ }}`，Jinja 会把它当变量，
+    要么渲染报错、要么把 JS 的一部分吃掉 —— 这种 bug 很难看出来。"""
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    for token in ("{{", "{%", "{#"):
+        assert token not in html, f"模板里出现了 Jinja 语法 {token!r}；数据请走 /api/*"
+
+
+def test_JSON口径_不转义中文_不排序键_缩进两格(viewer):
+    client, _ = viewer
+    body = client.get("/api/schema").get_data(as_text=True)
+    assert "\\u" not in body, "中文不该被转义（否则 curl 直读没法看）"
+    assert '": ' in body, "要缩进（compact=False），方便人肉核对"
+    # 键序按我们构造的顺序（sort_keys=False）—— 默认 provider 会按字母重排
+    payload = client.get("/api/export?path=tid1/ERP_tid1_20260924_010203.json").get_json()
+    assert list(payload) == ["relpath", "data", "validation", "incomplete"], list(payload)
+
+
+def test_模块入口可跑():
+    """`python -m erp_view --help` 能跑 —— CLI 参数在 app.main 里，别让它烂掉。"""
+    import subprocess
+    import sys
+
+    r = subprocess.run([sys.executable, "-m", "erp_view", "--help"],
+                       cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    for flag in ("--host", "--port", "--no-open", "--dir"):
+        assert flag in r.stdout, f"CLI 少了 {flag}"
+
+
+def test_端口被占用时给中文提示(capsys):
+    """werkzeug 自己把 EADDRINUSE 消化掉了（英文报错 + `sys.exit(1)`），异常传不出来，
+    所以 `main()` 起服务前先探一次端口 —— 这条钉住那个前置检查别被删掉。"""
+    import socket
+
+    from erp_view.app import main as cli_main
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        busy_port = sock.getsockname()[1]
+        rc = cli_main(["--no-open", "--port", str(busy_port)])
+
+    captured = capsys.readouterr()
+    assert rc == 1, "端口被占用要返回 1"
+    assert "端口已被占用" in captured.err, captured.err
+    assert "换个端口试试" in captured.err, captured.err

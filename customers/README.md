@@ -58,7 +58,7 @@ uv run ./scripts/main.py <样本文件> --customer <新客户id>
 ```
 
 再逐个核对输出 JSON 的字段值是否合理（`CPMS` 除外 —— 那个永远由 agent 手写）。
-想看产物结构对不对，跑 `uv run ./scripts/erp_viewer.py` 在浏览器里看（SKILL.md 4.10）：
+想看产物结构对不对，跑 `uv run python -m erp_view` 在浏览器里看（SKILL.md 4.10）：
 它会标出「缺哪些键 / 多哪些键 / 哪个值不在 ERP 枚举里」。
 
 **有权威 ERP 导出时**（客户给的「标准答案」），做一次分类对照 —— 这是最省时间的
