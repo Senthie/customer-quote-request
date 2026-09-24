@@ -84,6 +84,23 @@ def legal_values(field: str) -> list[str]:
     return values
 
 
+def _observed_values(spec: dict) -> list[dict]:
+    """「实测值」：不在表单静态 option 列表里，但在真实 ERP 导出里出现过的取值。
+
+    字典是从表单 HTML 转录的；如果某个下拉由服务端 postback 动态填充，
+    转录出的枚举就不完整（ZBLX 的 `B3B普通芯` 就是这种情况）。
+    这类值校验时降级为 WARN（不静默放过、也不误报成代码缺陷），
+    并要求业务确认后把值移进 options 或从档案里去掉。
+    """
+    out = []
+    for item in spec.get("observed_values") or []:
+        if isinstance(item, dict):
+            out.append(item)
+        else:
+            out.append({"value": str(item)})
+    return out
+
+
 def _tree_entries(spec: dict) -> list[dict]:
     """树形下拉（如 CPLB 产品类别）：节点 = 编号 + 名称。
 
@@ -248,12 +265,49 @@ def _type_issue(field: str, value: Any, ftype: str) -> Optional[str]:
     return None
 
 
-def validate_result(result: dict) -> list[dict]:
-    """校验一份 59 字段结果。返回问题列表（level: error / warn）。"""
+def declared_exceptions(entries) -> dict:
+    """把档案 `rules.enum_exceptions` 归一成 {字段: {取值: 原因}}。
+
+    用途（2026-09-24 新增）：业务拍板的口径有时**不在 ERP 下拉枚举里**
+    （NGV 的 `CPSX: 无` —— 枚举里只有 三岁以上/三岁以下/其他/两个「要寄第三方测试」）。
+    按字典硬报 error 会让**每一单**都红一次，把「0 error」这道闸门变成噪声、
+    真缺陷反而被淹没；静默放过又是拿业务口径当没看见。
+    所以走「档案显式声明 + 降级为 WARN + 带上原因」——可见、可查、不算缺陷。
+    """
+    out: dict = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        field, value = entry.get("field"), entry.get("value")
+        if not field or value is None:
+            continue
+        out.setdefault(str(field), {})[str(value).strip()] = str(entry.get("reason", "")).strip()
+    return out
+
+
+def validate_result(result: dict, allow_empty=(), allow_values=None,
+                    internal_fields=()) -> list[dict]:
+    """校验一份结果。返回问题列表（level: error / warn）。
+
+    allow_empty: 允许为空的字段集合（客户档案 rules.required_empty）。
+    ⚠️ 为什么需要它（2026-09-24）：KHDH「客户单号」在字典里是业务必填，
+    但 NGV 的报价阶段**客户还没给单号** —— 4 份权威 ERP 导出里 KHDH 全是空的；
+    套装单同样没有书脊方向（Drop_SJFX）。对这类客户，按字典硬报 error 是误报，
+    会淹没真正的取值错误。豁免是**按档案声明**的，不是全局放宽。
+
+    allow_values: {字段: {取值: 原因}}，客户档案 rules.enum_exceptions（见 declared_exceptions）。
+    这些取值**不在 ERP 枚举里但业务已拍板**用 → 报 WARN 并带上原因，不报 error。
+
+    internal_fields: 内部导出字段的键名（assets/internal_export_fields.yaml）。
+    它们**不是 ERP 字段**（`ID` / `CPMC_ZH` 字典里都没有），追加在 59 键之后，
+    不参与校验 —— 否则每份产物都会报「字典里没有这个字段」。
+    """
     issues: list[dict] = []
+    allow_empty = set(allow_empty or ())
+    internal = {str(k) for k in (internal_fields or ())}
 
     for field, value in result.items():
-        if field.startswith("_"):
+        if field.startswith("_") or field in internal:
             continue
         spec = field_spec(field)
 
@@ -273,8 +327,21 @@ def validate_result(result: dict) -> list[dict]:
                 # 树形下拉：值形如「23.01;无线胶装书」—— 校验「编号」确实是树节点
                 by_code = {t["code"] for t in tree if t["code"]}
                 code = text.split(";")[0].strip()
+                by_name = {str(t["label"]).strip().lower(): t["code"]
+                           for t in tree if t.get("label")}
                 top_code = f"{code}.00" if re.fullmatch(r"\d+", code) else code
-                if top_code not in by_code:
+                if ";" not in text and text.lower() in by_name:
+                    # ★ 实测：真实 ERP 导出里 CPLB 存的是**纯名称**（"其它套装"），
+                    #   而我们输出的是「编号;名称」。两种都可能被导入端接受，
+                    #   口径未定 → 判 WARN 保留可见性，不当错误。
+                    issues.append({
+                        "field": field, "level": "warn",
+                        "message": f"取值 {value!r} 是**纯名称**（无编号）—— 真实 ERP 导出"
+                                   f"就是这种写法，而我们输出「编号;名称」"
+                                   f"（如 {by_name[text.lower()]};{value}）。"
+                                   f"导入端认哪种需业务确认；两种都能定位到同一节点。",
+                    })
+                elif top_code not in by_code:
                     tops = sorted(c for c in by_code if c.endswith(".00"))
                     issues.append({
                         "field": field, "level": "error",
@@ -288,10 +355,35 @@ def validate_result(result: dict) -> list[dict]:
                                    f"建议具体到子类（如 {code}.01）—— 顶层节点过粗，生产/计价会不准",
                     })
             elif values and text not in values:
-                issues.append({
-                    "field": field, "level": "error",
-                    "message": f"取值 {value!r} 不在 ERP 合法枚举里；合法值：{' / '.join(values)}",
-                })
+                declared = (allow_values or {}).get(field, {})
+                observed = _observed_values(spec)
+                hit = next((o for o in observed
+                            if str(o.get("value", "")).strip().lower() == text.lower()), None)
+                if text in declared:
+                    # 档案声明的口径例外（reason 来自业务拍板）→ WARN + 原因
+                    issues.append({
+                        "field": field, "level": "warn",
+                        "message": f"取值 {value!r} 是客户档案声明的口径（rules.enum_exceptions），"
+                                   f"不在 ERP 下拉枚举里（枚举：{' / '.join(values)}）"
+                                   f"—— {declared[text] or '档案未注明原因'}",
+                    })
+                elif hit:
+                    # 实测值：不在表单静态枚举里，但真实 ERP 导出里出现过。
+                    # 不能当 error（会让每次运行都报红、被当成代码缺陷），
+                    # 也不能静默放过 —— 打 WARN 让这条待确认项一直可见。
+                    issues.append({
+                        "field": field, "level": "warn",
+                        "message": f"取值 {value!r} 不在表单枚举里，但实测于 "
+                                   f"{hit.get('seen_in') or '真实 ERP 导出'} —— 待业务确认："
+                                   f"补进字典 options，还是改用已有值。"
+                                   f"（表单枚举：{' / '.join(values)}）",
+                    })
+                else:
+                    issues.append({
+                        "field": field, "level": "error",
+                        "message": f"取值 {value!r} 不在 ERP 合法枚举里；"
+                                   f"合法值：{' / '.join(values)}",
+                    })
 
         # 类型校验
         ftype = spec.get("type")
@@ -301,9 +393,9 @@ def validate_result(result: dict) -> list[dict]:
                 issues.append({"field": field, "level": "error",
                                "message": f"{spec.get('label', field)} {problem}"})
 
-        # 必填校验
+        # 必填校验（allow_empty 里的字段按客户档案豁免 —— 见下方说明）
         required = spec.get("required")
-        if empty and required:
+        if empty and required and field not in allow_empty:
             issues.append({
                 "field": field, "level": "error" if required == "error" else "warn",
                 "message": f"{spec.get('label', field)} 为空"
@@ -338,10 +430,45 @@ def _cmd_field(field: str) -> int:
     return 0
 
 
-def _cmd_check(path: str) -> int:
+def _cmd_check(path: str, customer: Optional[str] = None) -> int:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    issues = validate_result(data)
+    allow_empty: tuple = ()
+    allow_values: dict = {}
+    internal: tuple = ()
+    try:
+        # 内部导出字段（ID / CPMC_ZH …）：不是 ERP 字段，不参与字典校验。
+        # 无条件加载（与是否传 --customer 无关）—— 否则校验自己产出的文件时会误报
+        # 「字典里没有这个字段」。
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+        from internal_fields import internal_field_keys
+        internal = tuple(internal_field_keys())
+        if internal:
+            print(f"内部导出字段（非 ERP 字段，跳过校验）: {list(internal)}")
+    except Exception as exc:                          # 声明文件缺失不阻塞校验
+        print(f"（内部字段声明未能加载，按无内部字段校验：{exc}）")
+    if customer:
+        # 按客户档案豁免「本客户本来就该为空」的字段（rules.required_empty），
+        # 以及「业务拍板用、但不在 ERP 枚举里」的口径例外（rules.enum_exceptions）。
+        # 不传客户时按字典硬校验 —— NGV 的输出会因此报 KHDH 为空、CPSX=无（假 error）。
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+            from customer_profile import load_profile
+            prof = load_profile(customer)
+            allow_empty = tuple(prof.rule("required_empty", []) or [])
+            allow_values = declared_exceptions(prof.rule("enum_exceptions", []))
+            print(f"按客户档案豁免必填校验的字段（{customer}）: {list(allow_empty)}")
+            if allow_values:
+                print(f"按客户档案声明的口径例外（不在枚举里 → WARN）: "
+                      f"{ {f: list(v) for f, v in allow_values.items()} }")
+        except Exception as exc:                      # 档案缺失/加载失败不阻塞校验
+            print(f"（客户档案 {customer} 未能加载，按字典硬校验：{exc}）")
+    issues = validate_result(data, allow_empty=allow_empty, allow_values=allow_values,
+                             internal_fields=internal)
     if not issues:
         print(f"✓ {path}：{len(data)} 个字段全部通过（枚举 / 类型 / 必填）")
         return 0
@@ -359,6 +486,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="ERP 表单权威字典（归一化 / 校验）")
     parser.add_argument("--field", help="查看单个字段的定义与合法取值")
     parser.add_argument("--check", metavar="ERP_JSON", help="校验一份 ERP 结果 JSON")
+    parser.add_argument("--customer", help="配合 --check：按该客户档案豁免必填（rules.required_empty）"
+                                           "与口径例外（rules.enum_exceptions）")
     parser.add_argument("--values", metavar="FIELD", help="只打印该字段的合法取值")
     args = parser.parse_args()
 
@@ -369,7 +498,7 @@ def main() -> int:
             print(v)
         return 0
     if args.check:
-        return _cmd_check(args.check)
+        return _cmd_check(args.check, args.customer)
     return _cmd_overview()
 
 

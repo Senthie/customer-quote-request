@@ -32,7 +32,7 @@ def test_auto_pairs_横向键值对_值可在空列之后():
     rows = [
         ["", "Imprint", "Autumn", "Complexity", "Low", "Requested By", "", "Christine"],
     ]
-    values, raw, layout = _extract_rows(rows, IGL)
+    values, raw, layout, _ = _extract_rows(rows, IGL)
     assert values["imprint"] == "Autumn"
     assert values["complexity"] == "Low"
     # 右侧最近的非空且非标签单元格（跳过空格）
@@ -45,7 +45,7 @@ def test_auto_pairs_密集标签行_取值在下方():
         ["", "Pub Month", "Series Name", "", "", "Number of titles"],
         ["", "2027-05-01", "Puzzle & Colour Disney", "", "", "2"],
     ]
-    values, _, _ = _extract_rows(rows, IGL)
+    values, _, _, _ = _extract_rows(rows, IGL)
     assert values["pub_month"] == "2027-05-01"
     assert values["series_name"] == "Puzzle & Colour Disney"
     assert values["number_of_titles"] == "2"
@@ -57,7 +57,7 @@ def test_auto_pairs_密集行下方也是标签时改取右侧():
         ["", "Imprint", "Autumn", "Complexity", "Low"],
         ["", "Pub Month", "Series Name"],          # 又一行标签 → 不能被当成值
     ]
-    values, _, _ = _extract_rows(rows, IGL)
+    values, _, _, _ = _extract_rows(rows, IGL)
     assert values["imprint"] == "Autumn"
     assert values["complexity"] == "Low"
     assert "pub_month" not in values               # 下面那行没数据，不该凭空取值
@@ -65,19 +65,19 @@ def test_auto_pairs_密集行下方也是标签时改取右侧():
 
 def test_auto_pairs_稀疏标签行_取右侧():
     rows = [["", "Size (tps) H x W x D mm", "198mm x 129mm"]]
-    values, _, _ = _extract_rows(rows, IGL)
+    values, _, _, _ = _extract_rows(rows, IGL)
     assert values["size"] == "198mm x 129mm"
 
 
 def test_先到先得_后面的策略不覆盖已有值():
     rows = [["", "Format", "Paperback"], ["", "Format", "Hardback"]]
-    values, _, _ = _extract_rows(rows, IGL)
+    values, _, _, _ = _extract_rows(rows, IGL)
     assert values["format"] == "Paperback"
 
 
 def test_quantity_tiers_特殊键不被当普通值():
     rows = [["", "Total Costs", "3k", "5k"]]
-    values, _, _ = _extract_rows(rows, IGL)
+    values, _, _, _ = _extract_rows(rows, IGL)
     assert "quantity_tiers" not in values
 
 

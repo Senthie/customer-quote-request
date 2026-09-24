@@ -113,6 +113,9 @@ fields:
     notes: >
       ERP 存的是**树节点文本**「编号;名称」，如 `23.01;无线胶装书`（历史单据实例）。
       取值必须是 assets/cplb_tree.yaml 里的节点（顶层 22~32，具体到可选子类）。
+      ★ 口径已由业务拍板（2026-09-24）：**我们输出「编号;名称」**，不输出纯名称 ——
+      编号让用户更直观地看到类别标识（真实 ERP 导出的 4 份 NGV 记录存的是纯名称
+      `其它套装` 等，那是 ERP 侧的写法；纯名称输入仍判 WARN 提醒补编号）。
       重设计的导航树（分组顺序按决策流程、决策路径、行话/英文别名）见该文件的
       navigation / paths / quick_pick 段；可视化选取器：assets/cplb_tree.html。
       查树：uv run ./scripts/cplb_tree.py --list | --search 揭页 | --node 23.01 | --suggest "..."
@@ -507,6 +510,18 @@ fields:
       - {code: "003", label: A=A双坑纸板}
       - {code: "005", label: K=K加强芯双坑箱}
       - {code: "008", label: K=K加强芯(耐破)}
+    # ★ 实测值（不在上面表单静态 option 列表里，但在真实 ERP 导出里出现过）。
+    #   这类值校验时**不算 error**，但会打 WARN 保留可见性。
+    #   ★ 2026-09-24 业务给出了该下拉的完整 HTML —— 与上面转录的 6 项**完全一致**，
+    #     说明枚举是完整的，`B3B普通芯` 确实不在其中。所以它更大概率是 ERP 侧数据
+    #     （或历史版本 option），不是我们该产出的值；NGV 档案已按业务口径把 ZBLX 留空。
+    observed_values:
+      - value: B3B普通芯
+        seen_in: "NGV 真实导出 CU26061701、CU26072301、CU26072302 的 ZBLX"
+        note: >
+          业务 2026-09-24 提供的 txtZBLX 完整 option 与字典转录一致（6 项），
+          没有 B3B 系的值（B3B坑纸板 出现在 DKMC「底卡名称」下拉里）。
+          → 结论：枚举完整，该值是 ERP 侧写进去的，不由我们产出；NGV 已留空。
 
   ZXFS:
     form_name: txtZXFS

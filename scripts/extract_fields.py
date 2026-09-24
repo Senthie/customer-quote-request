@@ -43,7 +43,7 @@ UNMATCHED_KEY = "__unmatched_labels__"
 TEXT_BLOCKS_KEY = "__text_blocks__"
 LAYOUT_KEY = "__layout__"
 
-ALL_STRATEGIES = ("auto_pairs", "column_pairs", "shifted_pairs")
+ALL_STRATEGIES = ("auto_pairs", "column_pairs", "shifted_pairs", "section_pairs")
 
 # 说明：表头即标签的整列表格（旧文档里的「纵向格式」）不需要单独策略 ——
 # 引擎统一用 header=None 读表，真正的表头会落在第 0 行，
@@ -61,23 +61,35 @@ class CustomerData:
     text_blocks: list = field(default_factory=list)       # 全部文本（供 agent 写 CPMS / 校准）
     unmatched: list = field(default_factory=list)         # 认不出来的标签（校准用）
     extras_found: list = field(default_factory=list)      # 命中的「已知附加信息」→ CPMS 素材
+    scanned: dict = field(default_factory=dict)           # rules.scan 正则扫描到的值
+    scan_notes: list = field(default_factory=list)        # 扫描过程中的「为什么没落值」（审计用）
     layout: str = ""                                      # 实际命中的抽取路径（审计用）
     profile_id: str = ""
 
     def get(self, key: str, default: Any = "") -> Any:
-        value = self.values.get(key, default)
+        """先看分区/平铺抽出来的值，再退回 rules.scan 正则扫描出来的值。
+
+        注意必须用 `values.get(key)`（缺省 None）而不是 `values.get(key, default)`：
+        后者在缺键时会返回 ``''``，于是 `is None` 判不成立、**scanned 永远读不到** ——
+        实测踩过：KHDH / FSCMC 明明扫到了值，结果全是空串。
+        """
+        value = self.values.get(key)
+        if value is None:
+            value = self.scanned.get(key)
         if value is None:
             return default
         return value
 
     def has(self, key: str) -> bool:
-        return bool(str(self.values.get(key, "")).strip())
+        return bool(str(self.get(key, "") or "").strip())
 
     def as_dict(self) -> dict:
         return {
             "profile_id": self.profile_id,
             "layout": self.layout,
             "values": self.values,
+            "scanned": self.scanned,
+            "scan_notes": self.scan_notes,
             "quantity_tiers": self.quantity_tiers,
             "unmatched_labels": self.unmatched,
             "extras_found": self.extras_found,
@@ -178,6 +190,238 @@ def extract_quantity_tiers(rows: list, profile: CustomerProfile, logger=None) ->
     return tiers
 
 
+# ── 分区式表单（section_pairs）────────────────────────────────────────────
+def _label_matches(profile: CustomerProfile, alias: str, cell: str) -> bool:
+    """声明标签与单元格「整词包含」匹配（客户常把双语标签挤在一格）。"""
+    a, t = norm_label(alias), norm_label(cell)
+    if not a or not t:
+        return False
+    if a == t:
+        return True
+    return bool(re.search(r"(?<![a-z0-9])" + re.escape(a) + r"s?(?![a-z0-9])", t))
+
+
+def _values_to_the_right(cells: list, start: int, profile: CustomerProfile,
+                         mode: str = "first") -> str:
+    """取标签右边的值。
+
+    mode="first"：第一个非空格（跳过空格，也跳过「正好等于某个标签」的格）——
+                  排期行就是这种写法（值出现在很右边的 G 列）。
+    mode="run"  ：**从值列起连续**取，遇到第一个空格即停，再拼起来 ——
+                  材质/印刷/尺寸/装订这类行是「C 列起一整块」，
+                  右边的 FSC / 厚度列（I/J/K）属于另一组信息，不能混进来
+                  （否则封面纸为空的行会被填成 `FSC mix`）。
+                  必须连续取的典型：`145 | x | 210 | mm | portrait`。
+    """
+    if mode == "run":
+        picked = []
+        for j in range(start, len(cells)):
+            cell = cells[j]
+            if not cell:
+                break
+            if profile.match_label_exact(cell):     # 正好等于标签 → 不是值
+                break
+            picked.append(cell)
+        return " ".join(picked)
+
+    for j in range(start, len(cells)):
+        cell = cells[j]
+        if not cell:
+            continue
+        if profile.match_label_exact(cell):
+            continue
+        return cell
+    return ""
+
+
+def _extract_sections(rows: list, profile: CustomerProfile, logger=None) -> tuple:
+    """按档案 `sections:` 走一遍「分区表单」（NGV 的 enquiry 表就是这种）。
+
+    表格形态（NGV 四份样本实测完全一致）：
+
+        A 列 = 分区名（双语挤一格：`finishing\\nVerarbeitung`），向下继承
+        B 列 = 标签（`extent\\nUmfang` / `paper\\nPapier` / `printing\\nDruck`）
+        C 列起 = 值
+
+    **按行位置对齐**：分区从它那一行开始，第 i 行对应 entries[i]。
+    这种方式对 NGV 这种固定模板最稳，而且天生处理两件麻烦事：
+
+      * 同一分区里标签会重复（content 下 paper ×2、cover 下 paper/printing/
+        finishing 各 ×2 —— 封面与护封），位置对齐不需要靠标签区分；
+      * 某些行的值是空的（环衬、护封、sticker 常年为空），按序「消费」会在
+        空行处错位（实测：会把联系人写进 notes）；位置对齐不会。
+
+    entries[i] 两种形态：
+      - `section_value`：该行 B 列本身是值（产品名 / 数量 / 款数 / specials / notes）
+      - `label` + `key`：B 列是标签，值取右侧；声明的 label 同时用作**断言** ——
+        对不上就打 WARN 提示「表单结构可能变了」，避免静默取错值。
+
+    分区名只认档案里**已声明**的；A 列其它文字（`ends` / `Vor-/Nachsatz` /
+    `jacket` / `Schutzumschlag`）是该行的子说明，不切换分区 —— 这正是 NGV 表
+    的实际语义（环衬/护封仍属于内文/封面分区，用行序区分）。
+    """
+    def log(msg: str, level: str = "info"):
+        if logger is not None:
+            getattr(logger, level, logger.info)(msg)
+
+    sections = profile.sections or []
+    if not sections:
+        return {}, {}, "", []
+
+    section_col = int(profile.rule("layout.section_col", 0))
+    label_col = int(profile.rule("layout.label_col", 1))
+    first_value_col = int(profile.rule("layout.first_value_col", label_col + 1))
+
+    values: dict = {}
+    raw_labels: dict = {}
+    unmatched: list = []
+    current = None
+    current_no = -1
+    start_row = -1
+    gained = 0
+    consumed_rows = 0
+
+    for r, cells in enumerate(rows):
+        # ① 分区切换（只有已声明的分区名才算）
+        if section_col < len(cells) and cells[section_col]:
+            hit = profile.match_section(cells[section_col])
+            if hit is not None:
+                no = next(i for i, s in enumerate(sections) if s is hit)
+                if no != current_no:
+                    current, current_no, start_row = hit, no, r
+        if current is None:
+            continue
+
+        entries = current.get("entries") or []
+        offset = r - start_row
+        if offset >= len(entries):          # 分区声明的行数已用完 —— 多余行忽略
+            continue
+        entry = entries[offset]
+        label_cell = cells[label_col] if label_col < len(cells) else ""
+        consumed_rows += 1
+
+        if "section_value" in entry:
+            key = entry.get("section_value")
+            if key and label_cell:
+                values.setdefault(key, label_cell)      # 先到先得，不覆盖
+                gained += 1
+            continue
+
+        # 标签行：先断言声明的标签与表里的一致
+        if not _label_matches(profile, entry.get("label", ""), label_cell):
+            log(f"  分区「{(current.get('names') or ['?'])[0]}」第 {r + 1} 行期望标签 "
+                f"{entry.get('label')!r}，实际是 {label_cell!r} —— "
+                f"表单结构可能已变化，该字段按声明位置取值，请核对", "warn")
+            if label_cell:
+                unmatched.append(label_cell)
+            continue
+
+        mode = str(entry.get("value_mode", "first"))
+        value = _values_to_the_right(cells, first_value_col, profile, mode)
+        key = entry.get("key")
+        if key and value:
+            values.setdefault(key, value)
+            raw_labels.setdefault(label_cell, value)
+            gained += 1
+        elif label_cell:
+            unmatched.append(label_cell)
+
+    layout = f"section_pairs×{gained}" if gained else ""
+    if not gained:
+        log("分区表未命中任何条目 —— 检查档案 sections: 与 rules.layout 的列号", "warn")
+    return values, raw_labels, layout, unmatched
+
+
+# ── 全表正则扫描（rules.scan）────────────────────────────────────────────
+def scan_values(texts: list, profile: CustomerProfile, logger=None,
+                notes: list | None = None) -> dict:
+    """按档案 `rules.scan` 在**所有文本**里跑正则，取第一个命中的捕获组。
+
+    适用场景：值不挂在任何标签上，只在某处出现一次 ——
+      * NGV 页脚的 `PR-00093270`（我方编号）
+      * 纸张行里的 `FSC Mix`（FSC 类别）
+      * 文件名里的 `香港单号 CU26072301`（客户单号）
+
+    档案写法：
+
+        rules:
+          scan:
+            - { key: our_ref, pattern: 'PR-\\\\d{5,}' }
+            - { key: fsc,     pattern: 'FSC\\\\s*(?:Mix(?:\\\\s*\\\\d+%)?|100%|Recycled\\\\s*\\\\d*%?)',
+                normalize: title, unique: true }
+
+    捕获组可选：有捕获组取组 1，没有就取整个匹配。
+
+    `unique: true`（业务确认 2026-09-24）—— **不唯一就留空**：
+    全文扫描该正则的**所有**命中，去重后只剩一个才落值；出现两个及以上不同取值时
+    不落值（交给档案固定值/留空）并把原因写进 `notes`。理由：多材质混用时
+    「这个字段该填哪一个」推不出来（实测 CU26072301 的 FSC 同时有 Recycled / Mix /
+    100%，权威 ERP 导出里 FSCMC 是**空的**）。猜第一个命中就是在造错值。
+    """
+    entries = profile.rule("scan", []) or []
+    if not entries:
+        return {}
+
+    haystack = "\n".join(str(t) for t in texts or [] if t)
+    out: dict = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("key")
+        pattern = entry.get("pattern")
+        if not key or not pattern:
+            continue
+        try:
+            found = re.findall(str(pattern), haystack, re.IGNORECASE)
+        except re.error:
+            if logger is not None:
+                logger.warn(f"rules.scan 正则非法，已跳过: {key} / {pattern}")
+            continue
+        # findall 有捕获组时返回组（多个组则为元组）——统一取第一个组/整体
+        matches = []
+        for f in found:
+            if isinstance(f, tuple):
+                f = next((x for x in f if x), "")
+            matches.append(str(f).strip())
+        matches = [m for m in matches if m]
+        if not matches:
+            continue
+
+        mode = str(entry.get("normalize", "")).lower()
+
+        def _norm(v: str) -> str:
+            if mode == "title":
+                return v.title()
+            if mode == "upper":
+                return v.upper()
+            if mode == "lower":
+                return v.lower()
+            return v
+
+        if entry.get("unique"):
+            distinct: list = []
+            for m in matches:
+                n = _norm(m)
+                if n.lower() not in [d.lower() for d in distinct]:
+                    distinct.append(n)
+            if len(distinct) > 1:
+                msg = (f"rules.scan: {key} 在文件里出现 {len(distinct)} 个不同取值 "
+                       f"{distinct} → 按档案 unique: true **不落值**（不唯一就留空，业务确认 2026-09-24）")
+                if logger is not None:
+                    logger.warn("  " + msg)
+                if notes is not None:
+                    notes.append(msg)
+                continue
+            value = distinct[0]
+        else:
+            value = _norm(matches[0])
+
+        if logger is not None:
+            logger.info(f"  正则扫描: {key} = {value}（命中 /{pattern}/）")
+        out[key] = value
+    return out
+
+
 # ── 表格抽取 ─────────────────────────────────────────────────────────────
 def _first_value_to_the_right(cells: list, start: int, profile: CustomerProfile) -> str:
     for j in range(start + 1, len(cells)):
@@ -191,10 +435,10 @@ def _first_value_to_the_right(cells: list, start: int, profile: CustomerProfile)
 
 
 def _extract_rows(rows: list, profile: CustomerProfile, logger=None) -> tuple:
-    """对一张表的二维单元格矩阵跑布局策略，返回 (values, raw_labels, layout)。
+    """对一张表的二维单元格矩阵跑布局策略，返回 (values, raw_labels, layout, unmatched)。
 
     策略按档案 `rules.layout.strategies` 的顺序执行；**先到先得**（不覆盖已有值），
-    这样多个策略可以互补（如 auto_pairs 抓主体、column_pairs 补固定列）。
+    这样多个策略可以互补（如 section_pairs 抓分区表单、auto_pairs 抓平铺键值对）。
     """
     def log(msg: str, level: str = "info"):
         if logger is not None:
@@ -202,6 +446,7 @@ def _extract_rows(rows: list, profile: CustomerProfile, logger=None) -> tuple:
 
     values: dict = {}
     raw_labels: dict = {}
+    unmatched: list = []
     used: list = []
 
     strategies = profile.rule("layout.strategies", list(ALL_STRATEGIES)) or list(ALL_STRATEGIES)
@@ -223,7 +468,25 @@ def _extract_rows(rows: list, profile: CustomerProfile, logger=None) -> tuple:
             raw_labels.setdefault(label_text, str(value).strip())
         return True
 
-    # ── 策略 1：auto_pairs（主策略）────────────────────────────
+    # ── 策略 0：section_pairs（分区表单：分区列 + 标签列 + 值）──────────
+    # 这是最「具体」的策略，所以放最前；档案没写 sections: 时自动跳过。
+    if "section_pairs" in strategies and profile.sections:
+        sec_values, sec_labels, sec_layout, sec_unmatched = _extract_sections(
+            rows, profile, logger)
+        gained = 0
+        for key, value in sec_values.items():
+            if not values.get(key, "").strip():
+                values[key] = value
+                gained += 1
+        for key, value in sec_labels.items():
+            raw_labels.setdefault(key, value)
+        unmatched.extend(sec_unmatched)
+        if gained:
+            used.append(sec_layout or f"section_pairs×{gained}")
+        elif sec_values:
+            used.append(f"section_pairs×0")
+
+    # ── 策略 1：auto_pairs（平铺键值对主策略）──────────────────
     if "auto_pairs" in strategies:
         gained = 0
         for r, cells in enumerate(rows):
@@ -286,10 +549,11 @@ def _extract_rows(rows: list, profile: CustomerProfile, logger=None) -> tuple:
         if gained:
             used.append(f"shifted_pairs×{gained}")
 
-    return values, raw_labels, "+".join(used)
+    return values, raw_labels, "+".join(used), unmatched
 
 
-def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None) -> CustomerData:
+def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
+                          filename: str = "") -> CustomerData:
     """XLSX/XLS/CSV → CustomerData（遍历所有工作表，取命中最多的一张为主）。"""
     import pandas as pd
 
@@ -303,18 +567,28 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None)
     else:
         sheets = pd.read_excel(path, sheet_name=None, header=None, dtype=str)
 
+    qty_mode = str(profile.rule("quantity.mode", "tiers")).strip().lower()
+    wants_tiers = qty_mode != "single"
+
     per_sheet = []
     for name, df in sheets.items():
         if df is None or df.empty:
             continue
         rows = _rows_to_matrix(df)
-        values, raw_labels, layout = _extract_rows(rows, profile, logger)
+        values, raw_labels, layout, unmatched = _extract_rows(rows, profile, logger)
         # 档位识别先不逐表打日志（会在错误的表上报 WARN），选定主表后统一打一次
-        tiers = extract_quantity_tiers(rows, profile, logger=None)
+        tiers = extract_quantity_tiers(rows, profile, logger=None) if wants_tiers else []
         blocks = [cell for row in rows for cell in row if cell]
+        # 整行拼接：把同一行的非空格再拼一份进扫描 haystack。
+        # 单格 haystack 本身是按换行拼的，`\s` 能跨行，所以 `210` / `mm side`
+        # 挨着两格时已经能认；这一份是为了**隔了空格**的写法也稳
+        # （`145 | (空) | 210 | mm | portrait` 这类）。
+        row_texts = [" ".join(c for c in row if c) for row in rows]
+        row_texts = [t for t in row_texts if t]
         per_sheet.append({
             "name": str(name), "rows": rows, "values": values,
             "raw_labels": raw_labels, "layout": layout, "tiers": tiers, "blocks": blocks,
+            "unmatched": unmatched, "row_texts": row_texts,
         })
 
     if not per_sheet:
@@ -327,6 +601,7 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None)
 
     values = dict(primary["values"])
     raw_labels = dict(primary["raw_labels"])
+    unmatched = list(primary.get("unmatched") or [])
     if len(per_sheet) > 1:
         for extra in per_sheet[1:]:
             filled = [k for k, v in extra["values"].items() if not values.get(k, "").strip()]
@@ -334,24 +609,44 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None)
                 values[k] = extra["values"][k]
             for k, v in extra["raw_labels"].items():
                 raw_labels.setdefault(k, v)
+            unmatched.extend(extra.get("unmatched") or [])
             if filled:
                 log(f"  从工作表 {extra['name']} 补到 {len(filled)} 个字段: {filled}")
 
     tiers = primary["tiers"] or next((s["tiers"] for s in per_sheet if s["tiers"]), [])
-    if tiers:
+    if not wants_tiers:
+        log(f"数量档位: 档案 quantity.mode=single —— 客户只给一个总数，"
+            f"不识别档位（数量落 CPSL1）")
+    elif tiers:
         log(f"数量档位识别: {tiers}")
     else:
         log("数量档位识别: 未识别到数量档位行（CPSL1~CPSL10 将保持 0）", "warn")
     blocks = [b for s in per_sheet for b in s["blocks"]]
 
-    unmatched = [lab for lab in raw_labels if not profile.match_label(lab)]
+    # 全表正则扫描：有些值不挂在任何标签上，只在某个角落出现一次
+    # （NGV 的 PR-00093270 在页脚、FSC Mix 在纸张行、香港单号在文件名），
+    # 这类用档案 rules.scan 声明「规范键 + 正则」，比硬塞进分区表可读得多。
+    scan_hay = blocks + [t for s in per_sheet for t in s.get("row_texts") or []]
+    scan_notes: list = []
+    scanned = scan_values(scan_hay + ([filename] if filename else []), profile, logger,
+                          notes=scan_notes)
+
+    # 认不出的标签统计：已登记的纯标签（ignored_labels）不算「认不出」
+    unmatched = [lab for lab in set(unmatched)
+                 if not profile.match_label(lab) and not profile.is_ignored_label(lab)]
+    unmatched += [lab for lab in raw_labels
+                  if not profile.match_label(lab) and not profile.is_ignored_label(lab)]
     data = CustomerData(
         values=values,
         raw_labels=raw_labels,
         quantity_tiers=tiers,
         text_blocks=blocks,
-        unmatched=unmatched,
-        extras_found=sorted({b for b in blocks if profile.is_known_extra(b)}),
+        unmatched=sorted(set(unmatched)),
+        extras_found=sorted({b for b in blocks
+                             if profile.is_known_extra(b)
+                             and not profile.is_ignored_label(b)}),
+        scanned=scanned,
+        scan_notes=scan_notes,
         layout=primary["layout"],
         profile_id=profile.id,
     )
@@ -378,7 +673,8 @@ def read_text_document(file_path: str) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def extract_from_text(file_path: str, profile: CustomerProfile, logger=None) -> CustomerData:
+def extract_from_text(file_path: str, profile: CustomerProfile, logger=None,
+                      filename: str = "") -> CustomerData:
     """自由文本（PDF/DOCX/TXT）→ CustomerData。
 
     规则：同一行里「标签 + 分隔符 + 值」优先；标签独自成行时取下一非空行。
@@ -425,16 +721,24 @@ def extract_from_text(file_path: str, profile: CustomerProfile, logger=None) -> 
             raw_labels.setdefault(line[:end].strip(" :=\t-|"), rest)
 
     blocks = [line for line in lines if line]
-    unmatched = [lab for lab in raw_labels if not profile.match_label(lab)]
     if not values:
         log("文本类文件未匹配到任何已知标签 —— 请用 calibrate_customer.py 校准该客户档案", "warn")
+    scan_notes = []
+    scanned = scan_values(blocks + ([filename] if filename else []), profile, logger,
+                          notes=scan_notes)
+    unmatched = [lab for lab in raw_labels
+                 if not profile.match_label(lab) and not profile.is_ignored_label(lab)]
     return CustomerData(
         values=values,
         raw_labels=raw_labels,
         quantity_tiers=[],
         text_blocks=blocks,
         unmatched=unmatched,
-        extras_found=sorted({b for b in blocks if profile.is_known_extra(b)}),
+        extras_found=sorted({b for b in blocks
+                             if profile.is_known_extra(b)
+                             and not profile.is_ignored_label(b)}),
+        scanned=scanned,
+        scan_notes=scan_notes,
         layout="text_lines",
         profile_id=profile.id,
     )
@@ -445,13 +749,19 @@ TABLE_SUFFIXES = (".xlsx", ".xls", ".csv")
 TEXT_SUFFIXES = (".pdf", ".docx", ".txt")
 
 
-def load_customer_data(file_path: str, profile: CustomerProfile, logger=None) -> CustomerData:
-    """按后缀分派到表格/文本抽取。"""
+def load_customer_data(file_path: str, profile: CustomerProfile, logger=None,
+                       filename: str = "") -> CustomerData:
+    """按后缀分派到表格/文本抽取。
+
+    filename 单独传（而不是从 file_path 取）是为了支持邮件副档侧的同名文件 ——
+    rules.scan 的正则要能扫到文件名里的「香港单号 CU26072301」。
+    """
     suffix = Path(file_path).suffix.lower()
+    name = filename or Path(file_path).name
     if suffix in TABLE_SUFFIXES:
-        return extract_from_workbook(file_path, profile, logger)
+        return extract_from_workbook(file_path, profile, logger, filename=name)
     if suffix in TEXT_SUFFIXES:
-        return extract_from_text(file_path, profile, logger)
+        return extract_from_text(file_path, profile, logger, filename=name)
     raise ValueError(f"不支持的文件格式: {suffix}（支持 {TABLE_SUFFIXES + TEXT_SUFFIXES}）")
 
 
@@ -494,6 +804,10 @@ def main() -> int:
     print(f"规范键命中 {len(data.values)} 个:")
     for key, value in data.values.items():
         print(f"  {key:20s} = {value}")
+    if data.scanned:
+        print(f"\n正则扫描命中 {len(data.scanned)} 个:")
+        for key, value in data.scanned.items():
+            print(f"  {key:20s} = {value}")
     print(f"\n数量档位: {data.quantity_tiers or '(无)'}")
     if data.unmatched:
         print(f"\n未识别的标签 {len(data.unmatched)} 个（校准用）:")

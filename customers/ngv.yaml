@@ -1,120 +1,420 @@
 # ═══════════════════════════════════════════════════════════════
-# 客户档案：ngv
+# 客户档案：NGV
 #
-# status: draft  ⚠️ 尚未校准 —— 手上还没有 NGV 的真实报价文件，
-#         下面的别名表是「按 igl 的通用英文列名」写的占位，**不能当作已验证**。
+# status: calibrated ✅ 2026-09-23
+#   校准样本：4 份真实报价需求附件（CU26051601-01 / CU26061701 /
+#             CU26072301 / CU26072302）+ 对应的 ERP 导出数据。
 #
-# 校准步骤（拿到第一份 NGV 样本后 5 分钟就能做完）：
-#   1. uv run ./scripts/calibrate_customer.py --customer ngv \
-#          --file customer-files/pending/<NGV样本>
-#      → 打印样本里所有「像标签的单元格」+ 哪些没被识别
-#   2. 把未识别的标签填进下面的 fields: 里（或改 layout 策略）
-#   3. uv run ./scripts/main.py <样本> --customer ngv
-#      → 确认 59 键断言通过、字段值正确
-#   4. 把本文件 status 改成 calibrated，并在 SKILL.md 的客户清单里登记
+# NGV 的报价文件和 igl 完完全全是两套东西：
+#
+#   igl = 平铺键值对表（标签与值同列/同行）→ 用 auto_pairs 策略
+#   NGV = 德英双语的「enquiry 分区表单」       → 用 section_pairs 策略
+#
+# NGV 表单的真实结构（4 份样本完全一致，一张 enquiry 工作表 A1:K32）：
+#
+#     A 列 = 分区名（双语挤在一格：finishing\nVerarbeitung），向下继承
+#     B 列 = 标签（extent\nUmfang / paper\nPapier / printing\nDruck）
+#     C 列起 = 值
+#
+#   几个必须知道的坑：
+#     1. **同一个标签在不同的分区含义不同** —— content 下的 paper 是内文纸、
+#        cover 下的 paper 是封面纸；A 列不切分区，B 列光看字面会串。
+#     2. **同一分区里同一个标签会重复** —— content 下 paper 出现两次
+#        （内文纸 + 环衬纸）、cover 下 paper/printing/finishing 各出现两次
+#        （封面 + 护封）。靠「按行序消费」区分，见 sections: 的排列顺序。
+#     3. **A 列有干扰文字** —— ends / Vor-/Nachsatz / jacket / Schutzumschlag
+#        不是分区，是行内子说明；档案里不声明它们，引擎就不会切分区。
+#     4. **B 列自己可能是值** —— 合并单元格（B1:J1 / B5:J5 / B24:K24 …）
+#        里放的是产品名、数量、款数、specials、notes 本身，不是标签。
+#        引擎靠「B 列不匹配任何已声明标签 → 该格即值」来处理。
+#     5. **端到端实测：4/4 份样本的字段全部落到正确规范键**，
+#        tests/test_ngv_profile.py 把这 4 份的行为钉成了回归测试。
 # ═══════════════════════════════════════════════════════════════
 id: ngv
 name: NGV
 priority: 50
-status: draft
+status: calibrated
 notes: >
-  待校准。ERP 的送货方式下拉里有 `FOB(NGV)` 这一项，说明 NGV 走 FOB 交货，
-  但报价单的字段命名/布局尚未见到样本，别名表是占位值。
+  NGV（德国/欧洲的 Aldi、Circon 线）的报价需求是德英双语 enquiry 分区表单，
+  一张 enquiry 工作表、A1:K32、结构固定。已用 4 份真实附件 + ERP 导出校准。
+  交货走 FOB(NGV)（ERP 送货方式下拉里的 FOB(NGV) 就是给这家用的）。
 
 detect:
   filename_keywords:
     - ngv
   label_signatures:
-    - "NGV"
-  min_signature_hits: 1
+    - "enquiry"
+    - "Angebotsfrist"
+    - "VK-Verpackung"
+    - "Sortierung/VE"
+    - "Schutzumschlag"
+  min_signature_hits: 2
   sender_domains: []
   subject_keywords:
     - ngv
 
-# ── 占位别名表：待用真实样本校准 ────────────────────────────
+# ── 平铺标签别名（section_pairs 之外的后备层）─────────────────────
+# 注意：NGV 主要靠下面的 sections: 取值；这里的 fields 仍然要维护，因为
+#   * _values_to_the_right 用它判断「这一格是不是标签（不能当值）」；
+#   * 校准报告 / unmatched 统计用它；
+#   * 万一 NGV 换了平铺写法，auto_pairs 还能兜住。
 fields:
-  imprint:              ["Imprint", "Brand", "Publisher"]
-  complexity:           ["Complexity"]
-  requested_by:         ["Requested By", "Requestor", "Contact"]
-  pub_month:            ["Pub Month", "Publication Month", "Publishing Month", "Delivery Month"]
-  series_name:          ["Series Name", "Series", "Title", "Product Name"]
-  number_of_titles:     ["Number of titles", "No. of titles", "Titles", "No of Titles"]
-  group:                ["Group"]
-  category:             ["Category"]
-  safety_checks:        ["Safety Checks Req? (Y/N)", "Safety Checks", "Safety Test"]
-  target_age_group:     ["Target Age Group", "Age Group", "Age"]
-  works_references:     ["Works References For all Titles", "Works References", "Customer Ref", "Our Ref"]
-  group_series_number:  ["Group/Series Number"]
-  isbn:                 ["ISBNs of All Titles", "ISBNs", "ISBN"]
-  project_description:  ["Project description", "Project Description", "Description"]
-  size:                 ["Size (tps) H x W x D mm", "Size", "Trim Size", "Finished Size"]
-  format:               ["Format", "Binding Style"]
-  extent:               ["Extent (pp + cover)", "Extent", "Page Count", "Pages"]
-  text_printing_spec:   ["Text Printing Spec", "Text Print Spec"]
-  text_material:        ["Text Material", "Text Paper", "Body Paper"]
-  cover_printing_spec:  ["Cover Printing Spec", "Cover Print Spec"]
-  cover_material:       ["Cover Material", "Cover Paper"]
-  spine_width:          ["Spine width", "Spine"]
-  binding:              ["Binding instructions", "Binding"]
-  finishes:             ["Finishes", "Finishing"]
-  quantity_tiers:       ["Total Costs", "Total Cost", "Cost", "Quantity", "Qty"]
+  product_name:         ["enquiry", "Anfrage"]
+  quantity:             ["quantity", "Auflage"]
+  versions:             ["versions", "Versionen"]
+  offer_deadline:       ["offer deadline", "Angebotsfrist"]
+  files_to_printer:     ["files to printer", "Inhalt an Drucker"]
+  delivery_date:        ["ETA w/h", "Lieferung"]
+  size:                 ["TPS", "Format"]
+  extent:               ["extent", "Umfang"]
+  text_material:        ["paper", "Papier"]
+  text_printing_spec:   ["printing", "Druck"]
+  ends_material:        ["ends", "Vor-/Nachsatz"]
+  boards:               ["boards", "MGP"]
+  padding:              ["padding", "Wattierung"]
+  cover_material:       ["cover", "Umschlag"]
+  finishes:             ["finishing", "Veredelung"]
+  jacket_material:      ["jacket", "Schutzumschlag"]
+  binding:              ["binding"]
+  binding_instructions: ["Bindung"]
+  back:                 ["back", "Rücken"]
+  specials:             ["specials", "Sonstiges"]
+  primary_packaging:    ["primary packaging", "VK-Verpackung"]
+  sticker:              ["sticker", "Aufkleber"]
+  packaging_unit:       ["packing unit", "VE"]
+  assortment:           ["assortment", "Sortierung/VE"]
+  notes:                ["notes", "Bemerkungen"]
 
-# TODO(校准)：NGV 的固定值与 igl 是否相同，未经确认，先按通用值填
+# ── 分区表：NGV 表单的按行序「标签 → 规范键」映射 ────────────────
+# entries 顺序 = 表单里的行顺序，同一分区内重复标签靠顺序区分。
+#   section_value : 该分区第一行的 B 列本身是值
+#   label         : B 列是标签，值取右侧
+#   value_mode    : first（默认，取第一个非空格）| join（把右侧拼起来）
+sections:
+  - names: [enquiry, Anfrage]
+    entries:
+      - { section_value: product_name }
+      # ★ 2026-09-24 修正：这一行**是有值的**（C 列 = 报价截止日期），此前被错当成
+      #   「纯标题」塞进 ignored_labels → 等于把真实日期藏起来，main.py 永远拿不到
+      #   offer_deadline，业务要的「过期提醒」也就无从谈起。
+      #   实测 5/5 份样本都有值：CU26051601-01=2026-05-26 / CU26061701=2026-06-17 /
+      #   CU26072301=2026-07-27 / CU26072302=2026-07-27 / PR-00091345=2026-06-26。
+      #   值形态：`2026-06-26 00:00:00`（Excel 日期），不给 format → 原样落规范键，
+      #   由 main.py「报价截止日期检查」段用 parse_date_to_datestr 标准化后比较。
+      - { label: "offer deadline", key: offer_deadline }
+
+  - names: [schedule, Termine]
+    entries:
+      - { label: "files to printer", key: files_to_printer }
+      - { label: "ETA w/h",          key: delivery_date }
+
+  - names: [quantity, Auflage]
+    entries:
+      - { section_value: quantity }
+
+  - names: [versions, Versionen]
+    entries:
+      # B6 是值（"12 titles, 8 countries, 5 languages"）；B7 的 TPS/Format 是标签。
+      - { section_value: versions }
+      # 尺寸必须整行拼：`145 | x | 210 | mm | portrait` 只取第一格只剩 145。
+      - { label: "TPS", key: size, value_mode: run }
+
+  - names: [content, Inhalt]
+    entries:
+      - { label: "extent",   key: extent,         value_mode: run }   # 36 pp + Cover
+      - { label: "paper",    key: text_material,  value_mode: run }   # 120 gsm woodfree…
+      - { label: "printing", key: text_printing_spec, value_mode: run }
+      # ↓ 这两行是环衬（A 列的 ends / Vor-/Nachsatz 不切分区，靠行序认）
+      - { label: "paper",    key: ends_material,  value_mode: run }
+      - { label: "printing", key: ends_printing_spec, value_mode: run }
+      - { label: "boards",   key: boards,         value_mode: run }
+      - { label: "padding",  key: padding,        value_mode: run }
+
+  - names: [cover, Umschlag]
+    entries:
+      - { label: "paper",     key: cover_material,        value_mode: run }
+      - { label: "printing",  key: cover_printing_spec,   value_mode: run }
+      - { label: "finishing", key: finishes,              value_mode: run }
+      # ↓ 这三行是护封（jacket / Schutzumschlag 同样不切分区）
+      - { label: "paper",     key: jacket_material,       value_mode: run }
+      - { label: "printing",  key: jacket_printing_spec,  value_mode: run }
+      - { label: "finishing", key: jacket_finishes,       value_mode: run }
+      # binding 行在 cover 分区里（A21 为空），值是 Softcover / ridged box / see below
+      - { label: "binding",   key: binding }
+
+  - names: [finishing, Verarbeitung]
+    entries:
+      # Bindung 行要整行拼：`perfect binding | 210 | mm side`
+      # 左值给『装订工艺』，右值 `210 mm side` 由 rules.scan 捞出装订边。
+      - { label: "Bindung", key: binding_instructions, value_mode: run }
+      - { label: "back",    key: back }
+
+  - names: [specials, Sonstiges]
+    entries:
+      # B24 是 specials 正文（长文本），因为超过 max_label_len 不会被当成标签。
+      - { section_value: specials }
+      - { label: "primary packaging", key: primary_packaging }
+      - { label: "sticker",           key: sticker }
+
+  - names: [packaging, Verpackung]
+    entries:
+      - { label: "packing unit", key: packaging_unit }
+      - { label: "assortment",   key: assortment }
+      - { label: "specials",     key: packaging_specials }
+
+  - names: [notes, Bemerkungen]
+    entries:
+      # 尾部三行都是「B 列即值」：备注正文 / 客户联系人 / 页脚数字（4 份样本里
+      # 分别是 35/35/12/12，语义未明 → 明确忽略，靠 section_value: null 吃掉）。
+      - { section_value: notes }
+      - { section_value: contact }
+      - { section_value: null }
+
+# ── 纯标签（表单栏目标题，双语挤在一格）─────────────────────────────
+# ★ 2026-09-24 从 extras: 拆出来（实测踩过）：它们是**栏目标题、不含值**，
+#   塞在 extras 里会同时踩两个坑 ——
+#     ① extras_found（「CPMS 素材」）里出现 `TPS\nFormat`、`back\nRücken` 这种，
+#        看起来像漏了信息，实际只是标题格；
+#     ② 校准报告会把它们算成「认不出的标签」而被登记成 extras 掩盖掉。
+#   现在登记为 ignored_labels：两处都不再出现。**值**本身由 sections: 与 rules.scan
+#   正常抽取（offer_deadline / delivery_date / files_to_printer / …）。
+ignored_labels:
+  # ⚠️ "offer deadline" / "Angebotsfrist" **不在这里** —— 它是有值标签（见 sections
+  #    的 enquiry），误登记为纯标题会静默丢值（2026-09-24 踩过，已回归测试钉住）。
+  - "schedule"
+  - "Termine"
+  - "files to printer"
+  - "ETA w/h"
+  - "Lieferung"
+  - "versions"
+  - "Versionen"
+  - "ends"
+  - "Vor-/Nachsatz"
+  - "boards"
+  - "MGP"
+  - "padding"
+  - "Wattierung"
+  - "jacket"
+  - "Schutzumschlag"
+  - "back"
+  - "Rücken"
+  - "primary packaging"
+  - "VK-Verpackung"
+  - "sticker"
+  - "Aufkleber"
+  - "packing unit"
+  - "VE"
+  - "assortment"
+  - "Sortierung/VE"
+  - "specials"
+  - "Sonstiges"
+  - "notes"
+  - "Bemerkungen"
+  - "TPS"
+  - "Format"
+  - "quantity"
+  - "Auflage"
+
+# ── 非 ERP 字段但必须体现在 CPMS 里 ────────────────────────────────
+# NGV 的表单里**没有**这类栏位：非 ERP 的内容全在 `specials`（长文本）与
+# `packing specials` 里，它们已经作为规范键抽出来了，agent 写 CPMS 时读原文即可。
+extras: []
+
+# ── ERP 固定值（NGV 专属；已用 4 份 ERP 导出核对）─────────────────
 erp_fixed:
+  # ── 客户偏好表（机器读的部分；人看的见 preferences: 段）─────────────
+  # 业务拍板 2026-09-24 的第二批口径都在这几条里：
+  #   * BZ    → 我们填「美元」（长期口径）
+  #   * PXH   → **显式留空**（模板默认是 1，必须在这里清掉；排序号由 ERP/业务侧填）
+  #   * CPDL  → 「书版」是唯一合法值，照填；4 份导出 3 份空是业务核对时补
+  #   * SFYPJ / Remark1（是否有配件 / 配件描述）→ 已从偏好表**删除**：
+  #     推不出就留空（业务 2026-09-24 拍板），不再写死「否」——
+  #     CU26072301 就有配件，写死「否」是错的。
   CPDL: 书版
-  YYS: 1
+  SHFS: FOB(NGV)          # 送货方式：ERP 下拉里就有 FOB(NGV) 这一项
+  BZFS: 纸箱包装
+  TBLX: 不打卡板
   BZ: 美元
-  PXH: 1
-  KHMBDJ: 0
+  PXH: ""                 # 显式留空（见上）
+  # YYS 也显式留空：实际值由 rules.versions 决定（单语言 → 空、提取不到 → 0、
+  # 多语言 → 该数字），模板/公共默认的 1 在这里清掉，免得漏掉任何一种情况时
+  # 悄悄落成 1（那是错的：这个客户 4 份导出里 YYS 要么空要么是真实语言数）。
+  YYS: ""
+  # 纸板类型 ZBLX：业务决定（2026-09-24）**默认留空** —— 附件里推不出来。
+  # 同日业务给出了该下拉的完整 HTML 枚举（6 项：007 特殊(看描述) / 002 A=B双坑纸板 /
+  # 001 A3B单坑纸板 / 003 A=A双坑纸板 / 005 K=K加强芯双坑箱 / 008 K=K加强芯(耐破)），
+  # 与字典一致；4 份导出里的「B3B普通芯」**不在枚举内** → 更确认是 ERP 侧数据，
+  # 不由我们产出（详见 SKILL.md 第 12 节）。
+  # NGV 每单固定的第三方检测清单（3 份 v2 导出逐字相同、共 378 字符 → 属该客户常量）
+  # ⚠️ 必须**逐字照抄** ERP 原文，包括：
+  #    * `monochloroo-` 的双 o（ERP 里的既有错别字 —— 改成单 o 会让每单都产生差异）
+  #    * `(MCPD).Colour` 之间没有空格、后半段各分句之间也没有空格
+  #    * `foam` 前有一处换行
+  #    用 `|-` 保留内部换行、去掉结尾换行；用 `>-` 会把换行折成空格 → 与 ERP 不符。
+  Remark4: |-
+    1、氯丙醇化合物1,3-dichloro-2-propanol (DCP) 和 monochloroo-1,2-propanediol (MCPD).Colour Fastness to Perspiration & Saliva 2、EN71:part1,part2,part3 , part9。REACH:Cadmium ,Lead, Phthalates, PAHs,Nickel Release,Organotin compounds,甲醛 ,AZO dyes,REACH SVHC，RoHS，EN62115，EU - TCEP, TCPP & TDCP of 2014/79/EU,DIN 53160 (grade 5),Aniline,Reach Formamide + flame retardants 2014/79/EU for
+    foam
+
+# ── 客户偏好表（业务 2026-09-24 提出：长期合作客户有稳定口径，要一眼看全、快速填写）
+# ───────────────────────────────────────────────────────────────────
+# 口径规则（两种，都必须显式声明，不许留空白让人猜）：
+#   value 非空 → 落库这个值（= erp_fixed[field]，有测试校验两者一致）
+#   value 空   → **显式留空**：该客户这个字段就该空着，推不出来不猜
+#                （模板若自带默认值，档案必须写成 '' 才能真正清掉）
+# 与 erp_fixed 的分工：preferences 是**给人看的**（含依据，供业务快速核对/填写）；
+# erp_fixed 是**机器读的**落库值。改口径改两处，测试会拦住不一致。
+# 依据来自权威 ERP 导出（4 份）+ 业务逐条拍板。
+preferences:
+  - { field: CPDL,   value: "书版",   reason: "产品大类只有『书版』一个合法值（导出 3 空 1 有是业务核对时补）" }
+  - { field: BZ,     value: "美元",   reason: "该客户报价一律美元（长期口径）" }
+  - { field: PXH,    value: "",       reason: "排序号由 ERP/业务侧填 —— 导出 4 份里 3 空 1 填 1，模板默认 1 必须清掉" }
+  - { field: SHFS,   value: "FOB(NGV)", reason: "送货方式：ERP 下拉里就有 FOB(NGV) 这一项" }
+  - { field: BZFS,   value: "纸箱包装", reason: "4 份导出逐字相同" }
+  - { field: TBLX,   value: "不打卡板", reason: "4 份导出逐字相同" }
+  - { field: YSLX,   value: "",       reason: "运输类型来自邮件语境（底价/拼柜都在邮件里），附件推不出 → 留空" }
+  - { field: SFYPJ,  value: "",       reason: "是否有配件：推不出就留空（2026-09-24 拍板）；写死『否』是错的 —— CU26072301 有配件" }
+  - { field: Remark1, value: "",      reason: "配件描述随 SFYPJ；推不出就留空" }
+  - { field: Remark3, value: "",      reason: "修改记录：我们产出的是**第一版**报价，不存在修改记录（2026-09-24 拍板）" }
+  - { field: FSCMC,  value: "",       reason: "多材质混用时该填哪个推不出来 → 留空（rules.scan 的 fsc 已设 unique: true）" }
+  - { field: ZBLX,   value: "",       reason: "纸板类型由 ERP/业务侧填 —— 导出里的 B3B普通芯 不在下拉枚举内（业务 2026-09-24 给出完整枚举）" }
+  - { field: JHRQ,   value: "",       reason: "交货日期报价阶段不落库（4 份导出全空，附件给了 ETA 也不填）" }
+  - { field: WCRQ,   value: "",       reason: "预计下单日期不落库（4 份导出全空，不用『今天+10 天』）" }
+  - { field: YYS,    value: "",       reason: "单语言不落库；提取不到语言数则落 0（rules.versions.when_missing）" }
 
 rules:
+  # ── 允许为空的字段（豁免 ERP 字典的通用必填校验）─────────────────
+  # 2026-09-24：字典里 KHDH（客户单号）是业务必填，Drop_SJFX 是建议填写，
+  # 但 NGV 的报价阶段本来就取不到 —— 4 份权威 ERP 导出里 KHDH 全空；
+  # 套装单（28/29 类）没有书脊方向。不豁免就会每单报假 error，淹没真问题。
+  # ★ 同日业务补拍：**KHDDH（香港单号）默认就是空** —— 附件文件名里带
+  #   「香港单号 CU…」时由 rules.scan 扫出来落库，没带就留空，不算缺陷。
+  #   （PR-00091345 文件名只有 PR 号，没有 CU 号 → KHDDH 空是预期结果。）
+  required_empty: [KHDH, KHDDH, Drop_SJFX]
+  # ── 口径例外：业务拍板用、但**不在 ERP 下拉枚举里**的取值 ─────────────
+  # 【本客户当前**没有**需要声明的条目 —— 这是有意的，别看漏】
+  #   1.0.21 曾在这里声明 `CPSX: 无`（因为「无」不在 ERP 枚举里，硬校验会每单报 error）。
+  #   1.0.23 业务给了更干净的解法：「『无』使用 json 里的 null 填充」
+  #   → 走全局 rules.null_values（_defaults.yaml）把「无」翻成 JSON null，
+  #     null 属**空值**，压根不触发枚举校验 → 本条声明随之删除。
+  #   机制本身保留（erp_schema.declared_exceptions + validate_result(allow_values=)），
+  #   将来若真出现「业务要用枚举外的字符串值」，在这里加 {field, value, reason} 即可。
+  enum_exceptions: []
   layout:
-    strategies: [auto_pairs, column_pairs, shifted_pairs]
-    label_col: 1
-    value_col: 2
-    min_label_row_hits: 2
-    max_label_len: 60
+    # NGV 只用 section_pairs。**不要**加 auto_pairs —— NGV 表里 `paper`
+    # 这类标签在 B 列反复出现，平铺策略会抓出一堆错值（校准前实测：
+    # format 变成 145、series_name 变成签字人 Ebers, Lea）。
+    strategies: [section_pairs]
+    section_col: 0          # A 列 = 分区
+    label_col: 1            # B 列 = 标签
+    first_value_col: 2      # C 列起 = 值
+    max_label_len: 60       # >60 字符的单元格一律不当标签（保护 B24 的长文本）
   size:
     unit: mm
-    order: [CD, KD, GD]
-  quantity_tiers:
-    k_suffix: true
-    plain: true
-    plain_label_hint: "quantity|qty|total|cost|数量|印数"
-    max_tiers: 10
+    # TPS 是「先宽后高」：145 x 210 portrait → CD=145 KD=210（与 ERP 导出核对过）
+    order: [CD, KD]
+    # 套装（盒子）录系统尺寸一律写 0/0/0 —— 业务决定（2026-09-24）。
+    # 附件的 TPS 是盒内单件的尺寸（CU26061701 是 160x104 的卡片、CU26072301 是
+    # 100x155 的明信片），不采用；ERP 记录里三单套装全是 0/0/0。
+    zero_tops: [套装]
+  # NGV 的 ERP 导出里 GD（高）恒为 0：书本厚度只写在 CPMS 里，不进 ERP 规格。
+  # 所以关掉「按页数+纸张推算厚度」那一步（否则会算出 2.55 / 10.8）。
+  thickness:
+    enabled: false
+  # NGV 的数量是**单一总数**（不是 igl 那种 3k/5k/7.5k 阶梯），落 CPSL1
+  quantity:
+    mode: single            # single = 一个总数 | tiers = 多档位
+  versions:
+    title_pattern: "(\\d+)\\s*titles?"
+    language_pattern: "(\\d+)\\s*languages?"
+    # 单语言不落库 —— 业务决定（2026-09-24）。
+    # 依据：附件写 `4 titles, 1 language` 的两单（CU26072301 / CU26072302），
+    # ERP 里 YYS 都是空的；写 `12 titles, 8 countries, 5 languages` 的
+    # CU26061701 才是 5。所以「1」要留空，不落成 1。
+    empty_when_single: true
+    # 提取不到语言数时落 0 —— 业务决定（2026-09-24）：
+    # 「客户的邮件可能后面补充了某些内容，但是附件没有更新」→ 0 是「待业务核对」的信号，
+    # 不许拿档案固定值 1 冒充，也不许留空（留空与「单语言留空」撞车、分不清）。
+    # 实测：CU26051601-01 附件只写 `8 titles`（没有语言数），ERP 里是 3 —— 那个 3
+    # 只能来自邮件/历史单，附件推不出来，所以我们落 0。
+    when_missing: 0
   materials:
     text:
       default: 书纸
       map:
         - { match: "woodfree|uncoated|书纸|胶版|munk|蒙肯", page_style: 书纸 }
-        - { match: "art ?paper|c1s|c2s|铜版|光粉|粉卡|白卡", page_style: 光粉纸 }
+        - { match: "art ?card|art ?paper|c1s|c2s|铜版|光粉|粉卡|白卡", page_style: 光粉纸 }
     cover:
       default: 光粉纸
       map:
-        - { match: "c1s|artboard|art ?card|光粉|粉卡|白卡|卡纸", page_style: 光粉纸 }
+        - { match: "c1s|art ?card|artboard|光粉|粉卡|白卡|卡纸", page_style: 光粉纸 }
         - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+  # 装订方式 ZDFS：要看 binding（Softcover/ridged box）**和** Bindung
+  # （safety saddle-stitched / perfect binding / lose）两行才能定。
+  # 顺序即优先级：'safety saddle-stitched' 必须排在 'lose' 前面。
   binding:
-    enabled: false            # TODO(校准)
+    enabled: true
     default: ""
+    match_keys: [binding, binding_instructions]
     map:
-      # 值必须是 ERP 合法枚举（assets/erp_form_schema.yaml 的 ZDFS）
-      "perfect bound": 胶装/PAD书
-      "paperback": 胶装/PAD书
-  # 产品类别 CPLB —— 挂到权威树（assets/cplb_tree.yaml）上的映射，待样本校准
+      "safety saddle-stitched": 骑马钉      # CU26051601-01 → ERP 骑马钉 ✓
+      "perfect binding": 胶装/PAD书          # CU26072302 → ERP 胶装/PAD书 ✓
+      "open pad": 胶装/PAD书
+      "ridged box": 套装                     # CU26061701 → ERP 套装 ✓
+      "lose": 套装
+      "hardcover": 精装书
+      # 2026-09-24 新增（PR-00091345 那单实测：binding=Softcover + Bindung=Wire-O Binding）：
+      # 蛇圈/线圈类。ERP 合法值是「线圈书」（不是「蛇圈书」—— 那是 CPLB 树里的类别名）。
+      "wire-o": 线圈书
+      "wire o": 线圈书
+      "wiro": 线圈书
+      "spiral": 线圈书
+      "coil": 线圈书
+  # 单位 DWMC：套装类用「套」，书本用「本」（与 ERP 导出核对过）
+  unit:
+    default: 本
+    map:
+      - { cplb_top: 套装, unit: 套 }
+  # 产品类别 CPLB：NGV 的表单里没有类别栏，只能由装订/结构推断到树节点。
+  # 4 个节点都由真实 ERP 导出反查确认（24.03 / 23.06 / 29.04）。
   cplb:
-    match_keys: [format, binding, finishes, project_description, series_name]
+    match_keys: [binding, binding_instructions, specials, text_material, product_name]
     map:
-      - { match: "board\\s*book|纸板书", node: "27.02" }
-      - { match: "lift[- ]the[- ]flap|翻翻|揭页", node: "27.05" }
-      - { match: "pop[- ]?up", node: "28.01" }
-      - { match: "wire[- ]?o|wiro|spiral|线圈", node: "26.01" }
-      - { match: "saddle|staple|骑马钉|骑钉", node: "24.01" }
+      - { match: "safety\\s*saddle|saddle[- ]stitch", node: "24.03" }   # 贴纸骑钉书
+      - { match: "perfect\\s*binding|open\\s*pad|pad\\s*bind", node: "23.06" }  # PAD头书(全封面)
+      - { match: "ridged\\s*box|folded\\s*box|\\blose\\b", node: "29.04" }      # 其它套装
+      - { match: "spiral|wire[- ]?o|线圈", node: "26.01" }
       - { match: "case\\s*bound|hardcover|精装", node: "22.02" }
-      - { match: "thread\\s*sewn|车线", node: "25.01" }
-      - { match: "perfect\\s*bound|paperback|无线胶装", node: "23.01" }
   product_category:
     fallback: "32.00;其他"
-  # 产品属性 CPSX（年龄段 + 安全检查 → ERP 中文枚举），与 igl 同口径，待样本确认
+  # 产品名称 CPMC：NGV 的 CPMC 是人写的复合串（权威导出 4 份实测）：
+  #     `Kathrin/Aldi 24PP内文 + 12PP贴纸 贴纸骑马钉书（有贴纸）/price enquiry. A00112 License Sticker Books 2(FSC Mix)`
+  #     `Kathrin/Aldi 揭盖卡盒卡片填色套装 其他套装/price enquiry for ALDI. Colouring Cards Aldi Süd(FSC Mix)`
+  #     `Corinna/Aldi A款 卡片套装 其他套装/Type A - A00125 Post- und Klappkarten - Postkarten-Box mit Aufsteller (4 titles)(FSC Mix)`
+  #     `Corinna/Aldi B款 开脊PAD头书/Type B - A00125 Post- und Klappkarten - Klappkarten-Buch (4 titles)(FSC Mix)`
+  #   → 结构 = `<业务员>/Aldi <中文品名>[ <中文类别>]/<英文品名原文>(<FSC>)`
+  #   * 业务员：**KM**（业务 2026-09-24 拍板；此前留【业务员待填】是错的，被测试拦住）
+  #   * 中文品名：只能人工拟（含款别时可写「A款 卡片套装」）→ needs_agent，脚本给占位
+  #   * 中文类别：用 CPLB 树里的类别名（注意导出里人写的是「其他套装」而树里是「其它套装」——
+  #     人写的部分本来就不严格，我们统一取树里的权威名，差异记在 ngv.erp_diff.json）
+  # ★ 业务 2026-09-24（第二批）：「将 CPMC 修改为存英文表达，使用 CPMC_ZH 来标注中文表达」
+  #   → CPMC 只留**英文**（业务员/Aldi + 英文品名原文 + FSC），
+  #     中文表达（就是上面那条历史写法）落内部字段 **CPMC_ZH**（见
+  #     assets/internal_export_fields.yaml）。main.py 会检查 CPMC 里没有中文字符。
+  cpmc:
+    salesperson: KM
+    # 中文品名是**每单**的（不是客户常量）→ 这个开关给「品名稳定」的客户偶尔用；
+    # NGV 保持空，由 agent 交付前直接改产物 JSON 里的 CPMC_ZH（脚本会给可见占位符）。
+    cn_name: ""
+    template: "{salesperson}/Aldi {product_name}({fsc})"
+    zh_template: "{salesperson}/Aldi {cn_name} {cplb_name}/{product_name}({fsc})"
+    needs_agent: true
+  # 产品属性 CPSX：NGV 的表单里**没有**年龄段/安全检查栏 → 推不出来时的口径由业务定：
+  #   业务 2026-09-24：「CPSX 如果没有获取到就显示**无**」
+  #   同日补充：「『无』使用 json 里的 null 填充」→ 产物里落的是 **null**（不是字符串「无」）。
+  # 所以这条链路是：档案写 when_missing: 无 → main.py 的口径转换（rules.null_values）
+  # 把「无」翻成 JSON null → top 层看是空值，与 4 份权威导出一致（它们 CPSX 都是 None）。
+  # ⚠️ 正因为落 null（空值），**不再需要** rules.enum_exceptions：null 不触发枚举校验。
+  #    （1.0.21 曾用 enum_exceptions 声明「无」为口径例外，1.0.23 起已删。）
   cpsx:
     threshold: 3
     above: 三岁以上
@@ -122,19 +422,64 @@ rules:
     above_with_test: "3岁以上（要寄第三方测试）"
     below_with_test: "3岁以下（要寄第三方测试）"
     safety_true: ["y", "yes", "true", "是", "1", "✓"]
+    when_missing: 无
   dates:
-    JHRQ: { from: pub_month }
-    WCRQ: { mode: today_plus_days, days: 10 }
+    # 交货日期 / 预计下单日期：业务决定（2026-09-24）**都不落库**（保持空）。
+    # 依据：4 份 ERP 导出 JHRQ 与 WCRQ 全为空 —— 即使附件给了 ETA
+    # （CU26061701 写 2027-03-15、CU26072302 的 files to printer 更早）也不填。
+    JHRQ: { mode: empty }
+    WCRQ: { mode: empty }
+  # 书脊方向 Drop_SJFX：NGV 走「装订边」判据 —— Bindung 行右边给了
+  # `<N> mm side`，N 等于较长边即长书脊（145x210 + 210 mm side → 长书脊，
+  # 与对应 ERP 导出一致）。没给装订边时退回 spine.default，
+  # 由 main.py 打 WARN 提示人工确认。套装类跳过（书脊方向无意义）。
   spine:
-    mode: cd_vs_kd
+    mode: binding_side
     long: 长书脊
     short: 短书脊
+    default: 长书脊
+    skip_tops: [套装]
+  # 全表正则扫描：不挂标签、只在某处出现一次的值
+  scan:
+    - { key: our_ref, pattern: "PR-\\d{5,}" }
+    # fsc 带 unique: true —— **不唯一就留空**（业务确认 2026-09-24）。
+    # 实测 CU26072301 同时有 FSC Recycled（盒底）/ FSC Mix（盒盖纸+卡片）/
+    # FSC 100%（竹底座），权威 ERP 导出里 FSCMC 是**空的** → 扫到第一个就填是错的。
+    - { key: fsc, unique: true, pattern: "FSC\\s*(?:Mix(?:\\s*\\d+%)?|100%|Recycled(?:\\s*\\d+%)?|Mix\\s*Credit)" }
+    - { key: text_thickness, pattern: "(\\d+(?:\\.\\d+)?)\\s*mm\\s*bookblock" }
+    - { key: binding_side, pattern: "(\\d+(?:\\.\\d+)?)\\s*mm\\s*side" }
+    # 香港单号：附件文件名里带「香港单号 CU26072301」，表内也常有。
+    # ⚠️ 落到 **KHDDH**（模板第 43 键，中文标签就是「香港单号」），不是 KHDH。
+    - { key: khddh, pattern: "香港单号\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)" }
 
+# ── 邮件规则：两组单号必须分开 ───────────────────────────────────
+# 2026-09-24 修正：KHDH 与 KHDDH 只差一个字母，此前把附件里的「香港单号」
+# 写进了 KHDH（客户单号），而 KHDDH 永远是空的。4 份权威 ERP 导出显示：
+#   香港单号 → KHDDH（CU26051601-01 / CU26061701 / CU26072301 / CU26072302）
+#   客户单号 → KHDH（这 4 单都是空的 —— 终端客户的 PO 号报价阶段还没有）
+# 每组规则用 target 指定落哪个 ERP 字段。
 email:
+  # ① 客户单号 KHDH：客户自己的订单号，**只可能来自邮件标题/正文**。
+  #    明确不声明 attachment_keys —— 附件里那个号码是香港单号，别混。
+  #    ⚠️ 正则必须写严：`po` 这类短词极易误捕 —— 实测 `Postkarten in Box`
+  #       被 `\bpo\s*(?:no)?\s*([A-Z0-9]{5,})` 抓成了 `stkarten`。
+  #       所以必须出现 no/nr/number/# 这样的「编号词」，且捕获值必须以字母或数字开头。
   khdh:
-    attachment_keys: ["works_references"]
+    target: KHDH
+    attachment_keys: []
     subject_patterns:
-      - '(?i)\b(?:p\.?o\.?|ref(?:erence)?|order|job)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{3,8}(?:\s*[/,&-]\s*[A-Za-z0-9]{2,8})*)'
-      - '\b([A-Z]{2,4}[-/]\d{2,8}(?:[-/][A-Za-z0-9]{1,8})*)\b'
+      - "(?i)\\b(?:po|p\\.?\\s*o\\.?|order|bestellung|auftrag)\\s*(?:no\\.?|nr\\.?|number|#)\\s*[:#]?\\s*([A-Z0-9][A-Z0-9/-]{3,})"
+      - "(?i)\\b(?:po|order)\\s*[:#]\\s*([A-Z0-9][A-Z0-9/-]{3,})"
     body_patterns:
-      - '(?i)\b(?:p\.?o\.?|customer\s+ref|reference|order\s+no)\b\s*[:#]?\s*(\d{3,8}(?:\s*[/,&-]\s*[A-Za-z0-9]{2,8})*)'
+      - "(?i)\\b(?:po|p\\.?\\s*o\\.?|order|bestellung|auftrag)\\s*(?:no\\.?|nr\\.?|number|#)\\s*[:#]?\\s*([A-Z0-9][A-Z0-9/-]{3,})"
+      - "(?i)\\b(?:po|order)\\s*[:#]\\s*([A-Z0-9][A-Z0-9/-]{3,})"
+  # ② 香港单号 KHDDH：附件文件名/表内的「香港单号 CU…」，邮件里也常有。
+  khddh:
+    target: KHDDH
+    attachment_keys: [khddh]
+    subject_patterns:
+      - "\\b([A-Z]{2}\\d{6,}(?:-\\d+)?)\\b"          # CU26051601-01 / CU26072302
+      - "(?i)香港单号\\s*[:：]?\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)"
+    body_patterns:
+      - "\\b([A-Z]{2}\\d{6,}(?:-\\d+)?)\\b"
+      - "(?i)香港单号\\s*[:：]?\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)"

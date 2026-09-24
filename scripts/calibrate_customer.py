@@ -203,7 +203,9 @@ def main() -> int:
 
     # 档案 extras: 里登记过的「非 ERP 字段」不算未识别 —— 它们本来就该写进 CPMS
     known_extras = [label for _, label in candidates if profile.is_known_extra(label)]
-    candidates = [(col, label) for col, label in candidates if not profile.is_known_extra(label)]
+    candidates = [(col, label) for col, label in candidates
+                  if not profile.is_known_extra(label)
+                  and not profile.is_ignored_label(label)]
 
     # 成列出现的（同一列 ≥8 个）判为下拉候选值清单 / 成本明细表，不算字段标签
     from collections import Counter

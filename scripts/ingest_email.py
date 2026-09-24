@@ -105,27 +105,47 @@ def normalize_khdh(value: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def extract_khdh(profile, subject: str, body: str, logger=None) -> tuple:
-    """按档案的 email.khdh 规则从标题/正文取客户单号。返回 (值, 来源说明)。"""
-    khdh_cfg = (profile.email.get("khdh") or {})
-    for section, label, text in (
-        ("subject_patterns", "邮件标题", subject),
-        ("body_patterns", "邮件正文", body),
-    ):
-        if not text:
-            continue
-        for pattern in khdh_cfg.get(section) or []:
-            try:
-                match = re.search(pattern, text)
-            except re.error:
+def extract_numbers(profile, subject: str, body: str, logger=None) -> tuple:
+    """按档案 email 段声明的**每一组**单号规则，从标题/正文取号。
+
+    返回 (numbers, sources)：
+        numbers = {目标 ERP 字段: 值}   例 {'KHDDH': 'CU26072301'}
+        sources = {目标 ERP 字段: 来源说明}
+
+    ⚠️ 一个客户可能同时有两个单号（NGV：客户单号 KHDH + 香港单号 KHDDH），
+    两组规则各自独立匹配，不能互相顶替（2026-09-24）。
+    """
+    numbers: dict = {}
+    sources: dict = {}
+    for rule_key, cfg, target in profile.number_rules():
+        for section, label, text in (
+            ("subject_patterns", "邮件标题", subject),
+            ("body_patterns", "邮件正文", body),
+        ):
+            if not text:
                 continue
-            if match:
-                value = normalize_khdh(match.group(1))
-                if value:
-                    if logger:
-                        logger.info(f"客户单号来源: {label}（{profile.id} 规则）")
-                    return value, f"{label}（{profile.id} 规则）"
-    return "", ""
+            for pattern in cfg.get(section) or []:
+                try:
+                    match = re.search(pattern, text)
+                except re.error:
+                    continue
+                if match:
+                    value = normalize_khdh(match.group(1))
+                    if value:
+                        numbers[target] = value
+                        sources[target] = f"{label}（{profile.id} 规则 {rule_key}）"
+                        if logger:
+                            logger.info(f"{target} 来源: {label}（{profile.id} 规则 {rule_key}）")
+                        break
+            if target in numbers:
+                break
+    return numbers, sources
+
+
+def extract_khdh(profile, subject: str, body: str, logger=None) -> tuple:
+    """兼容旧调用：只要客户单号 KHDH。返回 (值, 来源说明)。"""
+    numbers, sources = extract_numbers(profile, subject, body, logger)
+    return numbers.get("KHDH", ""), sources.get("KHDH", "")
 
 
 # ── 投递 ─────────────────────────────────────────────────────────────────
@@ -211,7 +231,9 @@ def ingest(
         if not profile.is_calibrated and logger:
             logger.warn(f"档案 {profile.id} 状态为 {profile.status} —— 未经校准，字段值需人工核对")
 
-    subject_khdh, subject_src = extract_khdh(profile, subject, body, logger)
+    numbers, number_sources = extract_numbers(profile, subject, body, logger)
+    subject_khdh = numbers.get("KHDH", "")
+    subject_src = number_sources.get("KHDH", "")
 
     saved = []
     for target in saved_paths:
@@ -223,6 +245,10 @@ def ingest(
             "body": body,
             "customer_profile": profile.id,
             "customer_source": source,
+            # 单号：按目标 ERP 字段分别存（KHDH 客户单号 / KHDDH 香港单号 …）
+            "numbers": numbers,
+            "number_sources": number_sources,
+            # 兼容旧字段（早期只认客户单号）
             "khdh": subject_khdh,
             "khdh_source": subject_src,
             "attachment_original_name": target.name,
@@ -243,6 +269,8 @@ def ingest(
             "body": body,
             "customer_profile": profile.id,
             "customer_source": source,
+            "numbers": numbers,
+            "number_sources": number_sources,
             "khdh": subject_khdh,
             "khdh_source": subject_src,
             "attachments": [s["original_name"] for s in saved],
@@ -252,6 +280,8 @@ def ingest(
     return {
         "customer_profile": profile.id,
         "customer_source": source,
+        "numbers": numbers,
+        "number_sources": number_sources,
         "khdh": subject_khdh,
         "khdh_source": subject_src,
         "attachments": saved,
@@ -351,8 +381,12 @@ def main() -> int:
     else:
         print()
         print(f"客户档案: {result['customer_profile']}（{result['customer_source']}）")
-        print(f"客户单号 KHDH: {result['khdh'] or '(未从标题/正文取到 —— 将由附件列兜底)'}"
-              f"{'  来源: ' + result['khdh_source'] if result['khdh_source'] else ''}")
+        if result.get("numbers"):
+            for target, value in result["numbers"].items():
+                src = (result.get("number_sources") or {}).get(target, "")
+                print(f"单号 {target}: {value}{'  来源: ' + src if src else ''}")
+        else:
+            print("单号: 未从标题/正文取到（将由附件列/全表扫描兜底）")
         print(f"投递附件: {len(result['attachments'])} 个")
         for item in result["attachments"]:
             print(f"  - {item['original_name']}  →  {item['file']}")

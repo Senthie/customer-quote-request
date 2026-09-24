@@ -80,10 +80,73 @@ def pipeline_run(tmp_path_factory):
 
 
 def test_键集合与顺序等于模板(pipeline_run):
+    """前 59 键必须与 ERP 模板完全一致（键集合 + 顺序），其后只追加声明的内部字段。
+
+    业务 2026-09-24：产物追加内部字段 `ID`（本次任务）/ `CPMC_ZH`（产品名称中文表达）。
+    ERP 键一个都不许动位置 —— 下游解析器按位置读。
+    """
+    from internal_fields import load_internal_fields
+
     template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
     out = pipeline_run["erp"]
-    assert len(out) == 59
-    assert list(out) == list(template)
+    internal_keys = [str(f["key"]) for f in load_internal_fields()]
+    assert internal_keys == ["ID", "CPMC_ZH", "Reminder"], "内部字段的键与顺序由声明文件决定"
+
+    assert list(out) == list(template) + internal_keys
+    assert list(out)[:59] == list(template), "59 个 ERP 键的位置不许动"
+    assert len(out) == 59 + len(internal_keys)
+
+
+def test_内部字段_ID_标注本次任务(pipeline_run):
+    """`ID` 必须等于本次任务号（= 产物目录名 = 日志里的「任务ID」）—— 方便日志维护。"""
+    out = pipeline_run["erp"]
+    task_id = pipeline_run["task_dir"].name
+    assert out["ID"] == task_id, f"ID={out['ID']!r} 与任务目录名 {task_id!r} 不一致"
+    assert task_id and task_id != "unknown"
+    # 同一份产物里，validation.json 也带上同一个 ID
+    vfile = next(pipeline_run["task_dir"].glob("*.validation.json"))
+    assert json.loads(vfile.read_text(encoding="utf-8"))["task_id"] == task_id
+
+
+def test_内部字段_CPMC_ZH_与_CPMC分工(pipeline_run):
+    """`CPMC` 存英文表达、中文表达落 `CPMC_ZH`（业务 2026-09-24）。
+
+    这份样本是 **igl** —— 它**还没迁移**（未声明 `rules.cpmc.zh_template`）：
+    igl 的 CPMC 历史口径是 `编号;名称-系列`（含中文类别名），英文版怎么写
+    **等业务补充真实 ERP 信息后再处理**（2026-09-24 拍板）→ 见 SKILL.md 第 12 节。
+    所以这里只钉住「字段存在 + 未迁移时为空」，
+    NGV 那种已迁移的严格断言在 tests/test_ngv_profile.py。
+    """
+    out = pipeline_run["erp"]
+    assert out["ID"], "内部字段 ID 必须有值"
+    assert "CPMC_ZH" in out, "内部字段 CPMC_ZH 必须在产物里（哪怕为空）"
+    assert out["CPMC_ZH"] == "", "igl 尚未声明 zh_template → CPMC_ZH 为空（待补真实 ERP 信息）"
+    assert out["CPMC"] == EXPECTED_VALUES["CPMC"], "未迁移的客户 CPMC 保持历史写法不变"
+
+
+def test_内部字段_Reminder_把提醒固化进产物(pipeline_run):
+    """业务 2026-09-24：「这提醒现在每次跑都会自动出来」→ 加字段固化。
+
+    `Reminder` 存在、类型是字符串；这份 igl 样本没有报价截止日期 → 空字符串
+    （「没有待办」= 空；「值为无」= null —— 两件事，别混）。
+    """
+    out = pipeline_run["erp"]
+    assert "Reminder" in out, "内部字段 Reminder 必须在产物里"
+    assert isinstance(out["Reminder"], str)
+    assert out["Reminder"] == "", "没取到截止日期 → 没有提醒 → 空字符串"
+
+
+def test_决策_无落JSON_null(pipeline_run):
+    """业务 2026-09-24：「CPSX 或者其他值的『无』使用 json 里的 null 填充」。
+
+    ERP 自身导出里空值就是 null，所以「无」落 null 既合业务语言、又不触发下拉枚举校验。
+    """
+    template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    out = pipeline_run["erp"]
+    assert "无" not in {v for v in out.values() if isinstance(v, str)}, (
+        "产物里不该再出现字符串「无」—— 业务口径是落 JSON null"
+    )
+    assert template["CPSX"] == "", "模板默认是空字符串（脚本再按口径转换）"
 
 
 def test_逐字段值与重构前一致(pipeline_run):
@@ -97,6 +160,63 @@ def test_未触碰字段等于模板默认值(pipeline_run):
     out = pipeline_run["erp"]
     for key in UNTOUCHED:
         assert out[key] == template[key], f"{key}: 不应被脚本改写"
+
+
+# ── 内部导出字段：ID / CPMC_ZH（业务 2026-09-24）──────────────────────
+def test_step6_内部字段追加与_strip_internal(tmp_path):
+    """两种输出模式都要对：
+
+    * 默认       → 59 个 ERP 键 + 追加内部字段（`ID` / `CPMC_ZH`）
+    * --strip    → 只有 59 个 ERP 键（给「ERP 导入端不收未知字段」兜底）
+
+    直接调 step6（不跑子进程），逐键核对顺序与取值。
+    """
+    from extract_fields import CustomerData
+    from main import Logger, step6_output_results
+    from customer_profile import load_profile
+
+    template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    tpl_keys = list(template)
+    internal_keys = ["ID", "CPMC_ZH", "Reminder"]
+    profile = load_profile("ngv")
+
+    def _run(tag: str, strip: bool, cpmc_zh: str, deadline: dict | None = None) -> dict:
+        src = tmp_path / tag / "input.csv"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("enquiry\nAnfrage,Test Book\n", encoding="utf-8")
+        result = dict(template)
+        result["_task_id"] = tag
+        if cpmc_zh:
+            result["_cpmc_zh"] = cpmc_zh
+        if deadline:
+            result["_deadline"] = deadline
+        info = step6_output_results(
+            src, result, tmp_path / tag / "processed", Logger(),
+            CustomerData(values={}), profile, None, strip_internal=strip)
+        return json.loads(Path(info["erp_json"]).read_text(encoding="utf-8"))
+
+    # ① 默认：追加内部字段，且不改动 59 键
+    erp = _run("with_internal", False, "KM/Aldi 中文品名 普通蛇圈书/Test Book(FSC Mix)",
+               {"deadline": "2026-06-26", "expired": True, "days": 90,
+                "message": "报价截止日期 2026-06-26 已过期 90 天（基准日 2026-09-24）"})
+    assert list(erp) == tpl_keys + internal_keys, list(erp)[-4:]
+    assert erp["ID"] == "with_internal", "ID 必须是本次任务号"
+    assert erp["CPMC_ZH"] == "KM/Aldi 中文品名 普通蛇圈书/Test Book(FSC Mix)"
+    # Reminder：把「每次跑都会自动出来」的提醒固化进产物（业务 2026-09-24）
+    assert "已过期 90 天" in erp["Reminder"], erp["Reminder"]
+    assert "还要报价" in erp["Reminder"], erp["Reminder"]
+    for key in tpl_keys:
+        assert key in erp, key
+
+    # ② --strip-internal：只有 59 键，一个不多一个不少
+    erp2 = _run("stripped", True, "中文表达不应该出现")
+    assert list(erp2) == tpl_keys and len(erp2) == 59
+    for k in internal_keys:
+        assert k not in erp2
+
+    # ③ 没有提醒时 Reminder 是空字符串（不是 null —— null 只留给「值为无」）
+    erp3 = _run("no_reminder", False, "")
+    assert erp3["Reminder"] == "" and erp3["CPMC_ZH"] == ""
 
 
 # ── 业务决策（2026-09-23）在端到端上的表现 ─────────────────────────────

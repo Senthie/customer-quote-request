@@ -11,6 +11,8 @@ wheels/
 
 # 运行产物与客户数据（客户报价原文 / ERP 输出 / 日志）—— 不进仓库
 logs/
+# 校准语料库（真实客户附件 + ERP 导出，仅本地回归用）—— 客户原文不进仓库
+customer-files/samples/
 customer-files/processed/
 customer-files/failed/
 customer-files/logs/

@@ -9,6 +9,7 @@ from customer_profile import load_profile
 from ingest_email import (
     META_SUFFIX,
     extract_khdh,
+    extract_numbers,
     ingest,
     normalize_khdh,
     parse_eml,
@@ -69,10 +70,33 @@ def test_取不到时返回空():
 
 
 def test_不同档案的规则互不干扰():
-    """把标题换成 NGV 风格单号，igl 规则抓不到（证明规则是按客户档案走的）。"""
+    """同一封邮件标题，两份档案抓出各自认的单号（证明规则是按客户档案走的）。"""
     ngv = load_profile("ngv")
-    value, _ = extract_khdh(ngv, "PO NGV-2026-0451 artwork attached", "")
-    assert value == "NGV-2026-0451"
+    subject = "NGV enquiry CU26072301 Postkarten in Box"
+    # NGV：CU… 是**香港单号** → KHDDH（2026-09-24 拆开）
+    numbers, sources = extract_numbers(ngv, subject, "")
+    assert numbers.get("KHDDH") == "CU26072301"
+    assert "KHDH" not in numbers
+    assert "标题" in sources["KHDDH"]
+    # igl 的规则不会认得 NGV 单号（互不干扰）
+    igl_value, _ = extract_khdh(IGL, subject, "")
+    assert igl_value != "CU26072301"
+
+
+def test_NGV两组单号各归各位():
+    """客户单号→KHDH、香港单号→KHDDH；两条规则独立匹配，互不顶替。"""
+    ngv = load_profile("ngv")
+    numbers, _ = extract_numbers(
+        ngv, "NGV enquiry CU26072301 - PO no.: AB-12345", "香港单号: CU26072301")
+    assert numbers.get("KHDDH") == "CU26072301"
+    assert numbers.get("KHDH") == "AB-12345"
+
+
+def test_客户单号正则不许被单词前缀误捕():
+    """`Postkarten` 里的 `Po` 曾被当成 PO 号（抓出 `stkarten`）。"""
+    ngv = load_profile("ngv")
+    numbers, _ = extract_numbers(ngv, "Postkarten in Box mit Aufsteller", "")
+    assert "KHDH" not in numbers
 
 
 # ── .eml 解析 ───────────────────────────────────────────────────────────

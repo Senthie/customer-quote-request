@@ -216,3 +216,61 @@ def test_历史单据的错误值归一化后大部分可救():
     data = json.loads(HISTORICAL.read_text(encoding="utf-8"))
     out, _ = normalize_result({"ZDFS": data["ZDFS"], "SFYPJ": data["SFYPJ"]})
     assert out["ZDFS"] == "胶装/PAD书"
+
+
+# ── 「实测值」与「纯名称 CPLB」两条降级规则（NGV 校准 2026-09-23 加的）──
+def test_CPLB_纯名称判WARN不算错误():
+    """真实 ERP 导出里 CPLB 存的是纯名称（"其它套装"），我们输出「编号;名称」。
+
+    业务已拍板（2026-09-24）：**我们用「编号;名称」** —— 编号让人一眼看清是哪个类别
+    （原话：编号这样用户会更加直观地看到任务的标识）。所以纯名称仍判 WARN，
+    提醒「这份输入缺编号」，但我们自己的输出永远是带编号的规范写法。
+    """
+    issues = validate_result({"CPLB": "其它套装"})
+    assert [i["level"] for i in issues] == ["warn"]
+    assert "纯名称" in issues[0]["message"]
+
+    # 带编号的规范写法照旧通过（这是我们输出的口径）
+    assert validate_result({"CPLB": "29.04;其它套装"}) == []
+    # 树里没有的名字仍然是错误
+    bad = validate_result({"CPLB": "不存在的类别"})
+    assert [i["level"] for i in bad] == ["error"]
+
+
+def test_ZBLX_枚举已由业务确认_含B3B普通芯的判定():
+    """ZBLX（纸板类型）下拉的完整枚举由业务 2026-09-24 给出 HTML 确认。
+
+    业务给出的 HTML 与字典里转录的**完全一致**（006? 无 —— 是这 6 项）：
+      007 特殊(看描述) / 002 A=B双坑纸板 / 001 A3B单坑纸板 /
+      003 A=A双坑纸板 / 005 K=K加强芯双坑箱 / 008 K=K加强芯(耐破)
+    也就是说枚举是完整的，`B3B普通芯`（4 份 NGV 导出里 3 份用它）**确实不在枚举内**
+    → 那是 ERP 侧的数据，不是我们该产出的；NGV 档案已按业务口径把 ZBLX 留空。
+    """
+    assert legal_values("ZBLX") == [
+        "特殊(看描述)", "A=B双坑纸板", "A3B单坑纸板",
+        "A=A双坑纸板", "K=K加强芯双坑箱", "K=K加强芯(耐破)",
+    ], "纸板类型枚举必须与业务给出的下拉 HTML 一致"
+
+    issues = validate_result({"ZBLX": "B3B普通芯"})
+    assert [i["level"] for i in issues] == ["warn"], "不在枚举内 → WARN（保留可见性，不误报缺陷）"
+    assert "实测于" in issues[0]["message"]
+
+    # 明确非法的值仍然是错误
+    bad = validate_result({"ZBLX": "瞎写的纸板"})
+    assert [i["level"] for i in bad] == ["error"]
+
+
+def test_check可带客户档案豁免必填(tmp_path):
+    """`--check x.json --customer ngv`：KHDH 在 NGV 报价阶段本来就空，不该报 error。
+
+    不传客户时按字典硬校验（对 NGV 的输出会报假 error）—— 两种行为都要钉住，
+    否则下次有人「顺手」把豁免改成全局，就会把真 error 也一起放掉。
+    """
+    from erp_schema import _cmd_check
+
+    payload = tmp_path / "x.json"
+    payload.write_text(json.dumps({"KHDH": ""}, ensure_ascii=False), encoding="utf-8")
+
+    assert _cmd_check(str(payload)) == 1, "不带客户 → 字典硬校验，应为 error"
+    assert _cmd_check(str(payload), "ngv") == 0, "带 ngv → 按 rules.required_empty 豁免"
+

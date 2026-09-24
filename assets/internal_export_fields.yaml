@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════
+# 内部导出字段（我方自用，**不是** ERP 表单字段）
+#
+# 背景（业务 2026-09-24）：
+#   * 「导出现在缺少一份内部导出字段 ID，该字段标注我们的当前执行的任务，方便日志维护」
+#   * 「将 CPMC 修改为存英文表达，使用 CPMC_ZH 来标注中文表达」
+#
+# 这些东西 ERP 字典里都没有（`uv run ./scripts/erp_schema.py --field ID` 查不到），
+# 所以它们**不属于那 59 键**，规则如下：
+#
+#   1. 位置：一律**追加在 59 个 ERP 键之后**（ERP 自己的导出也是这么干的 ——
+#      权威导出在 Remark3 之后多挂了 `产品备注`）。59 键的顺序/位置**一个都不动**，
+#      下游按位置读前 59 键的解析器不受影响。
+#   2. 校验：不参与 ERP 字典校验（不算 error/warn，也不算「字典里没有这个字段」）。
+#   3. 顺序：本文件里 `fields:` 的排列顺序 = 产物里的追加顺序，有测试钉着。
+#   4. 开关：`main.py --strip-internal` 可产出**只有 59 键**的纯净文件，
+#      给「ERP 导入端不收未知字段」的情况兜底。
+#
+# ⚠️ 加字段前先想清楚：这是给**我们**做日志追溯用的，还是 ERP 要的？
+#   ERP 要的字段请写进 assets/add_customer_quote_request.json（那 59 键）+
+#   assets/erp_form_schema.yaml（字典），并同步键序断言。
+# ═══════════════════════════════════════════════════════════════
+version: 1
+
+fields:
+  # ── ID：本次执行的任务号 ─────────────────────────────────────────────
+  # 与下面三处用的是**同一个** ID，方便「产物 → 日志」一步对回去：
+  #   * customer-files/processed/<task_id>/          （产物目录）
+  #   * logs/quote_request_<YYYYmmdd_HHMMSS>.log     （任务日志开头会打印 ID）
+  #   * logs/quote_request_*.log 里的 "任务ID: <id>"
+  # 实现：`source: task_id` → main.py 取 uuid_utils.py 生成的任务 ID。
+  - key: ID
+    label: 任务ID
+    source: task_id
+    notes: >-
+      标注本次执行的任务（= 产物目录名 = 日志里的「任务ID」）。ERP 表单里没有这个字段，
+      纯内部追溯用；导入 ERP 前若被告知「不收未知字段」，用 --strip-internal 去掉。
+
+  # ── CPMC_ZH：产品名称的中文表达 ──────────────────────────────────────
+  # 业务口径：`CPMC` 存**英文表达**，中文表达落 `CPMC_ZH`。
+  #   CPMC    = 档案 rules.cpmc.template     渲染结果（不含中文）
+  #   CPMC_ZH = 档案 rules.cpmc.zh_template  渲染结果（业务员/Aldi 中文品名
+  #             中文类别/英文原文(FSC) —— 就是 1.0.21 之前 CPMC 的那个写法）
+  # 客户档案没声明 `cpmc.zh_template` 时本字段为空（例如 igl —— 它的 CPMC 历史口径
+  # 是 `编号;名称-系列`，英文版该怎么写**待补充真实 ERP 信息后再处理**，见 SKILL.md 第 12 节）。
+  - key: CPMC_ZH
+    label: 产品名称（中文）
+    source: cpmc_zh
+    notes: >-
+      CPMC 的中文表达。CPMC 只放英文；中文品名/中文类别落这里。
+      客户未声明 cpmc.zh_template 时为空。
+
+  # ── Reminder：给业务的提醒（原样带进产物，不只留在日志里）─────────────
+  # 业务 2026-09-24：「这提醒现在每次跑都会自动出来」→ 加一个字段把它固化下来。
+  # 目前唯一来源是「报价截止日期已过期」（check_offer_deadline）。
+  #   * 有提醒 → 文本（多条用换行分隔）
+  #   * 没提醒 → 空字符串（= 模板空值口径；与「值为无 → null」是两件事，
+  #              见 customers/_defaults.yaml 的 rules.null_values）
+  # 同内容的结构化版本在 validation.json 的 reminders 段（kind/deadline/days_over）。
+  - key: Reminder
+    label: 提醒
+    source: reminder
+    notes: >-
+      报价截止日期过期等需要业务确认的事项。跑完也会打在 stdout 末尾的醒目块里。
+      没有待办时为空字符串。

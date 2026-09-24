@@ -52,6 +52,16 @@ erp_fixed:
   PXH: 1
   KHMBDJ: 0
 
+# ── 公共偏好表 ────────────────────────────────────────────────
+# 未识别客户 / 新增客户未声明 preferences 时的基线。客户档案声明自己的
+# preferences 会**整体替换**这一段（list 是替换不是追加）。
+preferences:
+  - { field: CPDL,   value: "书版", reason: "产品大类只有『书版』一个合法值（全客户恒定）" }
+  - { field: YYS,    value: "1",    reason: "公共默认单语言；各客户可覆盖（NGV 已改：单语言留空、提取不到落 0）" }
+  - { field: BZ,     value: "美元", reason: "公共默认币种；客户可覆盖" }
+  - { field: PXH,    value: "1",    reason: "排序号公共默认 1（⚠️ NGV 已按业务口径显式留空，其他客户待确认）" }
+  - { field: KHMBDJ, value: "0",    reason: "客户目标价：报价阶段没有 → 落 0（业务 2026-09-24 确认 0 可接受）" }
+
 rules:
   layout:
     strategies: [auto_pairs, column_pairs, shifted_pairs]
@@ -94,6 +104,10 @@ rules:
     map: []
   # 产品属性 CPSX —— 由「目标年龄段 + 安全检查」推导（业务确认 2026-09-23 要落库）
   #   取值必须是 assets/erp_form_schema.yaml 里 CPSX 的合法枚举（中文 label）
+  #   when_missing：年龄段推不出来时的口径。
+  #     ""  → 留空 + WARN（公共默认：不猜）
+  #     非空 → 落该值（NGV 业务 2026-09-24 拍板：「CPSX 没有获取到就显示**无**」
+  #            ⚠️ 无 不在 ERP 枚举里，落库时会 WARN；ERP 的兜底项是「其他」）
   cpsx:
     threshold: 3
     above: 三岁以上
@@ -101,6 +115,40 @@ rules:
     above_with_test: "3岁以上（要寄第三方测试）"
     below_with_test: "3岁以下（要寄第三方测试）"
     safety_true: ["y", "yes", "true", "是", "1", "✓"]
+    when_missing: ""
+  # 产品名称 CPMC —— 拼装模板。占位符：{salesperson} {cn_name} {cplb} {cplb_name}
+  #   {product_name} {series_name} {fsc} {our_ref}
+  #   * salesperson：该客户固定对接的业务员（NGV=KM）；空则省略该段
+  #   * cn_name：人工拟定的中文品名；空 → 脚本填 `【中文品名待定】` 占位并提醒 agent
+  #   * needs_agent：true 表示「脚本只能给底稿，交付前必须 agent 补全」
+  # ★ 业务 2026-09-24：「CPMC 存**英文表达**；中文表达用 **CPMC_ZH** 标注」。
+  #   * `template`     → CPMC（**英文**，main.py 会检查里面没有中文字符）
+  #   * `zh_template`  → CPMC_ZH（内部字段，见 assets/internal_export_fields.yaml）
+  #   客户没声明 `zh_template` 时 CPMC_ZH 为空、CPMC 保持历史写法（例如 igl 的
+  #   `编号;名称-系列` —— 它的英文表达该怎么写待业务确认，见 SKILL.md 第 12 节）。
+  cpmc:
+    template: "{cplb}-{series_name}"
+    zh_template: ""
+    salesperson: ""
+    cn_name: ""
+    needs_agent: false
+  # 报价截止日期检查（业务 2026-09-24：**超过截止日期必须提醒**）
+  #   取规范键 offer_deadline（各客户自行抽到该键即可，NGV 在 enquiry 分区）
+  #   * warn_when_expired: true  → 截止日期早于运行基准日期时打 WARN + 写进
+  #     validation.json 的 reminders + 落内部字段 `Reminder`，并在跑完的 stdout
+  #     末尾单独提醒业务
+  #   * 基准日期 = 系统当天，可用 `main.py --today YYYY-MM-DD` 覆盖（回归测试用，
+  #     避免测试结果随「今天是几号」漂移）
+  deadline:
+    warn_when_expired: true
+  # ── 「无」落 JSON null（业务 2026-09-24）────────────────────────────
+  # 业务原话：「CPSX 或者其他值的『无』使用 json 里的 null 填充」。
+  #   取值恰好等于下面这些词（整格匹配，不含长文本里的「无」）→ 产物写 JSON null。
+  # 为什么这样最干净：ERP 自己的导出里空值**就是 null**（权威导出的 CPLD/KHDH/CPSX
+  # 都是 None），所以「无」落 null 既符合业务语言，又天然不触发下拉枚举校验
+  # （null 属空值）—— 比在字符串里塞一个枚举外的「无」正确得多。
+  # 想关掉：写成 `null_values: []`。
+  null_values: ["无"]
   dates:
     JHRQ: { from: pub_month }
     WCRQ: { mode: today_plus_days, days: 10 }
