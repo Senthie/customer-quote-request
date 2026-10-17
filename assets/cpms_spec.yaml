@@ -1,0 +1,263 @@
+# CPMS（产品描述）写作规范 —— 机器可读版
+#
+# 单一真源。人读版本：docs/CPMS_写作规范.md
+# 校验实现：scripts/cpms_lint.py（规则码 CPMSxxx 在本文件 rules: 段定义）
+#
+# 设计依据：18476 份 2021-2025 年 ERP 报价需求单导出的 CPMS 实测统计
+#   * 91.2% 已自发使用「书籍方向：【X】产品规格：【a*b*c】共【N】款」开头
+#   * 封面/内文/装订/装箱 四段齐全的只有 53.9%
+#   * 49.6% 混入了【姓名 日期】产品补充描述式内部讨论
+#   * 出现 3176 种不同行首标签（同义写法未收敛）
+# 结论：不是推倒重来，而是把多数人已经在用的写法「钉死成有词表的骨架」。
+
+version: 1
+title: CPMS 产品描述写作规范
+
+meta:
+  applies_to: CPMS
+  charset: UTF-8
+  empty_policy: CPMS 为空视为未完成，不得交付
+
+# ─────────────────────────────────────────────────────────────
+# 一、版式（零容忍，机械可修）
+# ─────────────────────────────────────────────────────────────
+layout:
+  newline: "\n"                 # 只允许 LF；CR/CRLF 一律视为违规
+  label_colon: "："             # 标签后一律中文全角冒号，冒号前不留空格
+  indent: "  "                  # 多款/多件时，款内行缩进 2 个半角空格
+  forbid:
+    - {code: CPMS001, what: "\\r", desc: "不可使用 CR / CRLF，只允许 LF"}
+    - {code: CPMS002, what: "\\t", desc: "不可使用制表符，缩进只用 2 个空格"}
+    - {code: CPMS003, what: "行尾空格", desc: "行末不得有空格或全角空格"}
+    - {code: CPMS004, what: "连续空行", desc: "最多一个空行；款与款之间用一个空行分隔"}
+    - {code: CPMS005, what: "首尾空白", desc: "CPMS 首尾不得有空白字符"}
+    - {code: CPMS006, what: "分隔线", desc: "禁止 ===== / ----- 之类的分隔线"}
+    - {code: CPMS007, what: "内部人名块", desc: "禁止【姓名   日期】产品补充描述式的内部讨论块（应转为备注一行或丢弃）"}
+    - {code: CPMS008, what: "半角冒号标签", desc: "行首标签必须用全角冒号"}
+
+# ─────────────────────────────────────────────────────────────
+# 二、概要行（必填，第 1 行，由结构化字段派生，不许手写漂移）
+# ─────────────────────────────────────────────────────────────
+header:
+  template: "书籍方向：【{spine}】产品规格：【{cd}*{kd}*{gd}】共【{tzs}】款"
+  optional_suffix: "，每款【{yys}】语言"     # YYS 非空且 >1 时追加
+  derives:
+    spine: Drop_SJFX              # 长书脊 / 短书脊 / （套装留空 → 省略该括号项）
+    cd: CD
+    kd: KD
+    gd: GD
+    tzs: TZS
+    yys: YYS
+  regex: '^(?:书籍方向：(?:【(?P<spine>[^】]*)】)?)?产品规格：【(?P<cd>[\d.]+)\*(?P<kd>[\d.]+)\*(?P<gd>[\d.]+)】(?:共【(?P<tzs>\d+)】款)?(?:，每款【(?P<yys>\d+)】语言)?$'
+  notes:
+    - "尺寸用原始精确值（可 1 位小数），CD/KD 落库是整数 —— 四舍五入造成的差异是允许的、明确的，不要反过来改概要行。"
+    - "GD=0 表示厚度未定/不计，保持 0，不写「待定」。"
+    - "套装（Drop_SJFX 为空）省略「书籍方向：【…】」，直接从「产品规格：」开始。"
+
+# ─────────────────────────────────────────────────────────────
+# 三、段落骨架（order 即输出顺序；只允许省略，不允许乱序）
+# ─────────────────────────────────────────────────────────────
+# group 说明：概要 0 / 主体部件 100 / 附属部件 200 / 工序 300 / 报价备注 400
+# order 相同的两个段落 = 同级，先后都合法（如 陈列盒 与 内托：内托常在盒里，谁先写都行）
+sections:
+
+  # ── 主体部件：自外向内（皮壳 → 封面 → 衬纸 → 内文 → 夹层）──
+  - {key: 皮壳,      order: 100, group: 主体部件, aliases: [], notes: "精装书的硬壳；写了皮壳，封面/封底改用「前封面 / 后封面」仅在需要分别说明时"}
+  - {key: 封面,      order: 101, group: 主体部件, aliases: []}
+  - {key: 后封面,    order: 102, group: 主体部件, aliases: [封底]}
+  - {key: 前封面,    order: 103, group: 主体部件, aliases: []}
+  - {key: 皮壳衬纸,  order: 104, group: 主体部件, aliases: []}
+  - {key: 内兜,      order: 105, group: 主体部件, aliases: [内袋兜]}
+  - {key: 内兜衬纸,  order: 106, group: 主体部件, aliases: []}
+  - {key: 衬纸,      order: 107, group: 主体部件, aliases: []}
+  - {key: 内文,      order: 108, group: 主体部件, aliases: [内页]}
+  - {key: 内文连衬纸, order: 109, group: 主体部件, aliases: []}
+  - {key: 封面连内文, order: 110, group: 主体部件, aliases: ["封面+内文"]}
+  - {key: 夹层,      order: 113, group: 主体部件, aliases: []}
+  - {key: 内文夹层,  order: 114, group: 主体部件, aliases: []}
+  - {key: 封面和内文夹层, order: 115, group: 主体部件, aliases: []}
+  - {key: 发声器夹层, order: 116, group: 主体部件, aliases: []}
+  - {key: 灰板,      order: 117, group: 主体部件, aliases: []}
+  - {key: 面纸,      order: 118, group: 主体部件, aliases: []}
+
+  # ── 附属部件：按「纸类 → 卡牌类 → 结构件 → 其他配件」──
+  - {key: 贴纸,      order: 200, group: 附属部件, aliases: []}
+  - {key: 单张,      order: 201, group: 附属部件, aliases: []}
+  - {key: 卡片,      order: 202, group: 附属部件, aliases: []}
+  - {key: 砌图,      order: 203, group: 附属部件, aliases: [拼图]}
+  - {key: 说明书,    order: 204, group: 附属部件, aliases: []}
+  - {key: 内托,      order: 216, group: 附属部件, aliases: [], notes: "与陈列盒同级：谁在里谁在后都允许"}
+  - {key: 内袋,      order: 211, group: 附属部件, aliases: []}
+  - {key: 底卡,      order: 212, group: 附属部件, aliases: []}
+  - {key: 腰纸,      order: 213, group: 附属部件, aliases: []}
+  - {key: 书套,      order: 214, group: 附属部件, aliases: []}
+  - {key: 封套,      order: 215, group: 附属部件, aliases: []}
+  - {key: 陈列盒,    order: 216, group: 附属部件, aliases: [PDQ]}
+  - {key: 信封,      order: 217, group: 附属部件, aliases: []}
+  - {key: 吸塑,      order: 218, group: 附属部件, aliases: [对折吸塑]}
+  - {key: 自粘袋,    order: 219, group: 附属部件, aliases: [OPP袋, OPP自粘袋]}
+  - {key: 发声器,    order: 220, group: 附属部件, aliases: [音乐器]}
+  - {key: 磁胶玩具,  order: 221, group: 附属部件, aliases: []}
+  - {key: 配件,      order: 222, group: 附属部件, aliases: []}
+  - {key: 客供配件,  order: 223, group: 附属部件, aliases: []}
+  - {key: 布袋,      order: 224, group: 附属部件, aliases: [束口袋]}
+
+  # ── 工序：装订 → 装配 → 包装 → 装箱 → 箱唛 ──
+  - {key: 装订,      order: 300, group: 工序, aliases: [装订方式, 装订顺序]}
+  - {key: 装配,      order: 301, group: 工序, aliases: []}
+  - {key: 包装,      order: 302, group: 工序, aliases: []}
+  - {key: 装箱,      order: 303, group: 工序, aliases: []}
+  - {key: 箱唛,      order: 304, group: 工序, aliases: [箱唛贴]}
+
+  # ── 报价备注：与产品实体无关的商务要求，一律放最后 ──
+  - {key: 客户目标价, order: 400, group: 报价备注, aliases: []}
+  - {key: 请拆分,    order: 401, group: 报价备注, aliases: [请帮忙拆分, 请帮忙拆分如下价格, 请拆分如下价格]}
+  - {key: 请选配,    order: 402, group: 报价备注, aliases: [请帮忙选配, 请帮忙选配如下价格, 请选配如下价格]}
+  - {key: 此单半返,  order: 403, group: 报价备注, aliases: [此报价半返]}
+  - {key: 备注,      order: 404, group: 报价备注, aliases: [注意]}
+
+# 必填段落（按产品形态）
+required:
+  always: [装箱]
+  部件类: [封面, 内文, 装订]        # group=主体部件 至少要有一行；书本类还须这三项（或皮壳替代封面）
+  fallback: "推不出来就整行不写，绝不写空标签（如只有一个「封面」没有值）"
+
+# ─────────────────────────────────────────────────────────────
+# 四、行内取值语法（槽位顺序固定，可整槽省略，不可跳序）
+# ─────────────────────────────────────────────────────────────
+value_grammar:
+  slots:
+    - {n: 1, name: 数量,   example: "12张 / 40个 / 每张 / 共10张",     regex: '^(?:共)?\d+(?:\.\d+)?(?:张|个|本|套|款|张每款|PP|pp|p)$|^每(?:张|本|套|款)$'}
+    - {n: 2, name: 材料,   example: "300g单粉(FSC) / 2.5mm灰板(FSC) / 350g粉灰裱W9坑纸板(FSC)", regex: '(?:\d+(?:\.\d+)?(?:g|mm))[\u4e00-\u9fffA-Za-z()（）+]{2,}'}
+    - {n: 3, name: 尺寸,   example: "228.6*254mm / 150*50*200mm",       regex: '\d+(?:\.\d+)?\*\d+(?:\.\d+)?(?:\*\d+(?:\.\d+)?)?mm'}
+    - {n: 4, name: 印色,   example: "4C/4C / 4C+哑胶+局部UV(30%)/0C / Pantone 806C/0C / 0C/0C", regex: '^(?:\dC|Pantone\s[0-9A-Za-z ]+|专色)(?:\+[\u4e00-\u9fffA-Za-z()（）%0-9]+)*/\dC$'}
+    - {n: 5, name: 结构工艺, example: "对裱 / 啤 / 圆角 / 假圆角 / 冲形状 / 揭页 / 拉卡 / 穿线 / 磁石", regex: ''}
+  separator: "，"                # 槽位之间用中文逗号
+  finish_separator: "+"          # 同一面多个表面处理用半角加号，挂在印色后
+  notes:
+    - "「印色」槽自带表面处理：4C+哑胶+局部UV(30%)/0C —— 66% 的历史写法已是这个形状，直接定为标准。"
+    - "克重写 g（禁 gsm / 克 / 克重）；厚度写 mm；尺寸只写 * 不用 x / X / ×，单位只在行末出现一次。"
+    - "不印色写 0C/0C，不写「不印色」「不印」。"
+    - "同一行只描述一个部件；一行塞两个部件必须拆行。"
+
+# 表面处理的书写顺序（同一面多个时按此顺序，不按此顺序 = WARN）
+finish_order: [光油, 哑油, 光胶, 哑胶, UV, 哑UV, 局部UV, 烫金, 击凸, 压纹]
+
+# ─────────────────────────────────────────────────────────────
+# 五、闭集词表（不许自创同义词；表外词条 WARN 并给候选）
+# ─────────────────────────────────────────────────────────────
+vocabulary:
+  paper:
+    # 纸名（克重/厚度写在前面）
+    - 单粉            # 单面涂布白卡，最常用
+    - 双粉
+    - 哑粉
+    - 光粉
+    - 书纸
+    - 粉灰            # 灰底白板
+    - 灰板            # 直径写厚度：2.5mm灰板
+    - 单粉卡
+    - 高松厚单粉
+    - 牛皮纸
+    - 白格纸
+    - 铜版贴纸        # 面：可移/不可移
+    - 格拉辛          # 底纸
+    - OPP
+    - PET
+    - RPET
+    - B3B             # 坑纸板型号：B3B / W9 / A=B / K=K / B=B
+  paper_synonyms:
+    铜板: 铜版          # 错别字收敛
+    单粉咭: 单粉卡
+    单粉纸: 单粉
+    光粉纸: 光粉
+    "FSC纸": "(FSC)"
+    "环保纸": "(FSC)"
+  fsc:
+    canonical: "(FSC)"            # 紧跟材料，如 300g单粉(FSC)
+    forbid: [FSC纸, FSC用纸, FSC 纸, FSC认证]
+  finish:
+    - 光油
+    - 哑油
+    - 光胶
+    - 哑胶
+    - UV
+    - 哑UV
+    - 局部UV
+    - 烫金
+    - 击凸
+    - 压纹
+    - 过油
+  binding:
+    - 骑马钉
+    - 锁线胶装
+    - 无线胶装
+    - 胶装/PAD书
+    - 线圈书
+    - YO圈
+    - 蛇圈
+    - 精装
+    - 普通BB书
+    - 揭页
+    - 套装
+  currency: [美元, 港元, 人民币]
+
+# ─────────────────────────────────────────────────────────────
+# 六、多款 / 多件结构
+# ─────────────────────────────────────────────────────────────
+multi_item:
+  when: "TZS > 1，或一套由多个可独立报价的件组成"
+  style: |
+    1. 产品名 A
+      封面：…
+      内文：…
+      装订：…
+    2. 产品名 B
+      封面：…
+  numbering: "阿拉伯数字 + 半角句点 + 一个空格（1. 2. 3.），禁 1、/①/(1)"
+  indent: "  "                    # 款内行缩进 2 个空格
+  blank_line_between: true        # 款与款之间一个空行
+  rule: "款内不再重复写概要行；概要行只出现在最顶部一次。"
+
+# ─────────────────────────────────────────────────────────────
+# 七、规范化映射（--fix 只做这些机械替换，语义不动）
+# ─────────────────────────────────────────────────────────────
+normalize:
+  CRLF/CR -> LF: true
+  行尾空白: strip
+  标签半角冒号: 全角
+  gsm|克 -> g:
+    仅当紧跟在数字之后: true
+  尺寸分隔 x|X|× -> '*':
+    仅当两侧都是数字: true
+  连续空行: 压成一个
+  分隔线: 删除
+  label_alias: "见 sections.aliases（内页→内文、装订方式→装订、箱唛贴→箱唛…）"
+
+# ─────────────────────────────────────────────────────────────
+# 八、规则码（cpms_lint 输出用；与 layout.forbid 一一对应）
+# ─────────────────────────────────────────────────────────────
+rules:
+  CPMS001: {level: error, desc: "存在 CR / CRLF"}
+  CPMS002: {level: error, desc: "存在制表符"}
+  CPMS003: {level: error, desc: "行尾有空格"}
+  CPMS004: {level: error, desc: "连续多个空行"}
+  CPMS005: {level: error, desc: "首尾有空白"}
+  CPMS006: {level: error, desc: "存在分隔线"}
+  CPMS007: {level: error, desc: "存在内部人名块/产品补充描述"}
+  CPMS008: {level: warn,  desc: "标签用了半角冒号"}
+  CPMS010: {level: error, desc: "缺少概要行"}
+  CPMS011: {level: error, desc: "概要行与 JSON 字段不一致（Drop_SJFX/CD/KD/GD/TZS/YYS）"}
+  CPMS012: {level: error, desc: "概要行重复出现"}
+  CPMS020: {level: error, desc: "行首标签不在词表内"}
+  CPMS021: {level: error, desc: "使用了同义标签（应改用规范标签）"}
+  CPMS022: {level: error, desc: "空标签（有标签无值）"}
+  CPMS023: {level: warn,  desc: "多件序号与部件标签写在同一行（序号单独一行，部件另起一行）"}
+  CPMS030: {level: error, desc: "段落顺序错误（应 部件→装订→包装→装箱→备注）"}
+  CPMS040: {level: error, desc: "缺少必填段落（装箱 / 书本类的封面、内文、装订）"}
+  CPMS050: {level: warn,  desc: "克重单位不是 g（gsm/克）"}
+  CPMS051: {level: warn,  desc: "尺寸分隔符不是 *（x/X/×）"}
+  CPMS052: {level: warn,  desc: "印色写法不规范（小写 c / 缺 C / 用 / 分隔工艺）"}
+  CPMS053: {level: warn,  desc: "表面处理顺序不符合 finish_order"}
+  CPMS060: {level: warn,  desc: "商务要求（请拆分/请选配/客户目标价）出现在装箱之前"}
+  CPMS070: {level: warn,  desc: "CPMS 过短（<60 字）或过长（>4000 字）"}
