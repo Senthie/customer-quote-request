@@ -185,6 +185,29 @@ def test_套装件数必须与组成声明一致():
     assert "CPMS011" in codes(L.lint_text(mismatch, SPEC, rec))
 
 
+def test_套装件数是实物件数_按各项数量求和():
+    rec = {"Drop_SJFX": "", "CD": 0, "KD": 0, "GD": 0, "TZS": 1,
+           "CPLB": "29.04;其它套装", "ZDFS": "套装"}
+    comp = "1套=陈列盒+4款卡片+信封+自粘袋"          # 1 + 4 + 1 + 1 = 7 件
+    good = "产品规格：【0*0*0】共【7】件\n\n" + comp + "\n\n装箱：24套/箱"
+    wrong = "产品规格：【0*0*0】共【4】件\n\n" + comp + "\n\n装箱：24套/箱"
+    assert [f for f in L.lint_text(good, SPEC, rec) if f.code == "CPMS011"] == []
+    assert "CPMS011" in codes(L.lint_text(wrong, SPEC, rec))
+
+
+def test_实物件数_没写数量的项算一件():
+    assert L._composition_pieces("1套=皮壳+24本骑钉书+24个口袋+2条丝带") == 51
+    assert L._composition_pieces("整套=披萨盒+2张砌图+海报") == 4
+    assert L._composition_pieces("产品规格：【0*0*0】") == 0
+
+
+def test_套装没有组成声明不强制写件数():
+    rec = {"Drop_SJFX": "", "CD": 0, "KD": 0, "GD": 0, "TZS": 1,
+           "CPLB": "29.04;其它套装", "ZDFS": "套装"}
+    text = "产品规格：【0*0*0】\n\n装箱：24套/箱"
+    assert [f for f in L.lint_text(text, SPEC, rec) if f.code == "CPMS011"] == []
+
+
 def test_套装多件漏写件数要报错():
     rec = {"Drop_SJFX": "", "CD": 0, "KD": 0, "GD": 0, "TZS": 1,
            "CPLB": "29.04;其它套装", "ZDFS": "套装"}

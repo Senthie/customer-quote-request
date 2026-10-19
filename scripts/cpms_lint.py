@@ -130,7 +130,7 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
 
     # ── 概要行 ──
     head_idx = next((i for i, l in enumerate(lines) if l.strip().startswith(("书籍方向：", "产品规格："))), None)
-    comp_items = _composition_items(text)
+    comp_pieces = _composition_pieces(text)
     if head_idx is None:
         add("CPMS010", 1, "缺少概要行「书籍方向：【X】产品规格：【a*b*c】共【N】款」")
     else:
@@ -138,7 +138,7 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
         if not m:
             add("CPMS011", head_idx + 1, "概要行格式不合规范（应为 书籍方向：【长书脊】产品规格：【CD*KD*GD】共【N】款/件）")
         elif record:
-            _check_header(m, record, spec, head_idx + 1, add, comp_items)
+            _check_header(m, record, spec, head_idx + 1, add, comp_pieces)
         dup = [i for i, l in enumerate(lines) if i != head_idx and l.strip().startswith(("书籍方向：", "产品规格：【"))]
         if dup:
             add("CPMS012", dup[0] + 1, f"概要行重复出现（共 {len(dup) + 1} 次）")
@@ -200,12 +200,27 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
     return out
 
 
-def _composition_items(text: str) -> int:
-    """套装组成声明的条目数：`1套=A+B+C` / `整套=A+B+C` 里 + 分隔的项数。没有声明返回 0。"""
-    m = re.search(r"^(?:[ \u3000]*)(?:1\s*套|整套)\s*[=＝]\s*(.+)$", text, re.MULTILINE)
+COMP_ITEM_QTY_RE = re.compile(
+    r"^\s*(?P<n>\d+(?:\.\d+)?)\s*(?:本|张|个|支|条|块|片|款|套|只|对|包|袋|卷|枚|组|种)?"
+)
+
+
+def _composition_pieces(text: str) -> float:
+    """套装组成声明的**实物件数**：`1套=A+B+C` 里每项开头数量之和，没写数量算 1 件。
+
+    例：`陈列盒+4款卡片+信封+自粘袋` → 1+4+1+1 = 7 件；`皮壳+24本骑钉书+24个口袋` → 1+24+24 = 49 件。
+    没有组成声明返回 0（推不出来 -> 不强制写件数）。
+    """
+    m = re.search(r"^(?:[ \u3000]*)(?:1\s*套|一套|整套)\s*[=＝]\s*(.+)$", text, re.MULTILINE)
     if not m:
         return 0
-    return len([x for x in re.split(r"[+＋]", m.group(1).strip()) if x.strip()])
+    total = 0.0
+    for item in re.split(r"[+＋]", m.group(1).strip()):
+        if not item.strip():
+            continue
+        q = COMP_ITEM_QTY_RE.match(item)
+        total += float(q.group("n")) if q else 1.0
+    return total
 
 
 def _is_set(record: dict) -> bool:
@@ -215,7 +230,7 @@ def _is_set(record: dict) -> bool:
     return top in {"29", "30"} or str(record.get("ZDFS") or "") == "套装"
 
 
-def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add, comp_items: int = 0) -> None:
+def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add, comp_pieces: float = 0) -> None:
     """概要行必须与 59 字段一致 —— 这一行是派生数据，不许手写漂移。"""
     def num(v: Any) -> Optional[float]:
         try:
@@ -237,17 +252,17 @@ def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add, comp_it
     if yys and yys > 1 and not g.get("yys"):
         add("CPMS011", line, f"YYS={yys:g} > 1，概要行必须写「，每款【{yys:g}】语言」")
 
-    # ── 计数词：书本类 = 款（TZS），套装/多件 = 件（组成声明条目数）──
+    # ── 计数词：书本类 = 款（TZS），套装/多件 = 件（组成声明里的实物件数）──
     tzs, got_tzs = num(record.get("TZS")), num(g.get("tzs"))
     unit = g.get("unit")
     if _is_set(record):
         if unit == "款":
             add("CPMS011", line, "套装/盒类应写「共【N】件」，不写「款」（业务 2026-10-19 拍板）")
-        elif comp_items >= 2:
+        elif comp_pieces >= 2:
             if unit != "件":
-                add("CPMS011", line, f"套装由 {comp_items} 件组成，概要行必须写「共【{comp_items}】件」")
-            elif got_tzs is not None and abs(got_tzs - comp_items) > 0.01:
-                add("CPMS011", line, f"件数={got_tzs:g} 与组成声明条目数={comp_items} 不一致")
+                add("CPMS011", line, f"套装实物共 {comp_pieces:g} 件，概要行必须写「共【{comp_pieces:g}】件」")
+            elif got_tzs is not None and abs(got_tzs - comp_pieces) > 0.01:
+                add("CPMS011", line, f"件数={got_tzs:g} 与组成声明实物件数={comp_pieces:g} 不一致")
     else:
         if unit == "件":
             add("CPMS011", line, "书本类应写「共【N】款」，不写「件」")
