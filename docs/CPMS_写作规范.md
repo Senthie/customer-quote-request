@@ -3,6 +3,7 @@
 > **状态：设计稿（待业务确认后转正）** ｜ 2026-10-17
 > 机器可读真源：`assets/cpms_spec.yaml` ｜ 校验工具：`scripts/cpms_lint.py`
 > 适用范围：ERP 报价需求单第 56 字段 `CPMS`
+> **日常速览与 6 份可复制样例：`docs/CPMS_规范与样例集.md`**（覆盖平装 / 精装 / 多款 BB / 线圈 / 套装 / 发声书，均过 `cpms_lint` 0 error / 0 warn；由 `tests/test_cpms_doc_samples.py` 钉住）
 
 ---
 

@@ -14,7 +14,9 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.28（2026-10-17 **CPMS 写法定死**：18476 份历史单据实测 → `assets/cpms_spec.yaml`
+> **版本：** 1.0.29（2026-10-19 **CPMS 规范样例集**：格式速览 + 6 份新规范样例，
+> `docs/CPMS_规范与样例集.md`，由 `tests/test_cpms_doc_samples.py` 直接解析校验）
+> —— 前序 1.0.28（2026-10-17）**CPMS 写法定死**：18476 份历史单据实测 → `assets/cpms_spec.yaml`
 > 骨架 + 闭集词表 + 槽位语法，`scripts/cpms_lint.py` 一条命令校验，`docs/CPMS_写作规范.md`
 > 含 3 个真实单据的逐行改写）
 
@@ -984,6 +986,14 @@ erp_view/
 > ★ 但**写法**从 1.0.28 起是**定死的**：`assets/cpms_spec.yaml`（机器可读）+ 
 > `docs/CPMS_写作规范.md`（人读，含 3 个真实单据的逐行改写）+ `scripts/cpms_lint.py`（校验）。
 > 「agent 亲自写」= 亲自判断事实，**不是亲自发明格式**。
+>
+> ★ **动笔前先看 `docs/CPMS_规范与样例集.md`**：格式速览（骨架/槽位/词表/硬规矩）+ **6 份可复制样例**
+> （平装锁线 / 精装 / 多款 BB / YO 线圈 / 套装 / 精装发声书），每份都带对应的 ERP 字段、
+> 都过 `cpms_lint` **0 error / 0 warn**。照最接近的那份改，比从空白开始写快且不容易错。
+> 样例由 `tests/test_cpms_doc_samples.py` 直接解析该 markdown 校验 —— 文档与规范不会漂。
+>
+> 设计方法（先量后定）、语料实测数字、以及写这类 linter 时踩过的坑，见
+> `references/cpms-writing-standard.md` —— 要改规范或加规则前先读它，别重算一遍语料。
 
 **脚本跑完会打印：**
 
@@ -1138,7 +1148,8 @@ customer-quote-request/
 ├── SKILL.md                            # ★ 总纲（本文件）
 ├── README.md
 ├── docs/
-│   └── CPMS_写作规范.md                # ★ CPMS 人读规范（骨架/词表/3 个真实单据改写）
+│   ├── CPMS_写作规范.md                # ★ CPMS 人读规范（设计依据 + 骨架/词表/3 个真实单据改写）
+│   └── CPMS_规范与样例集.md            # ★ CPMS 日常用：格式速览 + 6 份新规范样例（含 ERP 字段）
 ├── skills/                             # ★ 客户子技能（软链到 Hermes 技能目录，见下）
 │   ├── customer-quote-igl/SKILL.md     #   IGL 专属：平铺表范式 / 口径 / 基线 / 检查清单
 │   └── customer-quote-ngv/SKILL.md     #   NGV 专属：分区表单范式 / 口径 / 语料库 / 检查清单
@@ -1192,6 +1203,7 @@ customer-quote-request/
 │   ├── test_ngv_profile.py        # ★ NGV 分区表单（section_pairs 机制 + 真实样本回归）
 │   ├── test_ingest_email.py       # 邮件入口
 │   ├── test_cpms_lint.py          # ★ CPMS 规范（样例自证 + 每条规则码 + --fix 不越界）
+│   ├── test_cpms_doc_samples.py   # ★ CPMS_规范与样例集.md 里的 6 份样例必须零违规（文档即测试）
 │   ├── test_viewer.py             # ★ 产物查看器（扫描 / 路径安全 / 分组覆盖 / HTTP 端点）
 │   └── test_pipeline.py           # 端到端回归（真实样本 + 逐字段值断言）
 ├── customer-files/                # pending / processed / failed（产物，不进仓库）
@@ -1442,6 +1454,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.26** | **2026-09-24** | **查看器搬进 `erp_view/` 包 + 改用 Flask**：三层分离、扫描根进 `app.config`、测试改用 `test_client`（见下） |
 | **1.0.27** | **2026-09-24** | **查看器排版重做 + 导出 PDF**：字段自适应网格（长值跨行）、标签压一行、`window.print()` 版 PDF（见下） |
 | **1.0.28** | **2026-10-17** | **CPMS 写法定死**：18476 份历史单据实测 → 骨架 + 闭集词表 + 槽位语法 + `cpms_lint`（见下） |
+| **1.0.29** | **2026-10-19** | **CPMS 规范样例集**：`docs/CPMS_规范与样例集.md`（格式速览 + 6 份新规范样例，覆盖平装/精装/多款 BB/线圈/套装/发声书）+ `tests/test_cpms_doc_samples.py`（文档即测试） |
 
 ### 1.0.27 详细变更 —— 排版重做与导出 PDF
 
