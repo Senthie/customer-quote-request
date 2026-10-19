@@ -3,7 +3,8 @@
 钉三件事：
 1. 规范样例**自己必须合规** —— 文档里的示例如果跑不过 linter，规范就是废纸。
 2. 每条规则码都真的会触发（否则规则写了等于没写）。
-3. `--fix` 只做机械修复，不许偷偷改语义（尤其印色不许自动补 C）。
+3. `--fix` 做机械修复：版式/单位/同义词 + **部件行整槽补印色 C**，但**不许碰语义**
+   （不换算灰板 g↔mm、不改工艺顺序、不动备注段）。
 
 语料：`/home/claw/train/custom_cpms_requie`（18476 份 ERP 导出）用作**度量**，
 不作为测试依赖 —— 测试必须能在没有那份数据的机器上跑。
@@ -26,7 +27,7 @@ GOOD = """书籍方向：【长书脊】产品规格：【228.6*254*0】共【2�
   装订：普通BB书，圆角
 
 2. 精装BB书
-  皮壳：157g光粉(FSC)+2.5mm灰板(FSC)，4C+光胶/0C
+  皮壳：157g光粉(FSC)+1500g灰板(FSC)，4C+光胶/0C
   内文：10PP，350g单粉(FSC)对裱，4C+UV/0C
   装订：精装BOBO书
 
@@ -139,10 +140,10 @@ def test_语言数大于1必须写每款语言():
     assert "CPMS011" in codes(L.lint_text(GOOD, SPEC, rec))
 
 
-# ── 4. --fix 只做机械修复 ────────────────────────────────────
+# ── 4. --fix 做机械修复（含部件行整槽补印色 C）────────────────
 def test_机械规范化后合规():
     dirty = (GOOD.replace("\n", "\r\n")
-                 .replace("4C/4C", "4/4c")            # 印色不自动修
+                 .replace("4C/4C", "4/4c")            # 印色补 C（业务 2026-10-19 拍板自动修）
                  .replace("  内文：", "  内页：")       # 同义标签
                  .replace("装箱：20本/箱", "装箱:20本/箱")  # 半角冒号
                  .replace("日期", "日期"))
@@ -150,9 +151,62 @@ def test_机械规范化后合规():
     assert "\r" not in fixed
     assert "内文：" in fixed and "内页：" not in fixed
     assert "装箱：20本/箱" in fixed
-    # 印色保持原样 —— 补 C 有歧义，必须人改
-    assert "4/4c" in fixed
+    assert "4C/4C" in fixed and "4/4c" not in fixed
     assert changes
+    # 修完必须真的合规（而不是只改了几个字）
+    assert [f for f in L.lint_text(fixed, SPEC) if f.level == "error"] == []
+
+
+def test_印色只修部件行整槽_不碰比例和备注():
+    text = ("书籍方向：【长书脊】产品规格：【210*148*12】\n\n"
+            "封面：250g单粉(FSC)，4/0c\n"          # 部件行整槽 → 4C/0C
+            "内文：160PP，80g书纸(FSC)，4c+光油/0\n"
+            "装箱：40本/箱\n"
+            "备注：书脊1/2处烫金")                 # 备注段不动
+    fixed, _ = L.normalize_text(text, SPEC)
+    assert "4C/0C" in fixed
+    assert "4C+光油/0C" in fixed
+    assert "书脊1/2处烫金" in fixed                # 比例不许被改成 1C/2C
+
+
+def test_套装写款数要报错_写件数才通过():
+    rec = {"Drop_SJFX": "", "CD": 0, "KD": 0, "GD": 0, "TZS": 1,
+           "CPLB": "29.04;其它套装", "ZDFS": "套装"}
+    bad = "产品规格：【0*0*0】共【2】款\n\n1套=A+B\n\n装箱：24套/箱"
+    good = "产品规格：【0*0*0】共【2】件\n\n1套=A+B\n\n装箱：24套/箱"
+    assert "CPMS011" in codes(L.lint_text(bad, SPEC, rec))
+    assert [f for f in L.lint_text(good, SPEC, rec) if f.code == "CPMS011"] == []
+
+
+def test_套装件数必须与组成声明一致():
+    rec = {"Drop_SJFX": "", "CD": 0, "KD": 0, "GD": 0, "TZS": 1,
+           "CPLB": "29.04;其它套装", "ZDFS": "套装"}
+    mismatch = "产品规格：【0*0*0】共【5】件\n\n1套=A+B+C\n\n装箱：24套/箱"
+    assert "CPMS011" in codes(L.lint_text(mismatch, SPEC, rec))
+
+
+def test_套装多件漏写件数要报错():
+    rec = {"Drop_SJFX": "", "CD": 0, "KD": 0, "GD": 0, "TZS": 1,
+           "CPLB": "29.04;其它套装", "ZDFS": "套装"}
+    text = "产品规格：【0*0*0】\n\n1套=A+B+C+D\n\n装箱：24套/箱"
+    assert "CPMS011" in codes(L.lint_text(text, SPEC, rec))
+
+
+def test_书本类不许写件():
+    rec = {"Drop_SJFX": "长书脊", "CD": 228.6, "KD": 254, "GD": 0, "TZS": 2,
+           "CPLB": "23.01;无线胶装书"}
+    text = GOOD.replace("共【2】款", "共【2】件")
+    assert "CPMS011" in codes(L.lint_text(text, SPEC, rec))
+
+
+def test_灰板写mm要告警():
+    text = ("书籍方向：【长书脊】产品规格：【210*148*12】\n\n"
+            "封面：157g光粉(FSC)+2.5mm灰板(FSC)，4C/0C\n"
+            "内文：160PP，80g书纸(FSC)，1C/1C\n"
+            "装订：锁线胶装\n"
+            "装箱：40本/箱")
+    fs = [f for f in L.lint_text(text, SPEC) if f.code == "CPMS054"]
+    assert fs and all(f.level == "warn" for f in fs)
 
 
 def test_规范化不碰尺寸里的星号():

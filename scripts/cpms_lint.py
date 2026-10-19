@@ -130,14 +130,15 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
 
     # ── 概要行 ──
     head_idx = next((i for i, l in enumerate(lines) if l.strip().startswith(("书籍方向：", "产品规格："))), None)
+    comp_items = _composition_items(text)
     if head_idx is None:
         add("CPMS010", 1, "缺少概要行「书籍方向：【X】产品规格：【a*b*c】共【N】款」")
     else:
         m = spec.header_re.match(lines[head_idx].strip())
         if not m:
-            add("CPMS011", head_idx + 1, "概要行格式不合规范（应为 书籍方向：【长书脊】产品规格：【CD*KD*GD】共【N】款）")
+            add("CPMS011", head_idx + 1, "概要行格式不合规范（应为 书籍方向：【长书脊】产品规格：【CD*KD*GD】共【N】款/件）")
         elif record:
-            _check_header(m, record, spec, head_idx + 1, add)
+            _check_header(m, record, spec, head_idx + 1, add, comp_items)
         dup = [i for i, l in enumerate(lines) if i != head_idx and l.strip().startswith(("书籍方向：", "产品规格：【"))]
         if dup:
             add("CPMS012", dup[0] + 1, f"概要行重复出现（共 {len(dup) + 1} 次）")
@@ -199,7 +200,22 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
     return out
 
 
-def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add) -> None:
+def _composition_items(text: str) -> int:
+    """套装组成声明的条目数：`1套=A+B+C` / `整套=A+B+C` 里 + 分隔的项数。没有声明返回 0。"""
+    m = re.search(r"^(?:[ \u3000]*)(?:1\s*套|整套)\s*[=＝]\s*(.+)$", text, re.MULTILINE)
+    if not m:
+        return 0
+    return len([x for x in re.split(r"[+＋]", m.group(1).strip()) if x.strip()])
+
+
+def _is_set(record: dict) -> bool:
+    """套装 / 盒类判定：CPLB 顶层 29~30，或 ZDFS = 套装。"""
+    cplb = str(record.get("CPLB") or "")
+    top = cplb.split(";")[0].split(".")[0]
+    return top in {"29", "30"} or str(record.get("ZDFS") or "") == "套装"
+
+
+def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add, comp_items: int = 0) -> None:
     """概要行必须与 59 字段一致 —— 这一行是派生数据，不许手写漂移。"""
     def num(v: Any) -> Optional[float]:
         try:
@@ -214,15 +230,31 @@ def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add) -> None
         want, got = num(record.get(fieldname)), num(g.get(key))
         if want is not None and got is not None and abs(want - got) > 0.6:
             add("CPMS011", line, f"产品规格 {key.upper()}={got:g} 与 {fieldname}={want:g} 不一致（差 >0.5mm）")
-    for key, fieldname in (("tzs", "TZS"), ("yys", "YYS")):
-        want, got = num(record.get(fieldname)), num(g.get(key))
-        if want is not None and got is not None and abs(want - got) > 0.01:
-            add("CPMS011", line, f"概要行 {key.upper()}={got:g} 与 {fieldname}={want:g} 不一致")
-    tzs, yys = num(record.get("TZS")), num(record.get("YYS"))
-    if tzs and tzs > 1 and not g.get("tzs"):
-        add("CPMS011", line, f"TZS={tzs:g} > 1，概要行必须写「共【{tzs:g}】款」")
+
+    yys, got_yys = num(record.get("YYS")), num(g.get("yys"))
+    if yys is not None and got_yys is not None and abs(yys - got_yys) > 0.01:
+        add("CPMS011", line, f"概要行 YYS={got_yys:g} 与 YYS={yys:g} 不一致")
     if yys and yys > 1 and not g.get("yys"):
         add("CPMS011", line, f"YYS={yys:g} > 1，概要行必须写「，每款【{yys:g}】语言」")
+
+    # ── 计数词：书本类 = 款（TZS），套装/多件 = 件（组成声明条目数）──
+    tzs, got_tzs = num(record.get("TZS")), num(g.get("tzs"))
+    unit = g.get("unit")
+    if _is_set(record):
+        if unit == "款":
+            add("CPMS011", line, "套装/盒类应写「共【N】件」，不写「款」（业务 2026-10-19 拍板）")
+        elif comp_items >= 2:
+            if unit != "件":
+                add("CPMS011", line, f"套装由 {comp_items} 件组成，概要行必须写「共【{comp_items}】件」")
+            elif got_tzs is not None and abs(got_tzs - comp_items) > 0.01:
+                add("CPMS011", line, f"件数={got_tzs:g} 与组成声明条目数={comp_items} 不一致")
+    else:
+        if unit == "件":
+            add("CPMS011", line, "书本类应写「共【N】款」，不写「件」")
+        if unit and tzs is not None and got_tzs is not None and abs(tzs - got_tzs) > 0.01:
+            add("CPMS011", line, f"概要行 TZS={got_tzs:g} 与 TZS={tzs:g} 不一致")
+        if tzs and tzs > 1 and not unit:
+            add("CPMS011", line, f"TZS={tzs:g} > 1，概要行必须写「共【{tzs:g}】款」")
 
 
 def _check_value(label: str, value: str, line: int, spec: Spec, add) -> None:
@@ -231,6 +263,18 @@ def _check_value(label: str, value: str, line: int, spec: Spec, add) -> None:
         add("CPMS050", line, "克重单位应为 g（如 300g单粉），不写 gsm / 克")
     if re.search(r"(?<=\d)\s*[xX×]\s*(?=\d)", value):
         add("CPMS051", line, "尺寸分隔符应为 *（如 228.6*254mm），不写 x / X / ×")
+    # 灰板只认 g：mm 只在「不是尺寸串」时算违规（300*200mm 里的 200mm 是尺寸，不报）
+    if "灰板" in label or "灰板" in value:
+        bad_mm = False
+        for seg in value.split("，"):
+            if "灰板" not in seg and "灰板" not in label:
+                continue
+            for m in re.finditer(r"\d+(?:\.\d+)?\s*mm", seg):
+                if seg[: m.start()].rstrip().endswith("*"):
+                    continue
+                bad_mm = True
+        if bad_mm:
+            add("CPMS054", line, "灰板厚度用 g 表示（600g=1mm / 900g=1.5mm / 1200g=2mm / 1500g=2.5mm / 1800g=3mm），不写 mm")
 
     # 印色：抓「数字[+工艺]/数字」并核对严格形式 {n}C(+工艺)*/{m}C
     for tok in re.finditer(r"(?<![\d.*])(\d{1,2})\s*([cC])?\s*((?:\+[^/，；*\n]{1,20})*)\s*[/／]\s*(\d{1,2})\s*([cC])?(?![\d.*])", value):
@@ -288,6 +332,31 @@ def _suggest(label: str, spec: Spec) -> str:
 # ─────────────────────────────────────────────────────────────
 # 机械规范化（只改版式与已定同义词，不动语义）
 # ─────────────────────────────────────────────────────────────
+INK_SLOT_RE = re.compile(
+    r"^(?P<a>\d{1,2})\s*(?:[cC])?\s*(?P<fin>(?:\+[^/，；*\n]{1,24})*)\s*[/／]\s*(?P<b>\d{1,2})\s*(?:[cC])?$"
+)
+
+
+def _fix_ink_slot(value: str) -> tuple[str, bool]:
+    """部件行取值里的印色槽补 C：整槽形如 4/0c、4c+光油/0c、4C+哑胶/0 → 4C/0C、4C+光油/0C、4C+哑胶/0C。
+
+    只在「整槽」上动手（值按中文逗号切成槽），避免把 1/2 这类比例改成 1C/2C。
+    """
+    changed = False
+    out: list[str] = []
+    for seg in value.split("，"):
+        s = seg.strip()
+        m = INK_SLOT_RE.match(s)
+        if not m:
+            out.append(seg)
+            continue
+        new = f"{int(m.group('a'))}C{m.group('fin') or ''}/{int(m.group('b'))}C"
+        if new != s:
+            changed = True
+        out.append(new)
+    return "，".join(out), changed
+
+
 def normalize_text(text: str, spec: Spec) -> tuple[str, list[str]]:
     changes: list[str] = []
     t = (text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -316,6 +385,16 @@ def normalize_text(text: str, spec: Spec) -> tuple[str, list[str]]:
             canon = spec.alias[m.group("label")]
             line = line.replace(m.group("label") + "：", canon + "：", 1)
             changes.append(f"标签 {m.group('label')} → {canon}")
+        # 印色补 C：只在部件行（order 100~299）的整槽上动手
+        m = LABEL_RE.match(line)
+        if m:
+            canon = spec.alias.get(m.group("label"), m.group("label"))
+            order = spec.order.get(canon)
+            if order is not None and 100 <= order <= 299:
+                new_value, ink_changed = _fix_ink_slot(m.group("value"))
+                if ink_changed:
+                    line = line[: m.start("value")] + new_value
+                    changes.append(f"印色补 C（{canon}）")
         # 窄替换：数字后面的 gsm/克 → g；数字之间的 x → *
         new = re.sub(r"(?<=\d)\s*(?:gsm|克)(?=\s*(?:[\u4e00-\u9fff(（]|$))", "g", line)
         new = re.sub(r"(?<=\d)\s*[xX×]\s*(?=\d)", "*", new)
