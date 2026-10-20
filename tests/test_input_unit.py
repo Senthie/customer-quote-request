@@ -323,3 +323,46 @@ def test_端到端_两个子目录出两份报价(tmp_path):
     # 父目录被搬空后删掉；pending 里不许留残骸
     assert not folder.exists()
     assert list(failed.iterdir()) == []
+
+
+def test_口径1_根下散文件单独成单_不并进任何子目录(tmp_path):
+    """森西 2026-10-20 拍板的口径 1：根下散文件自成一份 + validation 里留提醒。
+
+    锁这条是为了防「以后有人图省事把根下文件塞进每个子目录」—— 那会让
+    子单凭空多出不属于它的规格（量、材质都可能被带偏）。
+    """
+    folder = tmp_path / "两单加总则"
+    (folder / "CU26070001").mkdir(parents=True)
+    (folder / "CU26070001" / "01_规格.txt").write_text(
+        _spec("Rootcase A", "10.000cps", "148 x 210 mm portrait"), encoding="utf-8")
+    (folder / "CU26070002").mkdir()
+    (folder / "CU26070002" / "01_规格.txt").write_text(
+        _spec("Rootcase B", "20.000cps", "210 x 280 mm portrait"), encoding="utf-8")
+    (folder / "总则.txt").write_text("Notes: FSC Mix accepted\n", encoding="utf-8")
+
+    processed = tmp_path / "processed"
+    failed = tmp_path / "failed"
+    processed.mkdir()
+    failed.mkdir()
+
+    proc = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "main.py"), str(folder),
+         "--customer", "ngv", "--processed-dir", str(processed),
+         "--failed-dir", str(failed), "--today", "2026-10-20"],
+        capture_output=True, text=True, cwd=REPO_ROOT)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    validations = [json.loads(p.read_text(encoding="utf-8"))
+                   for p in processed.glob("*/*.validation.json")]
+    assert len(validations) == 3, "两个子目录 + 根下总则 = 3 份"
+
+    by_role = {v["unit"]["role"]: v["unit"] for v in validations}
+    assert set(by_role) == {"subdir", "root_files"}
+    # 子单里绝不能出现「总则.txt」
+    for v in validations:
+        if v["unit"]["role"] == "subdir":
+            assert "总则.txt" not in v["unit"]["members"], "根下文件不许并进子单"
+            assert v["unit"]["note"] is None
+    # 根下那份要被明确提醒「可能是共用说明」
+    assert "共用的说明" in (by_role["root_files"]["note"] or "")
+    assert "单独成一份" in proc.stdout + proc.stderr

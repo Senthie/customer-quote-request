@@ -1246,6 +1246,9 @@ def step1_input_validation(unit: InputUnit, logger: Logger) -> bool:
     # 业务口径（2026-10-20）：单文件 = 独一份报价；文件夹 / 压缩包 = 这一份报价的全部参考文件。
     input_path = unit.path
     logger.info(f"输入单元: {input_path}（{unit.label}）")
+    if unit.role == "root_files":
+        logger.warn("父目录根下的散文件按口径 1 单独成一份 —— "
+                    "若它其实是给各子目录共用的说明，请人工复制进各子目录后重跑")
     if not unit.is_single_file:
         logger.info(f"单元成员 {len(unit.members)} 个（合并成 **一份** 报价）:")
         for member in unit.members:
@@ -1518,6 +1521,10 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
             "archive_owner": unit.archive_owner,
             "members": [m.name for m in unit.members],
             "skipped": [Path(s).name for s in unit.skipped],
+            # 口径 1（森西 2026-10-20 拍板）：根下散文件**单独成单**，不并进任何子目录。
+            # 它也可能本来是「给各子目录共用的总则」—— 所以这里留一句话提醒人工看。
+            "note": ("父目录根下的散文件按口径单独成一份；若它是给各子目录共用的说明，"
+                     "请人工复制进各子目录后重跑" if unit.role == "root_files" else None),
         },
         "conflicts": customer_data.conflicts,
         "task_id": task_id,
