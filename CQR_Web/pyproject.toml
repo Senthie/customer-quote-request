@@ -1,0 +1,23 @@
+[project]
+name = "cqr-web"
+version = "0.2.0"
+description = "CQR Web —— 客户报价需求（CQR）的产物浏览与后续 Web 功能：只看不写，判定逻辑复用技能仓库"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.1.3",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+cqr-web = "CQR_Web.app:main"
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.uv]
+# 项目没做成可安装包（包目录就在项目根），`uv run python -m CQR_Web` 靠 cwd/路径导入
+package = false

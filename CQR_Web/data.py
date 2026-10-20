@@ -10,8 +10,8 @@
 业务 2026-09-24：
   * 「有一个旧的展示 ERP JSON 格式的 html，但是我们的导出结构发生了变化，需要修改它」
   * 「让它可以自动扫描 customer-quote-request/customer-files/processed 的导出 ERP 文件」
-  * 2026-09-24 晚些：「将 erp_viewer.py 创建一个 erp_view 文件夹，然后使用 flask 重新编写」
-    → 从 `scripts/erp_viewer.py`（标准库 http.server）搬进 `erp_view/` 包 + Flask。
+  * 2026-09-24 晚些：「将 erp_viewer.py 创建一个 CQR_Web 文件夹，然后使用 flask 重新编写」
+    → 从 `scripts/erp_viewer.py`（标准库 http.server）搬进 `CQR_Web/` 包 + Flask。
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-# 仓库根 = erp_view/ 的上一层
+# 仓库根 = CQR_Web/ 的上一层
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 

@@ -9,10 +9,10 @@
 
 用法：
     uv run ./scripts/erp_viewer.py                # 转发壳（老命令照旧）
-    uv run python -m erp_view                     # 等价，更直白
-    uv run python -m erp_view --port 9000         # 换端口
-    uv run python -m erp_view --no-open           # 无头/远程：不开浏览器
-    uv run python -m erp_view --dir <其它目录>     # 改扫描根目录
+    uv run python -m CQR_Web                     # 等价，更直白
+    uv run python -m CQR_Web --port 9000         # 换端口
+    uv run python -m CQR_Web --no-open           # 无头/远程：不开浏览器
+    uv run python -m CQR_Web --dir <其它目录>     # 改扫描根目录
 
 接口（页面 templates/index.html 消费）：
     GET /                    → 页面本体
@@ -75,7 +75,7 @@ def create_app(processed_dir: Optional[Path | str] = None) -> Flask:
     """
     root = Path(processed_dir).expanduser().resolve() if processed_dir else DEFAULT_PROCESSED_DIR
 
-    app = Flask(__name__)          # template_folder 默认 = erp_view/templates
+    app = Flask(__name__)          # template_folder 默认 = CQR_Web/templates
     app.config["PROCESSED_DIR"] = root
     app.config["APP_NAME"] = APP_NAME
 

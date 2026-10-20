@@ -7,7 +7,7 @@
     <!--
       ERP 导出 JSON 查看器（配置版本 2 结构）
 
-      这是 Flask 应用的模板（erp_view/templates/index.html），由 erp_view/app.py
+      这是 Flask 应用的模板（CQR_Web/templates/index.html），由 CQR_Web/app.py
       的 render_template 送出。
       ⚠️ **刻意不含任何 Jinja 语法**（双花括号 / 百分号花括号都不许出现）——
       页面数据全部走下面的 /api/* 读；往模板里塞变量会被 Jinja 吃掉一部分 JS，
@@ -18,11 +18,11 @@
       断网/内网环境直接白屏 —— 这是个内部生产工具，必须离线可用。
       纯原生 JS + document.createElement，零 CDN。
 
-      数据来源（`erp_view/data.py` 算，`app.py` 送 —— 页面不自己判定任何东西）：
+      数据来源（`CQR_Web/data.py` 算，`app.py` 送 —— 页面不自己判定任何东西）：
         GET /api/schema   字段字典（标签/类型/合法取值）+ 内部字段 + 分组
         GET /api/exports  自动扫描扫描根（默认 customer-files/processed）下的 ERP_*.json
         GET /api/export?path=…  某一份产物的完整 JSON + 权威取值校验 + 交付闸门
-      起服务：uv run python -m erp_view（或 uv run ./scripts/erp_viewer.py，等价）。
+      起服务：uv run python -m CQR_Web（或 uv run ./scripts/erp_viewer.py，等价）。
       直接用 file:// 打开也能用，只是没有自动扫描（浏览器不许列目录）→ 走「导入 JSON」。
     -->
     <style>
@@ -564,7 +564,7 @@ function renderHeader() {
             el("span", {},
                 "浏览器不允许 ", el("code", { text: "file://" }), " 页面列出本地目录，所以「自动扫描」需要一个小服务端。",
                 el("br"),
-                "在仓库根目录跑：", el("code", { text: "uv run python -m erp_view" }),
+                "在仓库根目录跑：", el("code", { text: "uv run python -m CQR_Web" }),
                 " 然后打开它给出的地址（会自动开浏览器）。现在也可以点「导入 JSON」手动看单份文件。"),
         ));
     }

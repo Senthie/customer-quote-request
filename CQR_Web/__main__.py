@@ -1,4 +1,4 @@
-"""`uv run python -m erp_view [--port …] [--no-open] [--dir …]`"""
+"""`uv run python -m CQR_Web [--port …] [--no-open] [--dir …]`"""
 from __future__ import annotations
 
 from .app import main

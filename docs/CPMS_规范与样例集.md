@@ -409,7 +409,7 @@ uv run ./scripts/cpms_lint.py --vocab
 
 交付前还有两道闸门：
 
-1. `CPMS` 非空、`CPMC_ZH` 不含 `【中文品名待定】` —— `uv run python -m erp_view --no-open` 看「未完成」红徽章。
+1. `CPMS` 非空、`CPMC_ZH` 不含 `【中文品名待定】` —— `uv run python -m CQR_Web --no-open` 看「未完成」红徽章。
 2. `cpms_lint` 退出码 0。
 
 ---

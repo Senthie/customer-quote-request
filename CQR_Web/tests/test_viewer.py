@@ -1,10 +1,10 @@
-"""ERP 导出查看器（`erp_view/` 包：data.py + app.py + templates/index.html）回归测试。
+"""ERP 导出查看器（`CQR_Web/` 包：data.py + app.py + templates/index.html）回归测试。
 
 业务 2026-09-24 四件事：
   ① 旧 HTML 是按**上一代**结构写的（SJFX / KHMBJ / GG_length…），全错，要按新结构重写；
   ② 要能**自动扫描** customer-files/processed 下的导出产物；
   ③ 产物要加内部字段 `version` 标识当前配置版本（目前 = 2）；
-  ④ 把 `scripts/erp_viewer.py` 搬进 `erp_view/` 文件夹、用 Flask 重写。
+  ④ 把 `scripts/erp_viewer.py` 搬进 `CQR_Web/` 文件夹、用 Flask 重写。
 
 这里钉住的是**机制**，不是某一份产物的具体值：
   * 扫描能递归找到全部 ERP_*.json、最新在前、_superseded 目录会被标出来
@@ -26,13 +26,15 @@ from pathlib import Path
 
 import pytest
 
-import erp_view as ev
+import CQR_Web as ev
 import erp_schema
-from erp_view import create_app
+from CQR_Web import create_app
 from main import TEMPLATE_PATH
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PKG_DIR = REPO_ROOT / "erp_view"
+# 本文件在 CQR_Web/tests/ 里：parent=CQR_Web（项目根，也是包目录），parent.parent=技能仓库根
+PROJ_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = PROJ_ROOT.parent
+PKG_DIR = PROJ_ROOT
 PAGE_PATH = PKG_DIR / "templates" / "index.html"
 
 
@@ -612,9 +614,9 @@ def test_data层不依赖flask():
 
 
 def test_转发壳里没有业务逻辑():
-    """`scripts/erp_viewer.py` 只剩转发 —— 逻辑搬进 erp_view/ 后不许两处各留一份。"""
+    """`scripts/erp_viewer.py` 只剩转发 —— 逻辑搬进 CQR_Web/ 后不许两处各留一份。"""
     src = (REPO_ROOT / "scripts" / "erp_viewer.py").read_text(encoding="utf-8")
-    assert "from erp_view.app import main" in src
+    assert "from CQR_Web.app import main" in src
     for leaked in ("delivery_gates", "def scan_exports", "FIELD_GROUPS", "http.server"):
         assert leaked not in src, f"转发壳里不该有实现: {leaked}"
     assert len(src.splitlines()) < 40, "转发壳要够短，别又长回一个应用"
@@ -639,11 +641,11 @@ def test_JSON口径_不转义中文_不排序键_缩进两格(viewer):
 
 
 def test_模块入口可跑():
-    """`python -m erp_view --help` 能跑 —— CLI 参数在 app.main 里，别让它烂掉。"""
+    """`python -m CQR_Web --help` 能跑 —— CLI 参数在 app.main 里，别让它烂掉。"""
     import subprocess
     import sys
 
-    r = subprocess.run([sys.executable, "-m", "erp_view", "--help"],
+    r = subprocess.run([sys.executable, "-m", "CQR_Web", "--help"],
                        cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     for flag in ("--host", "--port", "--no-open", "--dir"):
@@ -655,7 +657,7 @@ def test_端口被占用时给中文提示(capsys):
     所以 `main()` 起服务前先探一次端口 —— 这条钉住那个前置检查别被删掉。"""
     import socket
 
-    from erp_view.app import main as cli_main
+    from CQR_Web.app import main as cli_main
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
