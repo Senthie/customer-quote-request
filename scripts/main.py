@@ -24,12 +24,12 @@ import argparse
 import json
 import re
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cplb_tree  # noqa: E402  （ERP 产品类别树）
@@ -107,44 +107,168 @@ class Logger:
         return (datetime.now() - self.start_time).total_seconds()
 
 
-def run_script(script_name: str, *args) -> str:
-    """运行子脚本并返回 stdout（失败返回空串）。"""
-    script_path = Path(__file__).resolve().parent / script_name
-    result = subprocess.run(["uv", "run", str(script_path), *args],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+# ── 查表类工具（1.0.42 内联）──────────────────────────────────────────────
+# 以前这三张表各有一个独立脚本，main.py 用 `subprocess + uv run` 去查：
+# 一次运行要起 4~8 个进程（每个 ~0.4s），还硬依赖 PATH 里有 uv、且工作目录对。
+# 表本身只有几十行，直接读更省事、也更好查错。逻辑与那四个脚本逐字段等价，
+# 由 tests/test_lookup_tables.py 对着原表逐行钉住。
+PAGE_THICKNESS_PATH = REPO_ROOT / "assets" / "page_thickness.xlsx"
+PRODUCT_CATEGORIES_PATH = REPO_ROOT / "assets" / "product_categories.xlsx"
+
+_MONTH_ABBR = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+               "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+
+_table_cache: dict = {}
 
 
-# ── 查表类工具 ───────────────────────────────────────────────────────────
+def _load_table(path: Path, required: list, logger: "Logger",
+                csv_fallback: bool = False) -> Any:
+    """读一张查询表（缺列 / 读不出来 → 返回 None 并 WARN）。同进程内缓存。"""
+    key = str(path)
+    if key in _table_cache:
+        return _table_cache[key]
+
+    import pandas as pd
+
+    df = None
+    source = path
+    if not source.exists() and csv_fallback:
+        csv_path = source.with_suffix(".csv")
+        if csv_path.exists():
+            source = csv_path
+    try:
+        if not source.exists():
+            logger.warn(f"  查表失败：{source.name} 不存在")
+        else:
+            df = pd.read_csv(source) if source.suffix.lower() == ".csv" else pd.read_excel(source)
+            missing = [c for c in required if c not in df.columns]
+            if missing:
+                logger.warn(f"  查表失败：{source.name} 缺少列 {missing}")
+                df = None
+    except Exception as exc:                                  # 表坏了不该炸整单
+        logger.warn(f"  查表失败：{source.name} 读不出来（{exc}）")
+        df = None
+
+    _table_cache[key] = df
+    return df
+
+
+def _cell(value: Any) -> str:
+    """表里的单元格 → 干净字符串（NaN/None → 空串，整数值不带 .0）。"""
+    try:
+        if value is None or (isinstance(value, float) and value != value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
 def parse_product_categories(value: str, logger: Logger) -> tuple:
-    """查产品类别表，返回 (CPLB, ZLBM)。"""
-    logger.info(f"  调用: product_categories.py --select {value}")
-    output = run_script("product_categories.py", "--select", value)
-    cplb = zlbm = ""
-    for line in output.split("\n"):
-        if "CPLB:" in line and "ZLBM:" in line:
-            for part in line.split(","):
-                if "CPLB:" in part:
-                    cplb = part.split(":", 1)[1].strip()
-                elif "ZLBM:" in part:
-                    zlbm = part.split(":", 1)[1].strip()
+    """查产品类别表，返回 (CPLB, ZLBM)。
+
+    ⚠️ 这张表的 `customer_product_categories` 列**只有 1 行有值**（`paperback`），
+    所以本兜底实际只覆盖 `format=paperback` 一种写法；其余一律落到档案兜底值。
+    命中多行时取**最后一行** —— 与旧脚本「逐行打印、main 取最后一条」一致。
+    """
+    query = str(value).strip()
+    logger.info(f"  查表: product_categories.xlsx ← {query!r}")
+    df = _load_table(PRODUCT_CATEGORIES_PATH,
+                     ["customer_product_categories", "CPLB", "ZLBM"], logger)
+    if df is None:
+        return "", ""
+
+    categories = df["customer_product_categories"].astype(str).str.strip().str.lower()
+    matched = df.loc[categories == query.lower()]
+    if matched.empty:
+        logger.info("  查询结果: 未命中")
+        return "", ""
+
+    row = matched.iloc[-1]
+    cplb, zlbm = _cell(row["CPLB"]), _cell(row["ZLBM"])
     logger.info(f"  查询结果: CPLB={cplb}, ZLBM={zlbm}")
     return cplb, zlbm
 
 
 def get_page_thickness(page_style: str, faw: str, logger: Logger) -> float:
-    """查纸张厚度（克重传裸数字，不带 g）。"""
-    logger.info(f"  调用: select_page_thickness.py --pg {page_style} --faw {faw}")
-    output = run_script("select_page_thickness.py", "--pg", page_style, "--faw", faw)
-    try:
-        thickness = float(output)
-        logger.info(f"  {page_style}厚度: {thickness}")
-        return thickness
-    except ValueError:
-        logger.warn(f"  {page_style} 克重 {faw} 查询失败，改用 克重×0.001 粗估")
+    """查纸张厚度（克重传裸数字，不带 g）。查不到 → WARN 并返回 0.0。
+
+    三级匹配，与旧脚本一致：精确 → 包含 → 同纸型里按克重就近（并列取较大者，
+    宁厚勿薄 —— 书脊算窄会装不下）。
+    """
+    import pandas as pd
+
+    style, weight = str(page_style).strip(), str(faw).strip()
+    logger.info(f"  查表: page_thickness.xlsx ← {style} / {weight}")
+    df = _load_table(PAGE_THICKNESS_PATH, ["page_style", "faw/g", "thickness"],
+                     logger, csv_fallback=True)
+    if df is None:
+        logger.warn(f"  {style} 克重 {weight} 查询失败，改用 克重×0.001 粗估")
         return 0.0
+
+    styles = df["page_style"].astype(str).str.strip()
+    weights = df["faw/g"].astype(str).str.strip()
+
+    # 1) 精确
+    matched = df.loc[(styles == style) & (weights == weight)]
+    # 2) 包含（客户常写 "80g"、"100 gsm"）
+    if matched.empty:
+        matched = df.loc[styles.str.contains(style, case=False, na=False, regex=False)
+                         & weights.str.contains(weight, case=False, na=False, regex=False)]
+    # 3) 同纸型下按克重就近（表里只有离散克重，90g 这种中间值才走到这里）
+    if matched.empty:
+        sub = df.loc[styles == style].copy()
+        target = pd.to_numeric(re.sub(r"[^0-9.]", "", weight), errors="coerce")
+        if not sub.empty and pd.notna(target):
+            sub["_w"] = pd.to_numeric(sub["faw/g"], errors="coerce")
+            sub = sub.dropna(subset=["_w"])
+            if not sub.empty:
+                sub["_d"] = (sub["_w"] - target).abs()
+                best = sub.sort_values(["_d", "_w"], ascending=[True, False]).iloc[0]
+                logger.warn(f"  {style} {weight} 无精确数据，按最近克重 "
+                            f"{int(best['_w'])} 取值（thickness={best['thickness']}）")
+                return float(best["thickness"])
+
+    if matched.empty:
+        logger.warn(f"  {style} 克重 {weight} 查询失败，改用 克重×0.001 粗估")
+        return 0.0
+
+    if len(matched) > 1:
+        # 旧脚本在这里会把多行拼成一段文本，`float()` 吃掉 → 0.0。这里保持同样的
+        # 结果：宁可返回 0（WARN 可见），也不要随便挑一行的厚度当真值。
+        logger.warn(f"  {style} {weight} 命中 {len(matched)} 行，无法确定 → 按查询失败处理")
+        return 0.0
+
+    thickness = float(matched.iloc[0]["thickness"])
+    logger.info(f"  {style}厚度: {thickness}")
+    return thickness
+
+
+def _parse_date_value(date_str: str) -> Optional[datetime]:
+    """把客户文件里的日期写法解成 datetime（解不出返回 None）。
+
+    顺序照抄原 string2timestamp.py：带时间 → 纯日期 → 年月 → `May-27`。
+    """
+    text = str(date_str).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y.%m.%d %H:%M:%S",
+                "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    for fmt in ("%Y-%m", "%Y/%m", "%Y.%m"):
+        try:
+            return datetime.strptime(text, fmt).replace(day=1)
+        except ValueError:
+            continue
+    matched = re.match(r"([a-zA-Z]{3})[-/](\d{2,4})", text)
+    if matched:
+        month = _MONTH_ABBR.get(matched.group(1).lower())
+        if month:
+            year = int(matched.group(2))
+            return datetime(year + 2000 if year < 100 else year, month, 1)
+    return None
 
 
 def resolve_cplb(customer_data: CustomerData, profile: CustomerProfile,
@@ -236,15 +360,12 @@ def derive_cpsx(customer_data: CustomerData, profile: CustomerProfile,
 
 def parse_date_to_datestr(date_str: str, logger: Logger) -> str:
     """标准化为 YYYY-MM-DD 字符串（v2: JHRQ / WCRQ 为 string）。"""
-    logger.info(f"  调用: string2timestamp.py {date_str}（取日期部分）")
-    output = run_script("string2timestamp.py", str(date_str))
-    try:
-        ts = int(output)
-        out = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    parsed = _parse_date_value(date_str)
+    if parsed is not None:
+        out = parsed.strftime("%Y-%m-%d")
         logger.info(f"  转换结果: {out}")
         return out
-    except (ValueError, TypeError, OSError, OverflowError) as e:
-        logger.warn(f"  未能换算: {e}")
+    logger.warn(f"  未能解析日期: {date_str!r}，尝试正则回退")
 
     m = re.search(r'(\d{4})[-/](\d{1,2})(?:[-/](\d{1,2}))?', str(date_str))
     if m:
@@ -315,8 +436,8 @@ def check_offer_deadline(customer_data: CustomerData, profile: CustomerProfile,
 
 
 def generate_task_id(logger: Logger) -> str:
-    logger.info("调用: uuid_utils.py")
-    task_id = run_script("uuid_utils.py")
+    """本次任务号（产物目录名 / 日志「任务ID」/ validation.json 的 task_id 同一个）。"""
+    task_id = uuid4().hex
     logger.info(f"生成任务ID: {task_id}")
     return task_id
 
@@ -1857,11 +1978,48 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
     return output_info
 
 
+def run_lookup(kind: str, pg: Optional[str], faw: Optional[str],
+               value: Optional[str]) -> int:
+    """单点查表（`--lookup`）—— 替代 1.0.42 删掉的三个查询脚本。
+
+    - `thickness`：`--pg 书纸 --faw 90` → 打印厚度（表里没有就按最近克重）
+    - `category` ：`--value paperback` → 打印 `CPLB: … , ZLBM: …`
+    - `date`     ：`--value May-27` → 打印 `2027-05-01`
+    """
+    logger = Logger()
+    if kind == "thickness":
+        if not pg or faw is None:
+            print("!! --lookup thickness 需要 --pg <纸张类型> 与 --faw <克重>", file=sys.stderr)
+            return 2
+        thickness = get_page_thickness(pg, faw, logger)
+        print(f"{thickness:g}" if thickness else "0")
+        return 0 if thickness else 1
+
+    if not value:
+        print(f"!! --lookup {kind} 需要 --value", file=sys.stderr)
+        return 2
+
+    if kind == "category":
+        cplb, zlbm = parse_product_categories(value, logger)
+        if not cplb and not zlbm:
+            print(f"未命中：{value!r}（这张表只登记了 paperback 一种写法）")
+            return 1
+        print(f"CPLB: {cplb}, ZLBM: {zlbm}")
+        return 0
+
+    date_str = parse_date_to_datestr(value, logger)
+    print(date_str or "（解析不出）")
+    return 0 if date_str else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description="客户报价请求处理（多客户档案驱动）")
-    parser.add_argument("input_file",
+    parser.add_argument("input_file", nargs="?", default=None,
                         help="输入路径：单文件 = 独一份报价；文件夹 / .zip = 一份报价的"
                              "全部参考文件（里面若有子目录，则子目录各算一份报价）")
+    parser.add_argument("--lookup", choices=["thickness", "category", "date"], default=None,
+                        help="只查表、不处理报价：thickness（配 --pg/--faw）/ category / date"
+                             "（都打印查询结果，退出码 0 = 查到）")
     parser.add_argument("--customer", "-c", default="auto",
                         help="客户档案 id（默认 auto = 按文件内容自动识别；"
                              "可用 ./scripts/customer_profile.py --list 查看）")
@@ -1875,7 +2033,16 @@ def main():
                         help="只输出 59 个 ERP 字段，不追加内部字段（ID / CPMC_ZH）。"
                              "给「ERP 导入端不收未知字段」的情况兜底；默认是追加"
                              "（见 assets/internal_export_fields.yaml）")
+    parser.add_argument("--pg", default=None, help="--lookup thickness：纸张类型，如 书纸")
+    parser.add_argument("--faw", default=None, help="--lookup thickness：克重，裸数字如 90")
+    parser.add_argument("--value", default=None, help="--lookup category / date：要查的值")
     args = parser.parse_args()
+
+    # 单点查表（不读报价文件，直接返回）
+    if args.lookup:
+        return run_lookup(args.lookup, args.pg, args.faw, args.value)
+    if not args.input_file:
+        parser.error("缺少 input_file（若只想查表，用 --lookup thickness/category/date）")
 
     # 基准日期（在做任何日期比较之前设好）
     global _TODAY

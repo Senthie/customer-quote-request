@@ -31,7 +31,7 @@ fields:
   #   * customer-files/processed/<task_id>/          （产物目录）
   #   * logs/quote_request_<YYYYmmdd_HHMMSS>.log     （任务日志开头会打印 ID）
   #   * logs/quote_request_*.log 里的 "任务ID: <id>"
-  # 实现：`source: task_id` → main.py 取 uuid_utils.py 生成的任务 ID。
+  # 实现：`source: task_id` → main.py 用 uuid4().hex 生成的任务 ID。
   - key: ID
     label: 任务ID
     source: task_id

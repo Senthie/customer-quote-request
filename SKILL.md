@@ -14,9 +14,10 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.41（2026-10-20 **scripts/ 瘦身**：删掉 6 个零引用文件
-> （`customer2erp` / `xlsx2csv` / `docx2json` / `txt2json` / `pdf2json` / 空 `_init__.py`）
-> 与 1 个死函数；`extract_fields.py <文件> --json` 是唯一的抽取调试入口）
+> **版本：** 1.0.42（2026-10-20 **查表去子进程**：厚度表 / 类别表 / 日期换算 / 任务号
+> 全部内联进 `main.py`，删掉那 4 个脚本 —— 一次运行少起 4~8 个 `uv run` 子进程，
+> 也不再依赖 PATH 里有 uv；单点查询改用 `main.py --lookup thickness/category/date`）
+> —— 前序 1.0.41：`scripts/` 瘦身（删 6 个零引用文件 + 1 个死函数）
 > —— 前序 1.0.40：**`erp_view` → `CQR_Web` 独立项目**：展示层抽出来自带
 > pyproject/README/tests，技能侧只留转发壳与边界测试；下一步加「上传」
 > —— 前序 1.0.39：口径复核：`CD`=长 / `KD`=宽、`CPLB` 按类别树第 5 问判冲形状、
@@ -655,7 +656,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 
 | ERP 字段 | 来源 |
 |----------|------|
-| `CPLB` | 档案 `cplb.map`（客户关键词正则 → 产品类别树节点编号）→ 命中即用；未命中退回 `product_categories.py` 查表（旧路径）→ 最后用 `product_category.fallback`（默认 `32.00;其他`）。结果一律校验是否在 `assets/cplb_tree.yaml` 里（见 4.7） |
+| `CPLB` | 档案 `cplb.map`（客户关键词正则 → 产品类别树节点编号）→ 命中即用；未命中退回类别表查表（`--lookup category`，旧路径）→ 最后用 `product_category.fallback`（默认 `32.00;其他`）。结果一律校验是否在 `assets/cplb_tree.yaml` 里（见 4.7） |
 | `CPMC` | 档案 `cpmc.template` 拼装（**英文表达**），占位符 `{salesperson} {cn_name} {cplb} {cplb_name} {product_name} {series_name} {fsc} {our_ref}`；默认模板 `{cplb}-{series_name}`（igl 口径）。NGV 用 `{salesperson}/Aldi {product_name}({fsc})`；**中文表达**由 `cpmc.zh_template` 渲染后落内部字段 `CPMC_ZH`（1.0.22），中文品名要人工拟 → 脚本给占位符 `【中文品名待定】` 并标 `cpmc.needs_agent: true`，**必须 agent 补全** |
 | `TZS` | `versions` + 档案 `versions.title_pattern`（如 `12 titles` → 12）；没有则退回 `number_of_titles` |
 | `YYS` | 档案 `versions.language_pattern` 从 `versions` 取（如 `5 languages` → 5）。三种口径必须分清（业务 2026-09-24）：`empty_when_single: true` 时**语言数 1 留空**；提取不到语言数时按 `versions.when_missing` **落 0**（NGV，0 = 待业务核对 —— 邮件可能后补而附件未更新）；两个开关都没声明才保留档案固定值 + WARN |
@@ -791,8 +792,8 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 
 - **日期**：`JHRQ` / `WCRQ` 都是 **string `YYYY-MM-DD`**。支持
   `2027-05-01` / `2027/05/01` / `2027-05` / `May-27`（`May-27` → `2027-05-01`，已过期则下一年）。
-  实现：`main.py: parse_date_to_datestr()` → 先调 `string2timestamp.py` 取毫秒再换算，失败回退正则。
-- **纸张厚度**：`select_page_thickness.py --pg <纸张类型> --faw <裸数字>`。
+  实现：`main.py: parse_date_to_datestr()` → 先按 `_parse_date_value()` 的格式表解析（带时间 / 纯日期 / 年月 / `May-27`），失败回退正则。
+- **纸张厚度**：`main.py --lookup thickness --pg <纸张类型> --faw <裸数字>`。
   ⚠️ **克重不能带单位**（表里 `faw/g` 列存 `"250"` 这样的裸数字，传 `250g` 查不到）；
   表里没有的克重按**同类型最近克重**取值（并列取较大者，宁厚勿薄），提示写 stderr。
 - **纸张类型**由档案 `rules.materials` 映射（`woodfree` → 书纸、`C1S artboard` → 光粉纸…），
@@ -940,7 +941,7 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 > `编号;名称`，右侧常显常用速选与决策路径。业务选类别时直接开这个页面。
 
 **脚本侧怎么定类别**：`main.py resolve_cplb()` 按 ①档案 `cplb.map`（正则关键词 → 节点编号）
-→ ②旧查表 `product_categories.py`（`customer_product_categories` 列，历史路径，只有 `paperback`
+→ ②旧查表（`main.py --lookup category`，`customer_product_categories` 列，历史路径，只有 `paperback`
 一行有值）→ ③`product_category.fallback`。**任何一步的编号都必须存在于树上**，否则 WARN 并降级 ——
 编号写错等于把单子导成别的类别。新增客户时在档案里写 `cplb.map` 就够，不用改代码。
 
@@ -1457,12 +1458,9 @@ customer-quote-request/
 │   ├── erp_viewer.py              # ★ 只是转发壳 → CQR_Web/app.py（1.0.26 起，逻辑不在 scripts/ 了）
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
-│   ├── calibrate_customer.py      # ★ 新客户校准器
-│   ├── product_categories.py      # 产品类别查表（旧路径兜底，被 cplb.map 取代中）
-│   ├── select_page_thickness.py   # 纸张厚度查询
-│   ├── string2timestamp.py        # 日期 → 毫秒
-│   └── uuid_utils.py              # UUID4（main.py 生成任务号用）
-├── tests/                         # 332 项测试（uv run pytest）
+│   └── calibrate_customer.py      # ★ 新客户校准器
+│       # （查表能力都在 main.py 里：`--lookup thickness/category/date`，不再单独成脚本）
+├── tests/                         # 435 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
 │   ├── test_extract_fields.py     # 抽取引擎
@@ -1472,6 +1470,7 @@ customer-quote-request/
 │   ├── test_ingest_email.py       # 邮件入口
 │   ├── test_cpms_lint.py          # ★ CPMS 规范（样例自证 + 每条规则码 + --fix 不越界）
 │   ├── test_cpms_doc_samples.py   # ★ CPMS_规范与样例集.md 里的 6 份样例必须零违规（文档即测试）
+│   ├── test_lookup_tables.py      # ★ 三张查询表内联（厚度表 72 行逐行 / 类别表 / 日期写法）
 │   ├── test_viewer.py             # ★ 产物查看器（扫描 / 路径安全 / 分组覆盖 / HTTP 端点）
 │   └── test_pipeline.py           # 端到端回归（真实样本 + 逐字段值断言）
 ├── customer-files/                # pending / processed / failed（产物，不进仓库）
@@ -1542,9 +1541,9 @@ uv run ./scripts/cpms_lint.py --vocab               # 骨架 + 闭集词表
 uv run ./scripts/cplb_tree.py --node 23.01          # 产品类别树：单个节点
 uv run ./scripts/cplb_tree.py --search 揭页          # 按中文/英文/行话搜类别
 uv run ./scripts/cplb_tree.py --suggest "hardcover board book"
-uv run ./scripts/product_categories.py --select "Paperback"   # 旧查表（历史路径）
-uv run ./scripts/select_page_thickness.py --pg 书纸 --faw 90      # 0.11（表里无 90g，就近取 100g）
-uv run ./scripts/string2timestamp.py May-27                        # 1809129600000
+uv run ./scripts/main.py --lookup thickness --pg 书纸 --faw 90   # 0.11（表里无 90g，就近取 100g）
+uv run ./scripts/main.py --lookup category --value Paperback      # CPLB: 无线胶装书, ZLBM: 23.01
+uv run ./scripts/main.py --lookup date --value May-27             # 2027-05-01
 
 # 调试抽取（任意 xlsx/csv/txt/pdf/docx —— 取代已删的 pdf2json/docx2json/txt2json）
 uv run ./scripts/extract_fields.py <客户文件> -c auto --json
@@ -1637,6 +1636,10 @@ uv run pytest tests/test_pipeline.py -v
   `docx2json` / `txt2json` 三个薄封装 —— 它们已被 `extract_fields.py <文件> --json` 完全覆盖）。
   历史上那三个文件各有一套「行里有 `:` 就当键值对」的弱解析，同一个 PDF 两个入口两种结果
   —— 不要再恢复那种写法，也不要再为某一种后缀单独加 CLI 前端。
+- **查表不要再 spawn 子进程**（1.0.42）：厚度表 / 类别表 / 日期换算都只有几十行数据，
+  以前各开一个 `uv run` 去查（一次运行起 4~8 个进程、~0.4s/个，还依赖 PATH 里有 uv），
+  现在都是 `main.py` 里的普通函数 + 进程内缓存。要单点查就 `--lookup`，
+  别再为一张表单独写一个脚本 —— 两份实现迟早漂。
 
 **数据**
 
@@ -1737,6 +1740,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.42** | **2026-10-20** | **查表去子进程**：`select_page_thickness.py` / `product_categories.py` / `string2timestamp.py` / `uuid_utils.py` 内联进 `main.py`（`get_page_thickness` / `parse_product_categories` / `_parse_date_value` / `uuid4`）；新增 `--lookup thickness/category/date` 单点查询；`tests/test_lookup_tables.py` 对着真实表逐行钉住等价（厚度 72 行 / 类别表 / 9 种日期写法），6 份真实产物重构前后**逐字段 0 差异** |
 | **1.0.41** | **2026-10-20** | **`scripts/` 分类瘦身**：删掉 6 个零引用文件（`customer2erp.py` / `xlsx2csv.py` / `docx2json.py` / `txt2json.py` / `pdf2json.py` / 0 字节的 `_init__.py`）与 1 个零引用函数（`internal_fields.is_internal_field`）；抽取调试只剩 `extract_fields.py <文件> --json` 一个入口 |
 
 ### 1.0.39 详细变更 —— 拿业务真单复核（一单一账户，四类错误）
@@ -2350,7 +2354,7 @@ TODO 里的 P0 项措辞改成「待真实 ERP 信息」。（NGV 已迁移，�
 
 | 键 | 值 | 用途 |
 |----|-----|------|
-| `ID` | 本次任务号（`uuid_utils.py` 生成） | 业务原话的「标注我们的当前执行的任务」——与**产物目录名**、**日志里的「任务ID」**、`validation.json` 的 `task_id` 是同一个 ID，产物 ↔ 日志一步对回去 |
+| `ID` | 本次任务号（`main.py` 内 `uuid4().hex`） | 业务原话的「标注我们的当前执行的任务」——与**产物目录名**、**日志里的「任务ID」**、`validation.json` 的 `task_id` 是同一个 ID，产物 ↔ 日志一步对回去 |
 | `CPMC_ZH` | 产品名称的中文表达 | `CPMC` 只放英文，中文表达归这里 |
 
 **② `CPMC` 中英分离**（档案 `rules.cpmc.template` + `rules.cpmc.zh_template`）
