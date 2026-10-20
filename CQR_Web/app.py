@@ -16,11 +16,20 @@
 
 接口（页面 templates/index.html 消费）：
     GET /                    → 页面本体
+    POST /api/uploads        → 上传客户文件到 customer-files/pending/（multipart）
+    GET /api/pending         → 还在等抽取的东西（排队条用）
     GET /api/exports         → 扫描结果（每份产物的摘要，最新在前）
     GET /api/export?path=…   → 某一份产物的完整 JSON（`path` 是相对扫描根的路径）
     GET /api/schema          → ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组
 
-安全：所有 `path` 参数都在 data.resolve_export() 里做 resolve 后前缀校验，出不了扫描根。
+分工（1.0.43，业务 2026-10-20）：
+    本服务**只上传 + 只展示**，不抽取、不起进程。抽取由 Hermes 定时任务
+    （`scripts/scan_pending.py`，每 5 分钟）负责，所以页面刷新即可看到新产物。
+
+安全：所有 `path` 参数都在 data.resolve_export() 里做 resolve 后前缀校验，出不了扫描根；
+      上传的文件名在 upload.safe_filename() 里净化（挡路径穿越），后缀走白名单，
+      请求体上限 MAX_CONTENT_LENGTH。**不做登录认证**（业务明确：局域网内自己人用，
+      不要求验证）——所以 `--lan` 暴露到局域网就等于「同网段的人都能上传」。
 """
 from __future__ import annotations
 
@@ -34,7 +43,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, current_app, jsonify, render_template, request
 from flask.json.provider import DefaultJSONProvider
 from werkzeug.exceptions import HTTPException, NotFound
 
@@ -46,6 +55,13 @@ from .data import (
     read_config_version,
     resolve_export,
     scan_exports,
+)
+from .upload import (
+    DEFAULT_PENDING_DIR,
+    MAX_UPLOAD_BYTES,
+    UploadError,
+    save_uploads,
+    scan_pending,
 )
 
 APP_NAME = "ERP 报价需求单导出浏览器"
@@ -66,7 +82,8 @@ class PrettyJSONProvider(DefaultJSONProvider):
     compact = False
 
 
-def create_app(processed_dir: Optional[Path | str] = None) -> Flask:
+def create_app(processed_dir: Optional[Path | str] = None,
+               pending_dir: Optional[Path | str] = None) -> Flask:
     """应用工厂。
 
     `processed_dir` 显式传入（测试、`--dir`）→ 存进 `app.config`，路由从那里读。
@@ -74,10 +91,13 @@ def create_app(processed_dir: Optional[Path | str] = None) -> Flask:
     而且 `--dir` 与测试会互相污染。
     """
     root = Path(processed_dir).expanduser().resolve() if processed_dir else DEFAULT_PROCESSED_DIR
+    pending = Path(pending_dir).expanduser().resolve() if pending_dir else DEFAULT_PENDING_DIR
 
     app = Flask(__name__)          # template_folder 默认 = CQR_Web/templates
     app.config["PROCESSED_DIR"] = root
+    app.config["PENDING_DIR"] = pending
     app.config["APP_NAME"] = APP_NAME
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     # 中文别转义（页面直接显示）、键序保持我们构造的顺序、缩进 2 格方便 `curl` 直读。
     # Flask 官方推荐的改法就是子类化 provider（实例属性 `indent` 在 Flask 2.3 起没有了）
@@ -105,6 +125,34 @@ def create_app(processed_dir: Optional[Path | str] = None) -> Flask:
         items = scan_exports(root_now)
         return jsonify(root=str(root_now), count=len(items), exports=items)
 
+    # ── 上传（本服务唯一的写入口）────────────────────────────────────────
+    @app.post("/api/uploads")
+    def api_uploads():
+        """收客户文件 → 落到 pending/，等定时任务来抽。
+
+        * 表单字段 `files`（可多个）、`group`=one|each
+        * **一次请求 = 一个上传动作**；`group=one` 时这几个文件被放进同一个
+          批次目录（= 一份报价的多份参考文件），`each` 则平铺（各算一份）
+        """
+        group = (request.form.get("group") or "one").strip().lower()
+        uploads = [f for f in request.files.getlist("files") if f and f.filename]
+        if not uploads:
+            return jsonify(error="没收到文件（表单字段名应为 files）"), 400
+
+        items: list[tuple[str, bytes]] = [(str(f.filename or ""), bytes(f.read()))
+                                          for f in uploads]
+        try:
+            result = save_uploads(items, group=group, pending_dir=current_pending())
+        except UploadError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(result), 201
+
+    @app.get("/api/pending")
+    def api_pending():
+        pending_now = current_pending()
+        items = scan_pending(pending_now)
+        return jsonify(root=str(pending_now), count=len(items), items=items)
+
     @app.get("/api/export")
     def api_export():
         relpath = request.args.get("path", "")
@@ -131,6 +179,13 @@ def create_app(processed_dir: Optional[Path | str] = None) -> Flask:
     def api_schema():
         return jsonify(build_schema_payload())
 
+    # 上传超限：werkzeug 抛 413，默认页面是英文 HTML —— 换成一句人话
+    @app.errorhandler(413)
+    def _too_large(exc):  # noqa: ARG001
+        limit_mb = (current_app.config.get("MAX_CONTENT_LENGTH") or MAX_UPLOAD_BYTES) / 1024 / 1024
+        return jsonify(error=f"上传太大了：单次请求上限 {limit_mb:.0f} MB。"
+                             f"大包请先压缩成 .zip，或分几次传。"), 413
+
     # 未知路径也回 JSON（页面是按 JSON 读错的）；文案保持中文，跟旧版一致
     @app.errorhandler(HTTPException)
     def _http_error(exc: HTTPException):
@@ -143,8 +198,34 @@ def create_app(processed_dir: Optional[Path | str] = None) -> Flask:
     def current_root() -> Path:
         return Path(app.config["PROCESSED_DIR"])
 
-    app.current_root = current_root   # type: ignore[attr-defined]  # 给测试/CLI 用
+    def current_pending() -> Path:
+        return Path(app.config["PENDING_DIR"])
+
+    app.current_root = current_root        # type: ignore[attr-defined]  # 给测试/CLI 用
+    app.current_pending = current_pending  # type: ignore[attr-defined]
     return app
+
+
+def _lan_addresses() -> list[str]:
+    """本机的局域网 IPv4（`--lan` 时打印出来，省得去查 ipconfig/ip a）。"""
+    import socket
+
+    found: list[str] = []
+    try:
+        # 连一个不可达地址只为让内核选出「出口网卡」，不会真发包
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))
+            found.append(sock.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = str(info[4][0])
+            if ip not in found and not ip.startswith("127."):
+                found.append(ip)
+    except OSError:
+        pass
+    return found
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -167,31 +248,47 @@ def _port_in_use(host: str, port: int) -> bool:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=f"{APP_NAME}（Flask 版）")
-    parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+    parser.add_argument("--host", default=None,
+                        help="监听地址（默认 127.0.0.1；--lan 时是 0.0.0.0）")
+    parser.add_argument("--lan", action="store_true",
+                        help="对局域网开放（监听 0.0.0.0 并打印访问地址）。"
+                             "⚠️ 本服务没有登录认证：同网段的人都能上传文件、看产物")
     parser.add_argument("--port", type=int, default=8765, help="端口（默认 8765）")
     parser.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--dir", help="改扫描的根目录（默认 customer-files/processed）")
+    parser.add_argument("--pending-dir", help="改上传落盘目录（默认 customer-files/pending）")
     args = parser.parse_args(argv)
 
+    host = args.host or ("0.0.0.0" if args.lan else "127.0.0.1")
     root = Path(args.dir).expanduser().resolve() if args.dir else DEFAULT_PROCESSED_DIR
+    pending = (Path(args.pending_dir).expanduser().resolve() if args.pending_dir
+               else DEFAULT_PENDING_DIR)
     if not root.exists():
         print(f"⚠️  扫描目录不存在: {root}", file=sys.stderr)
+    pending.mkdir(parents=True, exist_ok=True)
 
     # 端口先探一次：给中文提示 + 退出码 1（别让 werkzeug 的英文报错先出去）
-    if _port_in_use(args.host, args.port):
-        print(f"❌ 起不了服务（{args.host}:{args.port}）: 端口已被占用", file=sys.stderr)
+    if _port_in_use(host, args.port):
+        print(f"❌ 起不了服务（{host}:{args.port}）: 端口已被占用", file=sys.stderr)
         print("   换个端口试试：--port 8766", file=sys.stderr)
         return 1
 
-    app = create_app(root)
+    app = create_app(root, pending)
 
     # werkzeug 的每请求日志降噪（本应用自己只打 API 行）
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-    url = f"http://{args.host}:{args.port}/"
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{args.port}/"
     print(f"ERP 导出浏览器: {url}")
     print(f"  扫描目录: {root}")
+    print(f"  上传落盘: {pending}")
     print(f"  找到产物: {len(scan_exports(root))} 份")
+    print(f"  等待抽取: {len(scan_pending(pending))} 份"
+          f"（`scripts/scan_pending.py` 每 5 分钟扫一次）")
+    if args.lan:
+        for ip in _lan_addresses():
+            print(f"  局域网访问: http://{ip}:{args.port}/")
+        print("  ⚠️  无登录认证：同网段能打开这个地址的人都能上传 / 看产物")
     cfg = read_config_version()
     print(f"  当前配置版本: {cfg if cfg is not None else '(读不到)'}")
     print("  Ctrl-C 退出")
@@ -200,10 +297,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
 
     try:
-        app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
+        app.run(host=host, port=args.port, debug=False, use_reloader=False, threaded=True)
     except OSError as exc:
         if exc.errno in (errno.EADDRINUSE, errno.EADDRNOTAVAIL):
-            print(f"❌ 起不了服务（{args.host}:{args.port}）: {exc}", file=sys.stderr)
+            print(f"❌ 起不了服务（{host}:{args.port}）: {exc}", file=sys.stderr)
             print("   换个端口试试：--port 8766", file=sys.stderr)
         else:
             print(f"❌ 起不了服务: {exc}", file=sys.stderr)

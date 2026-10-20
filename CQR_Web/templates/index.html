@@ -22,8 +22,14 @@
         GET /api/schema   字段字典（标签/类型/合法取值）+ 内部字段 + 分组
         GET /api/exports  自动扫描扫描根（默认 customer-files/processed）下的 ERP_*.json
         GET /api/export?path=…  某一份产物的完整 JSON + 权威取值校验 + 交付闸门
+        GET /api/pending  还在等抽取的文件（排队条）
+        POST /api/uploads 上传客户文件 → customer-files/pending/（本页唯一的写操作）
       起服务：uv run python -m CQR_Web（或 uv run ./scripts/erp_viewer.py，等价）。
       直接用 file:// 打开也能用，只是没有自动扫描（浏览器不许列目录）→ 走「导入 JSON」。
+
+      1.0.43 分工：**页面只上传 + 只展示**。抽取由 Hermes 定时任务
+      （`scripts/scan_pending.py`，每 5 分钟）扫 pending 时执行 —— 所以上传后
+      最多等 5 分钟，产物会自动出现在列表里；页面每 10 秒刷新一次。
     -->
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -91,6 +97,47 @@
         }
         .status { font-size: .8rem; color: var(--ink-3); }
         .status.err { color: var(--bad); }
+
+        /* ── 上传区（1.0.43）──────────────────────────────────── */
+        .upload {
+            margin-top: 12px; padding: 12px 14px;
+            border: 1px solid var(--line-2); border-radius: 14px; background: #fbfcfe;
+        }
+        .upload-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+        .dropzone {
+            flex: 1 1 300px; min-height: 64px; padding: 10px 12px;
+            border: 2px dashed #b6c6db; border-radius: 12px; background: #fff;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 3px; cursor: pointer; transition: .12s; text-align: center;
+        }
+        .dropzone:hover { border-color: #8fb3dd; background: #f8fbff; }
+        .dropzone.hot { border-color: var(--brand-2); background: #eef5ff; }
+        .dropzone .d1 { font-size: .9rem; font-weight: 550; color: var(--ink-2); }
+        .dropzone .d2 { font-size: .77rem; color: var(--ink-3); }
+        .upload-side { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+        .upload-opts { display: flex; gap: 12px; flex-wrap: wrap; font-size: .82rem; color: var(--ink-2); }
+        .upload-opts label {
+            display: inline-flex; gap: 5px; align-items: center; cursor: pointer;
+            padding: 3px 9px; border-radius: 20px; border: 1px solid transparent;
+        }
+        .upload-opts label:hover { background: #eef5ff; border-color: #cfe0f5; }
+        .upload-opts input[type=radio] { accent-color: var(--brand-2); }
+        .upload-msg { margin-top: 9px; font-size: .8rem; line-height: 1.45; }
+        .upload-msg.ok { color: var(--ok); }
+        .upload-msg.err { color: var(--bad); }
+        .upload-msg.busy { color: var(--brand-2); }
+
+        /* ── 等待抽取条 ───────────────────────────────────────── */
+        .pending-strip {
+            margin-top: 10px; padding: 8px 12px; border-radius: 12px;
+            display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+            background: var(--warn-bg); border: 1px solid #f0dcae; color: var(--warn);
+            font-size: .82rem;
+        }
+        .pending-strip .pname {
+            font-family: var(--mono); font-size: .77rem; color: var(--ink-2);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 62ch;
+        }
 
         .banner {
             margin-top: 12px; padding: 10px 14px; border-radius: 12px;
@@ -272,8 +319,8 @@
                 border-bottom: 2px solid var(--ink);
             }
             .layout { display: block; max-width: none; }
-            /* 侧栏 / 工具栏 / 原始 JSON / 合法取值清单 —— 都是「查询用」的，不进 PDF */
-            aside.list, .toolbar, .no-print, pre.raw, details.legal { display: none !important; }
+            /* 侧栏 / 工具栏 / 上传区 / 排队条 / 原始 JSON / 合法取值清单 —— 都是「操作/查询用」的，不进 PDF */
+            aside.list, .toolbar, .upload, .pending-strip, .no-print, pre.raw, details.legal { display: none !important; }
             button { display: none !important; }        /* 展开/收起这类控件也别进 PDF */
             main { gap: 8px; }
             .panel { box-shadow: none; border-radius: 0; }
@@ -288,6 +335,9 @@
 <body>
 <div id="page"></div>
 <input type="file" id="fileInput" accept=".json,application/json">
+<input type="file" id="uploadInput" multiple
+       accept=".xlsx,.xls,.csv,.pdf,.docx,.txt,.zip">
+<input type="file" id="dirInput" webkitdirectory multiple>
 
 <script>
 "use strict";
@@ -307,6 +357,13 @@ const state = {
     filter: "",
     showRaw: false,
     openPre: {},           // 长文本展开状态 { key: bool }
+
+    // 1.0.43：上传 + 排队 + 自动刷新
+    pending: [],           // /api/pending 的 items（还在等抽取的）
+    pendingRoot: "",
+    upload: { group: "one", busy: false, msg: "", ok: null },
+    fresh: new Set(),      // 本轮刷新里「新出现」的产物 relpath（列表打「新」）
+    lastScanAt: "",        // 上次自动刷新的时刻
 };
 
 const BASE_TITLE = "ERP · 报价需求单导出查看器";
@@ -369,20 +426,36 @@ function fmtNum(n) {
 /* ═══════════════════════════════════════════════════════════════════════
    数据加载
    ═══════════════════════════════════════════════════════════════════════ */
+async function fetchAll() {
+    /* 一次拿「产物 + 排队」两份清单。pending 拿不到不算致命（老服务端没有这个接口）。 */
+    const [listRes, pendRes] = await Promise.all([
+        fetch("api/exports", { cache: "no-store" }),
+        fetch("api/pending", { cache: "no-store" }),
+    ]);
+    if (!listRes.ok) throw new Error("exports HTTP " + listRes.status);
+    const list = await listRes.json();
+    let pend = { root: "", items: [] };
+    if (pendRes.ok) pend = await pendRes.json();
+    return { list, pend };
+}
+
+function applyList(list, pend) {
+    state.exports = list.exports || [];
+    state.scanRoot = list.root || "";
+    state.pending = pend.items || [];
+    state.pendingRoot = pend.root || "";
+    state.scanOk = true;
+    state.scanError = "";
+    state.lastScanAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+}
+
 async function loadFromServer() {
     try {
-        const [schemaRes, listRes] = await Promise.all([
-            fetch("api/schema", { cache: "no-store" }),
-            fetch("api/exports", { cache: "no-store" }),
-        ]);
+        const { list, pend } = await fetchAll();
+        const [schemaRes] = await Promise.all([fetch("api/schema", { cache: "no-store" })]);
         if (!schemaRes.ok) throw new Error("schema HTTP " + schemaRes.status);
-        if (!listRes.ok) throw new Error("exports HTTP " + listRes.status);
         state.schema = await schemaRes.json();
-        const list = await listRes.json();
-        state.exports = list.exports || [];
-        state.scanRoot = list.root || "";
-        state.scanOk = true;
-        state.scanError = "";
+        applyList(list, pend);
 
         // 支持 ?path=… 深链接；否则自动选最新的一份
         const want = new URLSearchParams(location.search).get("path");
@@ -396,7 +469,48 @@ async function loadFromServer() {
         state.scanOk = false;
         state.scanError = (err && err.message) || String(err);
         state.exports = [];
+        state.pending = [];
         render();
+    }
+}
+
+/**
+ * 10 秒一次的静默刷新（业务 2026-10-20：「设置 10s 异步更新一次数据」）。
+ *
+ * 规矩：
+ *   · 出现**新产物** → 直接切过去（这就是「上传 → 抽取 → 立刻看产物」的那一步）
+ *   · 其它情况**不动当前选中**，避免正在看的东西被刷新冲掉
+ *   · 列表与排队都没变 → 连 DOM 都不重建（不打断搜索框、不闪）
+ *   · 刷新失败保持旧画面（局域网抖一下不该白屏）
+ */
+async function refreshQuietly() {
+    if (state.upload.busy) return;
+    try {
+        const { list, pend } = await fetchAll();
+        const known = new Set(state.exports.map((e) => e.relpath));
+        const pendingBefore = state.pending.length;
+        const sigBefore = state.exports.map((e) => e.relpath + "|" + e.mtime).join(",");
+
+        applyList(list, pend);
+
+        const fresh = state.exports.filter((e) => !known.has(e.relpath) && !e.superseded);
+        for (const e of fresh) state.fresh.add(e.relpath);
+
+        if (fresh.length) {
+            await selectExport(fresh[0]);      // 新产物 → 直接看它
+            return;
+        }
+        // 正在看的那份被挪走/删了 → 退到最新一份
+        const cur = state.currentMeta;
+        if (cur && !cur.manual && !state.exports.some((e) => e.relpath === cur.relpath)) {
+            const fallback = state.exports.find((e) => !e.superseded) || state.exports[0] || null;
+            if (fallback) { await selectExport(fallback); return; }
+        }
+        const sigAfter = state.exports.map((e) => e.relpath + "|" + e.mtime).join(",");
+        if (sigAfter === sigBefore && state.pending.length === pendingBefore) return;
+        render();
+    } catch (_) {
+        /* 轮询失败不打扰：下一次 10 秒再来 */
     }
 }
 
@@ -502,6 +616,135 @@ function issueMap() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   上传 + 排队（1.0.43）
+   ═══════════════════════════════════════════════════════════════════════ */
+/**
+ * 上传一个或多个客户文件。
+ *
+ * `group` 的两种口径（跟 `main.py` 的输入单元语义一一对应，别自己造规则）：
+ *   one  → 这几个文件是**同一份报价**的参考文件（落 pending/<批次>/ 一个目录）
+ *   each → 每个文件**各算一份报价**（平铺在 pending/ 根下）
+ */
+async function doUpload(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+
+    state.upload.busy = true;
+    state.upload.ok = null;
+    state.upload.msg = "上传中… " + files.length + " 个文件";
+    render();
+
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name);
+    fd.append("group", state.upload.group);
+
+    try {
+        const res = await fetch("api/uploads", { method: "POST", body: fd });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+
+        const saved = body.saved || [];
+        const rejected = body.rejected || [];
+        let msg = "已上传 " + saved.length + " 个文件";
+        msg += body.batch ? "（同一份报价 → 批次 " + body.batch + "/）" : "（各算一份 → pending/）";
+        if (rejected.length) {
+            msg += "；被拒 " + rejected.length + " 个：" +
+                rejected.map((r) => r.name + "（" + r.reason + "）").join("；");
+        }
+        msg += "。定时任务每 5 分钟扫一次，抽出后这里会自动出现（页面每 10 秒刷新）。";
+        state.upload.ok = !rejected.length || saved.length > 0;
+        state.upload.msg = msg;
+    } catch (err) {
+        state.upload.ok = false;
+        state.upload.msg = "上传失败：" + ((err && err.message) || err);
+    } finally {
+        state.upload.busy = false;
+        try {
+            const p = await (await fetch("api/pending", { cache: "no-store" })).json();
+            state.pending = p.items || [];
+            state.pendingRoot = p.root || "";
+        } catch (_) { /* 排队条刷不到不影响上传结果 */ }
+        render();
+    }
+}
+
+function renderUpload() {
+    const up = state.upload;
+
+    /* ⚠️ 拖拽高亮用 classList 直接改，**不**走 render()：
+       重建被拖拽的那个节点会让 dragleave/drop 丢事件（试过，会闪）。 */
+    const zone = el("div", {
+        class: "dropzone",
+        title: "也可以直接把文件拖进来；文件夹请用右侧「选择文件夹」",
+        onclick: () => document.getElementById("uploadInput").click(),
+        ondragover: (e) => { e.preventDefault(); zone.classList.add("hot"); },
+        ondragleave: () => zone.classList.remove("hot"),
+        ondrop: (e) => {
+            e.preventDefault();
+            zone.classList.remove("hot");
+            doUpload(e.dataTransfer.files);
+        },
+    },
+        el("div", { class: "d1", text: "⬆️ 拖客户报价文件到这里，或点击选择" }),
+        el("div", { class: "d2", text: "xlsx / xls / csv / pdf / docx / txt / zip · 单次 ≤ 64 MB" }),
+    );
+
+    const radio = (value, label, hint) => el("label", { title: hint },
+        el("input", {
+            type: "radio", name: "upload-group", value: value,
+            checked: up.group === value,
+            onchange: () => { up.group = value; render(); },
+        }),
+        label);
+
+    const side = el("div", { class: "upload-side" },
+        el("div", { class: "upload-opts" },
+            radio("one", "这几份是同一份报价",
+                  "多个文件（Excel + PDF + 图片说明…）合成一份 ERP JSON"),
+            radio("each", "每份各算一份报价",
+                  "文件夹里躺着两个独立单时选这个：每个文件各出一份 ERP JSON"),
+        ),
+        el("div", { class: "upload-opts" },
+            el("button", {
+                type: "button",
+                disabled: up.busy,
+                onclick: () => document.getElementById("dirInput").click(),
+                title: "选一个文件夹上传：里面的文件会被当成同一份报价的参考文件",
+            }, "📁 选择文件夹"),
+            el("span", { class: "status", text: "抽取由定时任务执行（每 5 分钟）" }),
+        ),
+    );
+
+    const card = el("div", { class: "upload" },
+        el("div", { class: "upload-row" }, zone, side));
+
+    if (up.msg) {
+        const cls = up.busy ? "busy" : (up.ok ? "ok" : "err");
+        card.append(el("div", { class: "upload-msg " + cls, text: up.msg }));
+    }
+    return card;
+}
+
+/** 排队条：pending 里还有东西在等抽取时出现（省得用户以为上传没生效） */
+function renderPendingStrip() {
+    const items = state.pending || [];
+    if (!items.length) return null;
+
+    const oldest = items.reduce((a, b) => (a.age_seconds > b.age_seconds ? a : b));
+    const mins = Math.floor(oldest.age_seconds / 60);
+    const age = mins >= 1 ? (mins + " 分钟") : (oldest.age_seconds + " 秒");
+    const names = items.slice(0, 4).map((it) => it.name).join("、");
+
+    return el("div", { class: "pending-strip" },
+        el("b", { text: "⏳ 等待抽取 " + items.length + " 项" }),
+        el("span", { text: "最久等了 " + age + "（定时任务每 5 分钟扫一次）" }),
+        el("div", { class: "spacer" }),
+        el("span", { class: "pname", text: names + (items.length > 4 ? " …" : ""),
+                     title: items.map((it) => it.name).join("\n") }),
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    渲染：头部
    ═══════════════════════════════════════════════════════════════════════ */
 function renderHeader() {
@@ -520,7 +763,8 @@ function renderHeader() {
 
     const status = el("span", { class: "status" + (state.scanOk ? "" : " err") });
     if (state.scanOk) {
-        status.textContent = "已扫描 " + state.exports.length + " 份产物";
+        status.textContent = "已扫描 " + state.exports.length + " 份产物"
+            + (state.lastScanAt ? " · 上次刷新 " + state.lastScanAt + "（每 10 秒自动）" : "");
     } else {
         status.textContent = "未连上服务端（" + state.scanError + "）";
     }
@@ -558,6 +802,13 @@ function renderHeader() {
             toolbar,
         ),
     );
+
+    // 上传 + 排队（服务端可达时才给上传入口：连不上就别假装能传）
+    if (state.scanOk) {
+        head.append(renderUpload());
+        const strip = renderPendingStrip();
+        if (strip) head.append(strip);
+    }
 
     if (!state.scanOk) {
         head.append(el("div", { class: "banner warn" },
@@ -612,7 +863,8 @@ function renderList() {
 
     const search = el("div", { style: "padding:8px 10px 0" },
         el("input", {
-            type: "search", placeholder: "按 task_id / CPMC / 单号 / 版本 过滤…",
+            type: "search", id: "filterInput",
+            placeholder: "按 task_id / CPMC / 单号 / 版本 过滤…",
             value: state.filter, style: "width:100%",
             oninput: (e) => { state.filter = e.target.value; renderListOnly(); },
         }));
@@ -625,6 +877,10 @@ function renderList() {
     for (const it of items) {
         const active = state.currentMeta && state.currentMeta.relpath === it.relpath;
         const badges = el("div", { class: "l3" });
+        if (state.fresh.has(it.relpath)) {
+            badges.append(el("span", { class: "badge ok", text: "新",
+                                       title: "刚抽出来的产物（10 秒刷新时发现的新文件）" }));
+        }
         if (it.broken) {
             badges.append(el("span", { class: "badge bad", text: "文件损坏" }));
         } else {
@@ -659,7 +915,7 @@ function renderList() {
         }
         box.append(el("button", {
             class: "item" + (active ? " active" : ""),
-            onclick: () => selectExport(it),
+            onclick: () => { state.fresh.delete(it.relpath); selectExport(it); },
         },
             el("div", { class: "l1" },
                 el("span", { class: "when", text: it.mtime_iso || "" }),
@@ -960,6 +1216,12 @@ function syncTitle() {
 
 function render() {
     syncTitle();
+    /* 每 10 秒自动刷新会重建整页 —— 正在搜索时会把焦点踢掉。
+       记下焦点元素和光标位置，重建后还回去（否则打字打一半就断了）。 */
+    const active = document.activeElement;
+    const focusId = active && active.id ? active.id : null;
+    const caret = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
+
     const page = document.getElementById("page");
     const main = el("main");
     if (state.currentMeta) {
@@ -971,6 +1233,16 @@ function render() {
         renderHeader(),
         el("div", { class: "layout" }, renderList(), main),
     );
+
+    if (focusId) {
+        const again = document.getElementById(focusId);
+        if (again) {
+            again.focus();
+            if (caret !== null && typeof again.setSelectionRange === "function") {
+                try { again.setSelectionRange(caret, caret); } catch (_) { /* 某些类型不支持 */ }
+            }
+        }
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -981,7 +1253,22 @@ document.getElementById("fileInput").addEventListener("change", (e) => {
     if (f) importFile(f);
     e.target.value = "";
 });
+
+// 上传：普通多选 / 整个文件夹（webkitdirectory）
+document.getElementById("uploadInput").addEventListener("change", (e) => {
+    doUpload(e.target.files);
+    e.target.value = "";
+});
+document.getElementById("dirInput").addEventListener("change", (e) => {
+    state.upload.group = "one";     // 选文件夹 = 这堆文件属于同一份报价
+    doUpload(e.target.files);
+    e.target.value = "";
+});
+
 loadFromServer();
+
+// 业务 2026-10-20：每 10 秒刷新一次（抽取由定时任务做，页面只管把结果捡回来）
+setInterval(refreshQuietly, 10000);
 </script>
 </body>
 </html>

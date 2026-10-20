@@ -14,9 +14,10 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.42（2026-10-20 **查表去子进程**：厚度表 / 类别表 / 日期换算 / 任务号
-> 全部内联进 `main.py`，删掉那 4 个脚本 —— 一次运行少起 4~8 个 `uv run` 子进程，
-> 也不再依赖 PATH 里有 uv；单点查询改用 `main.py --lookup thickness/category/date`）
+> **版本：** 1.0.43（2026-10-20 **CQR_Web 上传 → 定时抽取 → 自动刷出产物**：
+> 页面收上传落 `pending/`、每 10 秒刷新；Hermes 定时任务每 5 分钟跑
+> `scripts/scan_pending.py` 逐份抽（Web 不碰进程/队列）；局域网共享、不做认证）
+> —— 前序 1.0.42：查表去子进程（4 个脚本内联进 `main.py`，`--lookup` 单点查询）
 > —— 前序 1.0.41：`scripts/` 瘦身（删 6 个零引用文件 + 1 个死函数）
 > —— 前序 1.0.40：**`erp_view` → `CQR_Web` 独立项目**：展示层抽出来自带
 > pyproject/README/tests，技能侧只留转发壳与边界测试；下一步加「上传」
@@ -1052,7 +1053,7 @@ rules:
 | | 内容 |
 |---|---|
 | 目录 | `CQR_Web/`（技能仓库根下；自带 `pyproject.toml` / `README.md` / `tests/`） |
-| 定位 | **只读展示**：当前没有上传，也没有编辑 —— 上传/多人用是后续编码任务（见 `CQR_Web/README.md` §6） |
+| 定位 | **上传 + 展示**（1.0.43 起）：收上传落 `pending/`、只读展示 `processed/`；抽取由定时任务做（见 §4.11） |
 | 依赖 | 仍复用技能仓库的 `scripts/erp_schema.py` 与 `assets/erp_form_schema.yaml`（**校验口径只有一份**，不复制） |
 | 测试 | 项目自己的：`cd CQR_Web && uv run pytest`；技能侧只剩 `tests/test_cqr_web_boundary.py`（边界/旧包名复活） |
 
@@ -1069,7 +1070,8 @@ uv run ./scripts/erp_viewer.py …                  # 等价（`scripts/erp_view
 ```
 CQR_Web/
 ├── data.py               ← 唯一实现：扫描 / 路径安全 / ERP 字典 / 取值校验 / 交付闸门（**不 import Flask**）
-├── app.py                ← 只管 HTTP：create_app() 工厂 + 4 个路由 + CLI main()
+├── upload.py             ← 上传落盘 / 文件名净化 / 后缀白名单 / 排队清单（**不 import Flask**）
+├── app.py                ← 只管 HTTP：create_app() 工厂 + 6 个路由 + CLI main()
 ├── templates/index.html  ← 只管显示（零依赖原生 JS；**刻意不含 Jinja 语法**）
 └── __main__.py           ← `python -m CQR_Web`
 ```
@@ -1093,6 +1095,8 @@ CQR_Web/
 | `GET /api/exports` | 递归扫描结果（每份产物的摘要，**最新的在前**）+ 当次运行的校验计数与客户档案 |
 | `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON + **权威取值校验结果**（`validation`）+ **交付闸门**（`incomplete`） |
 | `GET /api/schema` | ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组 |
+| `POST /api/uploads` | 上传客户文件（multipart：`files` 多个 + `group=one\|each`）→ 落 `pending/`（§4.11） |
+| `GET /api/pending` | 还在等抽取的文件（页面排队条用） |
 
 > **JSON 口径**：`PrettyJSONProvider` 定死三件事 —— `ensure_ascii=False`（中文不转义，
 > `curl` 直读）、`sort_keys=False`（保持我们构造的键序）、`compact=False`（缩进 2 格）。
@@ -1137,6 +1141,62 @@ CQR_Web/
 - **PDF 默认文件名**：`syncTitle()` 把 `document.title` 设成
   `ERP · 报价需求单导出查看器 · <任务号前 8 位> · <中文品名>`（非法字符换 `_`、截 120 字）——
   不然每份 PDF 都叫「ERP · 报价需求单导出查看器」。
+
+### 4.11 上传 → 定时抽取 → 自动刷出产物（1.0.43 新增）
+
+业务 2026-10-20 拍板：「先做上传 → 抽取 → 立刻看产物」，随后追加：
+**「可以只上传文件，然后我们在 Hermes 启动一个定时任务，每 5 分钟扫描一次，有任务就执行」**。
+于是分工被切成两半 —— 这是本节的**唯一重点**：
+
+| 谁 | 干什么 | 不干什么 |
+|---|---|---|
+| `CQR_Web`（Flask） | 收上传 → 落 `pending/`；只读展示 `processed/` | **不起进程、不管队列、不记任务状态** |
+| Hermes 定时任务（`scripts/scan_pending.py`，每 5 分钟） | 扫 `pending/` → 逐份跑 `main.py` | 不服务页面 |
+
+四件已定的口径：
+
+| 项 | 决定 |
+|---|---|
+| 访问范围 | **局域网共享，不做登录认证**（`--lan` 监听 `0.0.0.0` 并打印可访问地址） |
+| 刷新频率 | 页面**每 10 秒**静默刷新一次；出现新产物就自动选中（`setInterval`） |
+| 客户档案 | 一律 `auto`（不弹确认框）。判错了在产物上能看出来，重跑即可 |
+| 上传语义 | 直接复用输入单元：`group=one` → `pending/<批次>/`（一份报价的多个参考文件）；`group=each` → 平铺（各算一份）；单文件/单 `.zip` 一律平铺 |
+
+**落盘与抽取的路径**
+
+```
+POST /api/uploads → pending/<批次或文件名>
+                        │  Hermes cron 每 5 分钟：scripts/scan_pending.sh
+                        ▼
+                    main.py 逐份跑（-c auto）
+                        │
+              processed/<task_id>/ERP_*.json
+                        │  页面每 10 秒 GET /api/exports
+                        ▼
+                   新产物自动被选中，带「新」徽章
+```
+
+**`scan_pending.py` 的规矩（每条都有测试）**
+
+1. **空 pending 一个字都不打印** —— cron 用 `no_agent` 模式，stdout 原样发给人看，
+   空 stdout 才是「安静」。否则每 5 分钟骚扰一次。
+2. **原子认领**：处理前 `os.replace` 进 `pending/_claimed/`；成功时 `main.py` 自己把输入
+   搬进 `processed/<task_id>/`，认领区自然清空。
+3. **失败可重试但有限**：退回 `pending/` 并在 `customer-files/.scan_state.json` 记次数，
+   **3 次**后进 `failed/_stuck_<时间戳>/`（不会无限重试、也不会静默丢件）。
+4. **`flock` 非阻塞互斥**：上一轮没跑完（一个文件夹里 20 份），这一轮直接退出，不抢同一批文件。
+5. **成功判据 = 退出码 0 且输入已被搬走**。只看退出码不够：批次里部分失败时 `main.py` 也返回 1，
+   而「返回 0 但没搬走」说明逻辑异常。
+
+**为什么不把抽取放进 Web 里**（虽然那样「更即时」）：Flask dev server 跑长任务要自己管
+进程、超时、队列、任务持久化，还要防浏览器断开就丢任务；而现在这套的调度器是
+Hermes 已经跑着的 cron（gateway 常驻），Web 只做它擅长的两件事 —— 收文件、显示结果。
+代价是**最多等 5 分钟**，页面用排队条（`⏳ 等待抽取 N 项`）把这个等待显式说出来。
+
+**上传口的安全（不是认证，是健壮性）**：`upload.safe_filename()` 只取 basename、危险字符换 `_`、
+点开头去掉（否则 `input_unit` 当隐藏文件静默跳过）、主名截 80 字；后缀白名单
+`xlsx/xls/csv/pdf/docx/txt/zip`；同名加 `(2)` 不覆盖；请求体上限 64 MB（超了返回中文 413）。
+`.eml` **明确拒收**并给出指引 —— 它得先过 `ingest_email.py`，直接喂 `main.py` 会报「不支持的文件格式」。
 
 **几处刻意的设计（改动前先读）**
 
@@ -1443,6 +1503,7 @@ customer-quote-request/
 │   ├── pyproject.toml                  #   项目声明（flask + pyyaml；pytest 在 dev 组）
 │   ├── README.md                       #   给别人看的说明 + 下一步 Web 功能清单
 │   ├── data.py                         #   逻辑：扫描 / 路径安全 / ERP 字典 / 校验 / 交付闸门（不 import Flask）
+│   ├── upload.py                       #   逻辑：上传落盘 / 文件名净化 / 后缀白名单 / 排队清单（不 import Flask）
 │   ├── app.py                          #   Flask 工厂 + 4 路由 + CLI（create_app / main）
 │   ├── __main__.py                     #   `uv run python -m CQR_Web`
 │   ├── templates/index.html             #   页面本体（零依赖原生 JS；刻意不含 Jinja 语法）
@@ -1458,7 +1519,8 @@ customer-quote-request/
 │   ├── erp_viewer.py              # ★ 只是转发壳 → CQR_Web/app.py（1.0.26 起，逻辑不在 scripts/ 了）
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
-│   └── calibrate_customer.py      # ★ 新客户校准器
+│   ├── calibrate_customer.py      # ★ 新客户校准器
+│   └── scan_pending.py            # ★ 定时任务入口：扫 pending → 逐份跑 main.py（Web 不抽取）
 │       # （查表能力都在 main.py 里：`--lookup thickness/category/date`，不再单独成脚本）
 ├── tests/                         # 435 项测试（uv run pytest）
 │   ├── conftest.py
@@ -1471,6 +1533,9 @@ customer-quote-request/
 │   ├── test_cpms_lint.py          # ★ CPMS 规范（样例自证 + 每条规则码 + --fix 不越界）
 │   ├── test_cpms_doc_samples.py   # ★ CPMS_规范与样例集.md 里的 6 份样例必须零违规（文档即测试）
 │   ├── test_lookup_tables.py      # ★ 三张查询表内联（厚度表 72 行逐行 / 类别表 / 日期写法）
+│   ├── test_cqr_upload.py         # ★ 上传落盘（文件名净化 / 组语义 / 同名不覆盖 / 排队清单）
+│   ├── test_cqr_upload_api.py     # ★ 上传 HTTP（多文件 / group / 413 / 路径穿越）
+│   ├── test_scan_pending.py       # ★ 定时扫描器（空跑静默 / 认领 / 重试 3 次 / flock）
 │   ├── test_viewer.py             # ★ 产物查看器（扫描 / 路径安全 / 分组覆盖 / HTTP 端点）
 │   └── test_pipeline.py           # 端到端回归（真实样本 + 逐字段值断言）
 ├── customer-files/                # pending / processed / failed（产物，不进仓库）
@@ -1740,6 +1805,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.43** | **2026-10-20** | **上传 → 定时抽取 → 自动刷出产物**：`CQR_Web` 新增 `POST /api/uploads`（落 `customer-files/pending/`，`upload.py` 纯逻辑）与 `GET /api/pending`（排队条）；页面每 **10 秒**静默刷新、新产物自动选中并打「新」徽章；抽取改由 **Hermes 定时任务**（`scripts/scan_pending.py` + `scripts/scan_pending.sh`，每 5 分钟）执行 —— 原子认领 / 失败 3 次进 `failed/_stuck_*` / `flock` 防叠加 / **空 pending 静默**；`--lan` 局域网开放（无认证，业务明确） |
 | **1.0.42** | **2026-10-20** | **查表去子进程**：`select_page_thickness.py` / `product_categories.py` / `string2timestamp.py` / `uuid_utils.py` 内联进 `main.py`（`get_page_thickness` / `parse_product_categories` / `_parse_date_value` / `uuid4`）；新增 `--lookup thickness/category/date` 单点查询；`tests/test_lookup_tables.py` 对着真实表逐行钉住等价（厚度 72 行 / 类别表 / 9 种日期写法），6 份真实产物重构前后**逐字段 0 差异** |
 | **1.0.41** | **2026-10-20** | **`scripts/` 分类瘦身**：删掉 6 个零引用文件（`customer2erp.py` / `xlsx2csv.py` / `docx2json.py` / `txt2json.py` / `pdf2json.py` / 0 字节的 `_init__.py`）与 1 个零引用函数（`internal_fields.is_internal_field`）；抽取调试只剩 `extract_fields.py <文件> --json` 一个入口 |
 

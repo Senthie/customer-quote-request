@@ -26,11 +26,49 @@ def test_项目自带pyproject和README和测试():
 
 
 def test_包还是三层且data层不依赖flask():
-    for name in ("__init__.py", "__main__.py", "data.py", "app.py",
+    for name in ("__init__.py", "__main__.py", "data.py", "upload.py", "app.py",
                  "templates/index.html"):
         assert (PROJ / name).is_file(), f"缺 {name}"
-    data_src = (PROJ / "data.py").read_text(encoding="utf-8")
-    assert "import flask" not in data_src and "from flask" not in data_src
+    for logic in ("data.py", "upload.py"):
+        src = (PROJ / logic).read_text(encoding="utf-8")
+        assert "import flask" not in src and "from flask" not in src, \
+            f"{logic} 是纯逻辑层，不许 import Flask（要能脱离服务端单独测）"
+
+
+def _code_only(src: str) -> str:
+    """去掉注释与字符串字面量，只留真正的代码 token。
+
+    为什么要这么麻烦：这几条规矩本身就在 docstring 里被反复念叨
+    （「抽取交给 main.py 之外的定时任务」），直接用子串匹配会把说明文字也判成违规。
+    """
+    import io
+    import tokenize
+
+    pieces: list[str] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            pieces.append(tok.string)
+    except tokenize.TokenError:      # 半截文件也别炸测试
+        return src
+    return " ".join(pieces)
+
+
+def test_web侧不许自己跑抽取():
+    """1.0.43 的分工：Web 只上传 + 只展示，抽取交给 Hermes 定时任务（`scripts/scan_pending.py`）。
+
+    这条容易长回去 —— 一旦有人图省事在路由里 subprocess 起 main.py，就会出现
+    「长任务卡住 dev server / 队列状态没人管 / 两处都能抽取」的一堆问题。
+    """
+    for logic in ("data.py", "upload.py", "app.py"):
+        code = _code_only((PROJ / logic).read_text(encoding="utf-8"))
+        assert "subprocess" not in code, f"{logic} 不该起子进程（抽取是 scan_pending.py 的事）"
+        assert "main.py" not in code, f"{logic} 不该直接调抽取脚本"
+
+    # 调度器必须在技能侧、而且 Web 侧没有第二份
+    assert (REPO_ROOT / "scripts" / "scan_pending.py").is_file()
+    assert not (PROJ / "scan_pending.py").exists(), "调度器只能有一份，别在 CQR_Web 里再抄一个"
 
 
 def test_技能侧只剩转发壳():
