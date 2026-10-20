@@ -14,7 +14,14 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.30（2026-10-19 **CPMS 规范 v2**：业务拍板 5 条 —— 套装多件写「共【N】件」、
+> **版本：** 1.0.38（2026-10-20 **批次拆分**：文件夹 / 压缩包里**有子目录 → 子目录各算一份报价**；
+> 根下散文件另算一份；没有子目录仍是一份；压缩包只归档一次）
+> —— 前序 1.0.37：输入单元 —— 单文件 = 一份报价；文件夹 / 压缩包 / 多附件邮件 = 一份报价的**全部参考文件**
+> —— 前序 1.0.36：`ECPMC`（产品英文名）由档案 `rules.ecpmc.source_keys` 从客户原文照抄
+> —— 前序 1.0.35：装订方向 ≠ 书脊方向（识别不到 → CPMS 不写方向词、`Drop_SJFX` 留空 null）
+> —— 前序 1.0.34：`CPMC` = 产品名（中文译名）、业务员 `KM` 落 `YWY`
+> —— 前序 1.0.33：`.eml` 读取（正文即任务 / HTML 表格 / 文件名取单号）；1.0.32：CPMS 严格模式
+> —— 前序 1.0.30：**CPMS 规范 v2**：业务拍板 5 条 —— 套装多件写「共【N】件」、
 > `--fix` 自动补印色 C、备注允许留出处/人名、灰板一律写 g、`装箱：待确认` 可交付）
 > —— 前序 1.0.29：`docs/CPMS_规范与样例集.md`（格式速览 + 6 份样例，由 `tests/test_cpms_doc_samples.py` 钉住）
 > —— 前序 1.0.28（2026-10-17）**CPMS 写法定死**：18476 份历史单据实测 → `assets/cpms_spec.yaml`
@@ -32,24 +39,65 @@ metadata:
 ```
                     customers/<客户id>.yaml   ← 客户习惯全在这里（唯一要改的地方）
                               │
-  邮件 ──► ingest_email.py ──►│
+  邮件 ──► ingest_email.py ──►│（≥2 个附件 → 投成一个单元目录）
           （附件落 pending     │
             + 客户单号 KHDH）  ▼
-  客户文件 ──► extract_fields.py ──► 规范键 → 值
+  输入单元 ──► input_unit.py ──► 单文件 = 1 份报价 / 文件夹·zip = 1 份报价的 N 个参考文件
+                                    （文件夹里有子目录 → 子目录各算 1 份报价）
+                                    │
+                     extract_fields.py（多文件 → 合并成一个 CustomerData）
                                     │
                      main.py ───────┴──► 归一化 + 校验（erp_schema.py）
                                     │      ×  assets/erp_form_schema.yaml（ERP 合法枚举）
                                     │
-                                    ├──► ERP JSON（59 字段 + 内部字段 ID / CPMC_ZH）
+                                    ├──► ERP JSON（59 字段 + 内部字段 ID / CPMC_ZH / version）
                                     └──► CPMS 留空 → ★ agent 按 assets/cpms_spec.yaml 写
 ```
+
+### 0.0 输入单元：一份报价到底由几个文件组成（业务 2026-10-20 拍板）
+
+| 你丢进来的东西 | 语义 | 产出 |
+|---|---|---|
+| **单个文件**（xlsx / csv / txt / docx / pdf / eml 正文） | **独一份报价** | **1 个** ERP JSON |
+| **文件夹**（没有子目录） | 这一份报价的**全部参考文件**（规格表 + 确认单 + 补充说明…） | **1 个** ERP JSON（字段合并） |
+| **压缩包 `.zip`**（没有子目录） | 同上（安全解压后按文件夹处理） | **1 个** ERP JSON |
+| **文件夹 / 压缩包里有子目录** | **每个子目录 = 一份独立报价**（子目录内继续合并）；根下散文件另算一份 | **每个子目录 1 个** ERP JSON |
+| **一封邮件 ≥2 个附件** | 同上：客户的一次询价，附件都是同一单的参考材料 | **1 个** ERP JSON（`ingest_email` 自动投成单元目录） |
+
+```bash
+# 单个文件（老用法，不变）
+uv run ./scripts/main.py customer-files/pending/报价.xlsx --customer auto
+# 文件夹 / 压缩包 = 一份报价（里面没有子目录）
+uv run ./scripts/main.py "customer-files/pending/CU26070802 询价包/" --customer auto
+uv run ./scripts/main.py customer-files/pending/询价包.zip --customer auto
+# 里面有两个独立单（子目录）= 两份报价，一条命令全跑完
+uv run ./scripts/main.py customer-files/pending/两张单/ --customer auto
+#   → 子目录 CU26070001/ CU26070002/ 各出一个 ERP JSON；任一份失败不影响另一份
+```
+
+**合并口径**（`extract_fields.merge_customer_data`）：
+
+1. **主文件** = 抽到规范键最多的文件（同分→表格类优先→文件名排序），值以它为准；
+2. 同一规范键在别的文件里**给了不同的值** → 记进 `.extracted.json` 的 `conflicts`
+   + `validation.json` 的 `conflicts`，日志 WARN —— **交付前必须人工核对，不许静默丢**；
+3. `rules.scan`（FSC 这类 `unique` 键）**在整个单元上重跑**：A 文件写 `FSC-Mix`、
+   B 文件写 `FSC Recycled` 就是真混用 → 留空；
+4. 文本块按 `# 文件：xxx` 分段拼接，**CPMS 与《来源对照》必须写清出自哪个文件**；
+5. 原始文件夹/压缩包整包归档进 `processed/<任务ID>/`（参考文件必须待在一起）；
+6. **有子目录就拆**（1.0.38）：`resolve_input_units()` 把「一包」拆成「一包里的 N 份」，
+   每份只吃自己子目录里的文件 —— 子目录内部仍然按上面 1~5 条合并，**不再往下拆**。
+
+**过滤与安全**：`__MACOSX` / `.DS_Store` / `Thumbs.db` / `~$临时文件` / 隐藏文件 / 不支持的扩展名
+一律跳过并记账（`validation.unit.skipped`）；zip 拒绝绝对路径与 `..` 穿越，
+上限 200 个文件 / 解压后 200 MB。
 
 **三层职责，不要混：**
 
 | 层 | 文件 | 职责 | 新增客户要改吗 |
 |----|------|------|---------------|
 | 客户档案 | `customers/*.yaml` | 这个客户怎么写字号/表头/档位/材质/**分区表**；怎么从邮件取单号 | **要**（只改这里） |
-| 抽取引擎 | `scripts/extract_fields.py` | 按档案把任意文件抽成「规范键 → 值」。**两套范式**：平铺表走 `auto_pairs`（igl），分区表单走 `section_pairs`（NGV）—— 各家的细节见对应子技能（2.6） | 一般不用（除非布局全新） |
+| 输入单元 | `scripts/input_unit.py` | 判断「这一份报价由哪几个文件组成」：单文件 / 文件夹 / zip；**有子目录 → 子目录各算一份**（`resolve_input_units`）；安全解压、垃圾文件过滤 | 不用 |
+| 抽取引擎 | `scripts/extract_fields.py` | 按档案把任意文件抽成「规范键 → 值」，多文件按 `merge_customer_data` 合并。**两套范式**：平铺表走 `auto_pairs`（igl），分区表单走 `section_pairs`（NGV）—— 各家的细节见对应子技能（2.6） | 一般不用（除非布局全新） |
 | 业务映射 | `scripts/main.py` | 规范键 + 档案规则 → ERP 字段；输出断言 | 不用 |
 | **取值权威** | `assets/erp_form_schema.yaml` | **ERP 只认哪些值**（下拉枚举/类型/必填） | 不用（ERP 全局恒定） |
 
@@ -70,6 +118,76 @@ metadata:
 > 所以**永远不要把一个客户的结构套到另一个客户身上** —— 拿真实附件校准（`calibrate_customer.py`），
 > 判形态 → 填档案 → 用 `scripts/compare_with_erp.py` 与权威 ERP 导出对照。
 > 「上一个客户是平铺表，这个客户估计也是」是这类工作里最贵的假设。
+
+---
+
+## 0.1 一页速查（2026-10-19 实单 `BJXQ260704002` 教训沉淀）
+
+> 时间紧只看这一节。细节在后面各章；数字与命令都实测过。
+
+### CPMS 严格模式（业务拍板，默认）
+
+- **只写客户文件（附件 / 邮件正文）里出现过的事实**；确认单、ERP 导出、历史单据、别的客户档案里的信息**一律不写**。
+- 判定口径：**每一句都要能指到客户文件的一个位置；指不到的删掉**。
+- 客户给区间就照抄区间（`50-60 stickers` 不许写成 `60`）；客户空栏就是空栏（窗口尺寸没写就不写）。
+- 不许把英文泛称「翻译」成具体材料：`polybag` ≠ `OPP`，`foil package` 就是铝箔袋，`art card C1S` 就是单粉。
+- 客户自己标的不确定表述照抄：`预估`、`暂定`、`see below`、`按…预`。
+- 附件里的**语义未明**内容（页脚数字、内部代号）放 `备注` 并注明「客户原文 / 语义未明」，不许猜。
+- **漏抄是缺陷，多写是错误信息**。宁可短，不许编。
+
+### 交付前四道门（顺序执行，全绿才算完）
+
+```bash
+cd /home/claw/customer-quote-request
+F=<产物目录>/ERP_<task_id>_<时间戳>.json
+X=<同一目录下的客户原始文件>
+
+uv run ./scripts/cpms_lint.py "$F"                                  # ① 退出码 = error 数，必须 0
+uv run ./scripts/cpms_content_audit.py --cpms "$F" --source "$X"    # ② 退出码 = 无出处条目数，必须 0
+uv run ./scripts/erp_schema.py --check "$F" --customer <客户>        # ③ 必须 0 error
+uv run pytest -q                                                    # ④ 全绿（当前 349 项）
+```
+
+② 会同时报「客户文件有、CPMS 没写」的漏抄项 —— 逐条判是真漏还是有意不写。
+
+### 客户给的是邮件（.eml）时
+
+```bash
+uv run ./scripts/ingest_email.py --eml "客户邮件.eml"     # 附件落 pending / 正文落 .txt，两种都行
+uv run ./scripts/main.py <上面打印的那个文件> --customer auto
+```
+
+- **附件版**（igl）：附件 + sidecar 进 `pending/`；
+- **正文版**（NGV/KiK 这类 enquiry，无附件）：正文落成 `<单号>_<标题>.txt`，
+  HTML 表格会被压成 `标签: 值` 行；
+- 单号（`KHDDH`）可能只在 **`.eml` 文件名**里 → 脚本会扫，来源标「邮件文件名」。
+
+### `CPMC` 与 `YWY` 的分工（业务 2026-10-19 更正）
+
+| 字段 | 内容 | 谁填 |
+|---|---|---|
+| `CPMC` | **产品名称**，从客户文件译成中文（不带业务员/品牌/类别/FSC） | agent（脚本留 `【中文品名待定】`） |
+| `CPMC_ZH` | 与 `CPMC` 同值（内部字段） | agent |
+| `YWY` | 业务员代号 **KM**（= 我） | 脚本固定值 |
+
+- 旧写法 `KM/Aldi <原文>(FSC)` **已废**；品牌（Aldi/KiK/Tchibo）不塞进产品名。
+- 译名只能译、不能编：`Ostermalblock` → `复活节彩蛋涂色本`；没把握就标注存疑，别凑品类词。
+
+### 每单产物里要留的两份东西
+
+| 文件 | 内容 |
+|---|---|
+| `ERP_*.json` | 59 字段 + `ID`/`CPMC_ZH`/`Reminder`/`version`，`CPMS` 非空、`CPMC_ZH` 无占位符 |
+| `CPMS_来源对照.md` | 逐句出处（单元格坐标）+ 已删除项 + 未写项；交付时一起给业务 |
+
+> 来源对照不是形式：业务 2026-10-19 明确要求「你写的东西必须是通过客户文件得到的」，
+> 这份表就是自证材料。写不出出处的句子，当场删。
+
+### 客户档案不能凭空推断（同批踩过）
+
+- `Wire-O` = **双线圈 → 26.07;普通YO书**；`spiral`/单线圈才是 26.01 普通蛇圈书。档案已拆成两条规则，别再合并。
+- 同一条正则里塞多个近义词，迟早会把两个树节点混成一个 —— 宁可多写几条，每条一个节点。
+- 判断口径只认**真实 ERP 导出**，不认「看起来更合理」。
 
 ---
 
@@ -101,6 +219,29 @@ uv run ./scripts/main.py "customer-files/pending/QUOTE.xlsx" --customer auto
 ```
 
 然后**轮到 agent 亲自写 CPMS**（见第 5 节）。
+
+**跑完之后的三条常规动作：**
+
+- 原附件已被移进 `customer-files/processed/<task_id>/` —— **重跑读那份副本**，别再读 `pending/`（会 `FileNotFoundError`）。
+- 同一单重跑出新任务目录后，把旧目录 `mv` 到 `processed/_superseded_<YYYYMMDD>/`，别让一个报价在交付区躺两份。
+- 业务若给了**真实 ERP 数据**要求对差异 —— 走 `references/真实ERP回灌比对.md` 的流程（先分桶「真错 / 口径 / 没抽 / 格式」，再动档案）。
+- 业务说「我上传了」但 `pending/` 没新文件时 —— **先自己找**（`pending/` 列表 + 全盘 `find -newermt`），
+  确认没落盘再让他重发；别默认文件一定到了（聊天附件可能只有文字过来）。写的时候记住两条实测事实：
+
+- **同一标签可以重复出现**：多材料内文就写三行（`内文：32PP，100g书纸(FSC)，4C/4C` /
+  `内文：8PP，230g单粉，4C+哑油/0C，啤` / `内文：2PP，80g铜版贴纸，4C/0C，可移胶`），
+  `cpms_lint` 只校验段落 `order` 单调、**不禁止重复标签** —— 比把三种材料塞进一行可读得多。
+- **`cpms_lint --fix` 的「印色补 C」只动 order 100~299 的部件行**，`包装` / `装箱` / `备注` 里的
+  `1/0C` 不会被修（CPMS052 一直报），必须手改成 `1C/0C`。别以为跑过 `--fix` 就干净了，要复跑看退出码。
+
+### 1.1 三条操作事实（每次都会遇到）
+
+- **`main.py` 跑完会把原附件从 `pending/` 移进 `processed/<task_id>/`** —— 之后复核原文、
+  重写 CPMS 要读产物目录里那份副本，别再找 `pending/`（找不到会误判成「文件丢了」）。
+- **重复提取同一份文件**：先看 `processed/` 里旧任务目录有没有现成的 `CPMS` / `CPMC_ZH`，
+  有就复用再按当前规范复核（省一遍通读），然后照常重跑生成新任务目录、用新产物交付。
+- **用户说「上传了」但 `pending/` 为空**：先搜全盘近几小时的 xlsx/xls/csv/pdf/docx/eml，
+  确实没有就直说「没收到」并请对方重发或放进 `pending/`；**不要拿目录里的旧文件凑数，也不要猜**。
 
 ---
 
@@ -382,6 +523,51 @@ uv run ./scripts/customer_profile.py --validate     # 一致性校验
 
 **传输无关**：谁都可以调，不依赖具体收信方式。
 
+### 3.1 `.eml` 怎么读（1.0.33 实单 `CU26070802`）
+
+客户邮件有三种形态，脚本都吃：
+
+| 形态 | 例子 | 怎么处理 |
+|---|---|---|
+| **附件里有报价表** | igl 的 `PUZZLE COLOUR DISNEY.xlsx` | 附件落 `pending/` + 每个附件一份 sidecar |
+| **正文即规格（无附件）** | NGV/KiK `price enquiry. Ostermalblock.eml` | ★ **正文落成 `.txt` 任务**（`--body-as-task`，默认开），`main.py` 直接吃 |
+| **只有 HTML（无 text/plain）** | 网页版邮件 / 转发件 | HTML 转文本；表格压成 `标签: 值` 行（`html_tables_to_text`） |
+
+读 `.eml` 的四条实现要点（都踩过）：
+
+1. **`text/plain` 优先**，HTML 兜底；HTML 表格单独压平成 `TPS: 148 x 210 mm portrait` 这种行 ——
+   规格常只存在表格里。
+2. **内嵌图片（`Content-Disposition: inline`）不是附件**：签名 logo、公司图都算 inline，落盘只会污染 pending。
+3. **单号也从 `.eml` 文件名取**：实测 `CU26070802 - price enquiry. Ostermalblock.eml`
+   表内没有单号，号码只在文件名里 → `KHDDH=CU26070802`。取值说明写「邮件文件名」。
+4. **正文任务的文件名 = 单号 + 标题**（`CU26070802_price_enquiry._Ostermalblock.txt`），
+   便于在 `pending/` 里认；`--no-body-as-task` 可关掉（只留 `_email_*.json` 记录）。
+
+### 3.2 文本模式（`.txt` / 正文任务）抽取的两个坑
+
+- ★ **值里带标签词会被整条丢掉**（1.0.33 修的）：旧实现对「标签下一行」用
+  `match_label()`（整词包含）判断是不是标签，于是
+  `64 pp + cover`（含 `cover`）、`100 gsm offset paper`（含 `paper`）、
+  `30.100cps (one title, one language)`（含 `title`）全被当成「标签」跳过 → 值静默消失。
+  现在只拒绝**整行就是一个标签**（`match_label_exact`，允许尾随冒号）。
+- ★ **`Quantity:` 会落到 `quantity_tiers` 合成键**：文本模式没有档位行，
+  `Quantity: 30.100cps` 就是单一数量 → 抽取时改投 `quantity`，交给
+  `main.parse_single_quantity()`（德式千分位 `30.100 → 30100`、`= 总数` 都在那儿）。
+
+### 3.3 客户识别也要看发件人
+
+纯英文 enquiry 邮件没有 `enquiry` 表单标签。NGV 档案已补：
+
+```yaml
+detect:
+  label_signatures: [..., "price enquiry", "Finished binding", "euroscale",
+                     "Technical Specification and Print Runs"]
+  sender_domains: [vemag-medien.de, naumann-goebel.de, ngv.de]   # 30 分
+```
+
+实测 `CU26070802` 得分 530（5 个正文特征 + 域名），不再落到兜底档案。
+新增客户时同样要把「域名 + 正文特征」一起填，光靠文件名迟早判错。
+
 ```bash
 # A. .eml 文件（邮件客户端导出 / 任何 IMAP 脚本落盘）
 uv run ./scripts/ingest_email.py --eml mail.eml
@@ -469,7 +655,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | `CPSL1`~`CPSL10` | 按档案 `quantity.mode`：`tiers`（igl，一排档位）/ `single`（NGV，一个总数 → 只填 `CPSL1`）。见 4.4 |
 | `CD`/`KD`/`GD` | 规范键 `size`，按档案 `size.order`（igl 是 H x W x D → CD/KD/GD）；尺寸里没给 D 时按页数+纸张算厚度 —— 但档案 `rules.thickness.enabled: false` 可关掉（NGV 的 ERP 里 `GD` 恒为 0）。**套装另说**：档案 `size.zero_tops: [套装]` 时 CD/KD/GD 一律 0/0/0，附件里的盒内单件尺寸不采用（业务决定 2026-09-24） |
 | `GD`（计算） | `(extent_pp / 2) × 内页厚度 + extent_cover × 封面厚度` |
-| `Drop_SJFX` | 档案 `rules.spine.mode`：`cd_vs_kd`（`CD > KD` → `长书脊`，否则 `短书脊`）/ `binding_side`（装订边 ≥ 较长边 → 长书脊；附件没给装订边则用 `spine.default` + WARN；`spine.skip_tops` 里的类别顶层直接留空，NGV 的套装就是这种）。合法枚举见 4.6：`短书脊`/`长书脊`/`四边裁` |
+| `Drop_SJFX` | 档案 `rules.spine.mode`：`cd_vs_kd`（`CD > KD` → `长书脊`，否则 `短书脊`）/ `binding_side`（装订边 `N mm side` ≥ 较长边 → 长书脊；**识别不到装订边/装订方向 → 留空（JSON null）+ WARN**，业务 2026-10-20 拍板：`spine.default: ""`，不猜长/短书脊；`spine.skip_tops` 里的类别顶层直接留空，NGV 的套装就是这种）。⚠️ **装订方向原文（`at the top`）只进 CPMS，不许拿来反推长/短书脊** —— 顶/底/左/右是装订边位置，和 `Drop_SJFX` 不是同一维度。合法枚举见 4.6：`短书脊`/`长书脊`/`四边裁` |
 | `DWMC` | 档案 `rules.unit`：按 `CPLB` 的**顶层名**定单位（NGV：书本 `本`、套装 `套`） |
 | `FSCMC` | 规范键 `fsc`（由 `rules.scan` 从纸张行扫出，如 `230 gsm art card C1S (FSC Mix)`）→ 按 ERP 枚举归一化。扫描条目带 `unique: true` 时**不唯一就留空**（多材质混用 FSC 时该填哪个推不出来，业务 2026-09-24 拍板），原因记进 `.extracted.json` 的 `scan_notes` |
 | `JHRQ` | 档案 `dates.JHRQ.from` 指定的规范键（igl 默认 `pub_month`）→ `YYYY-MM-DD`；档案 `dates.JHRQ.mode: empty` 则不落库（NGV 口径，2026-09-24） |
@@ -531,7 +717,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 42 | `WCRQ` | 预计下单日期 | 档案 `dates.WCRQ`（`today_plus_days` 或 `mode: empty`） | `""` | ✅ |
 | 43 | `KHDDH` | 香港单号 | 附件「香港单号 CU…」（规范键 `khddh`）或邮件 → 档案 `email.khddh` | `""` | ✅ |
 | 44 | `chkXBJF` | 不需报价 | 开关 | `false` | 🔒 |
-| 45 | `ECPMC` | 产品英文名 | `series_name`（英文） | `""` | ⚠️ |
+| 45 | `ECPMC` | 产品英文名 | 档案 `rules.ecpmc.source_keys`（按顺序取第一个非空规范键）：NGV = `product_name`（客户原文 `Title:` 后面的英文品名，**照抄**）→ `series_name`。**不翻译、不拼类别、不带 FSC**。没声明 `rules.ecpmc` 的客户留空（igl 现状） | `""` | ✅ |
 | 46 | `chkZDBJF` | 有排交期 | 开关 | `false` | 🔒 |
 | 47 | `ZXLB` | 纸箱类别 | 客户要求 | `""` | ⚠️ |
 | 48 | `ZBLX` | 纸板类型 | 客户要求（业务 2026-09-24 定：**NGV 留空**；同日给出完整下拉枚举，导出里的 `B3B普通芯` 不在枚举内） | `""` | ⚠️ |
@@ -988,10 +1174,26 @@ erp_view/
 > `docs/CPMS_写作规范.md`（人读，含 3 个真实单据的逐行改写）+ `scripts/cpms_lint.py`（校验）。
 > 「agent 亲自写」= 亲自判断事实，**不是亲自发明格式**。
 >
-> ★ **动笔前先看 `docs/CPMS_规范与样例集.md`**：格式速览（骨架/槽位/词表/硬规矩）+ **6 份可复制样例**
-> （平装锁线 / 精装 / 多款 BB / YO 线圈 / 套装 / 精装发声书），每份都带对应的 ERP 字段、
+> ★ **动笔前先看 `docs/CPMS_规范与样例集.md`**：格式速览（骨架/槽位/词表/硬规矩）+ **7 份可复制样例**
+> （平装锁线 / 精装 / 多款 BB / YO 线圈 / 套装 / 精装发声书 / **线圈书+钻石贴纸装配**），每份都带对应的 ERP 字段、
 > 都过 `cpms_lint` **0 error / 0 warn**。照最接近的那份改，比从空白开始写快且不容易错。
 > 样例由 `tests/test_cpms_doc_samples.py` 直接解析该 markdown 校验 —— 文档与规范不会漂。
+>
+> ★ **第 7 份样例是严格模式的范本**：来自真实单据 `BJXQ260704002`，但**只写客户附件里出现过的事实**，
+> 每句都能指到单元格。业务 2026-10-19 给真实单据，是让 agent 学「客户给了什么就写什么、怎么排」，
+> **不是**把确认单/历史单据里的补充信息搬进 `CPMS`。
+>
+> ★★ **严格模式（业务 2026-10-19 拍板，默认执行）**：
+> `CPMS` **只允许写客户提供的文件（附件/邮件正文）里出现过的事实**。
+> 从 ERP 导出、业务确认单、历史单据、其他客户档案「补」进来的内容一律不许写 ——
+> 那些属于业务侧，在 ERP 字段或邮件回复里解决。
+> 判定口径一句话：**每一句都要能指到客户文件的一个位置；指不到的删掉。**
+> 估值照抄区间（`50-60 stickers` 不许写成 `60`）、空栏就是空栏、
+> `polybag` 不许推断成 `OPP`、`frame/foil` 不许换材料。
+> 漏抄（客户写了没写进来）是缺陷；多写（客户没写却写进来）是**错误信息**，更严重。
+> 转录完整性按同文档 5.1 的「九问」自检（问的是「客户给了有没有漏」，不是「怎么补全」）。
+> 复盘：`references/cpms-real-sample-bjqx260704002.md`；机械自检（缺数字/单位/料号）：
+> `scripts/cpms_content_audit.py --mine <我们的 ERP.json> --ref <人已确认的 .json|.txt>`。
 > 写样例/加规则前先读 `references/cpms-spec-samples-and-lint-gotchas.md`：
 > **「文档即测试」配方**（解析 md 代码块 → `lint_text`，含 import 技巧）+
 > **linter 实操坑**（后封面 order=102 在 前封面=103 之前、数字间 `×` 会被判 CPMS051、
@@ -999,6 +1201,11 @@ erp_view/
 >
 > 设计方法（先量后定）、语料实测数字、以及写这类 linter 时踩过的坑，见
 > `references/cpms-writing-standard.md` —— 要改规范或加规则前先读它，别重算一遍语料。
+>
+> **改规则的配方与 v2 拍板细节**（5 条业务口径、「件」= 实物件数的算法、文档即测试、
+> 语料度量怎么读、linter 设计坑）见 `references/cpms-v2-decisions.md`。
+> 改 CPMS 规范按那里的「固定顺序」走：spec.yaml → cpms_lint.py → 两份 docs → 测试 → 语料回归。
+> 语料回归用 `scripts/cpms_corpus_metrics.py`（已封装「一单一目录」的 `*/*_erp.json` 坑）。
 
 **脚本跑完会打印：**
 
@@ -1044,6 +1251,22 @@ erp_view/
 - 书本类写「件」、套装写「款」同样报 `CPMS011`；
 - 组成声明要**按实物写**：`4款卡片` = 每套 4 张；一款多张时直接写总数（`36张卡片`），不要写「4款×9张」—— 件数是逐项数量求和，不做乘法。
 - 历史 18476 份里「共【N】件」出现 **0 次** —— 这是**新约定**，不是从旧单学来的。
+
+### 5.1.2 装订方向：写了就照抄，没写就不写方向词（书脊方向留空）
+
+业务 2026-10-20 拍板（实单 `CU26070802`）：
+
+| 客户文件里的情况 | CPMS「装订」段怎么写 | ERP `Drop_SJFX` |
+|---|---|---|
+| 写了方向（`at the top` / `at the head` / `at the side` / `装订在顶部`） | 照抄方向：`装订：胶装/PAD书，装订在头部，…` | 有 `N mm side` → 与较长边比；**没有 → 留空（null）** |
+| 没写方向 | `装订：胶装/PAD书，…`（**不写方向词**，也不写「书脊方向」） | 同上：认不出来就 **null** |
+
+- **认不出来就空着**（业务原话：「识别不到则设置为 书脊方向为 Null」）——
+  不许落「长书脊」当默认值，那是替业务拍板；也不许由「装订在顶部」反推「短书脊」。
+- **方向和书脊是两回事**：`at the top` 是**装订边位置**，`Drop_SJFX` 是**书脊在长边/短边**。
+- `Drop_SJFX` 为空时，概要行照规范省略「书籍方向：【…】」，直接从「产品规格：」开始；
+  该字段在 NGV 档案的 `rules.required_empty` 里（不算缺陷）。
+- 脚本用 `rules.scan: binding_direction` 把方向原文扫进 `.extracted.json`（只给 CPMS 用，不映射 ERP）。
 
 ### 5.2 行内语法：一行一个部件，槽位固定
 
@@ -1481,6 +1704,212 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.28** | **2026-10-17** | **CPMS 写法定死**：18476 份历史单据实测 → 骨架 + 闭集词表 + 槽位语法 + `cpms_lint`（见下） |
 | **1.0.29** | **2026-10-19** | **CPMS 规范样例集**：`docs/CPMS_规范与样例集.md`（格式速览 + 6 份新规范样例，覆盖平装/精装/多款 BB/线圈/套装/发声书）+ `tests/test_cpms_doc_samples.py`（文档即测试） |
 | **1.0.30** | **2026-10-19** | **CPMS 规范 v2（业务拍板 5 条）**：套装多件「共【N】件」、`--fix` 自动补印色 C、备注留出处、灰板写 g、装箱待确认可交付（见下） |
+| **1.0.31** | **2026-10-19** | **CPMS 样例 7（真实确认单 `BJXQ260704002`）+ 内容完整性「九问」**：业务给确认单作参照，提炼 9 条自检项（**1.0.32 已修正为严格模式**） |
+| **1.0.32** | **2026-10-19** | **CPMS 严格模式（业务拍板）**：只写客户文件里的事实；新增 `scripts/cpms_content_audit.py` 溯源门禁 + `0.1 一页速查` + 两份 references（复盘 / 通用铁律）；样例 7 改为严格版（见下） |
+| **1.0.33** | **2026-10-19** | **`.eml` 读取（实单 `CU26070802` / KiK `Ostermalblock`）**：正文即任务（无附件也能处理）、HTML 表格压平、内嵌图不落盘、单号可从 `.eml` 文件名取；修「值里含标签词被整条丢弃」与 `Quantity→quantity_tiers` 两个静默 bug；NGV 识别补发件人域名与英文 enquiry 特征 |
+| **1.0.34** | **2026-10-19** | **`CPMC` 改为产品名（中文译名，不带业务员/品牌/类别/FSC）；业务员 `KM` 落 `YWY`**；`allow_chinese` 开关；旧 `KM/Aldi` 口径作废（见下） |
+| **1.0.35** | **2026-10-20** | **装订方向 ≠ 书脊方向**：识别不到装订方向 → CPMS **不写方向词**、ERP `Drop_SJFX` **留空（JSON null）**（新增 `rules.scan: binding_direction`，只进 CPMS）；**顺修 FSC 扫描**：`FSC-Mix` 连字符此前漏匹配，把「混用」误判成单一值（见下） |
+| **1.0.36** | **2026-10-20** | **`ECPMC`（产品英文名）补上**：`CPMC` 改成中文译名后英文名没了着落 —— 新增档案开关 `rules.ecpmc.source_keys`（NGV：`product_name` → `series_name`，客户原文照抄）；未声明的客户保持留空（不动 igl 基线） |
+| **1.0.37** | **2026-10-20** | **输入单元（业务口径）**：**单文件 = 独一份报价**；**文件夹 / 压缩包 / 多附件邮件 = 同一份报价的全部参考文件**，合并成一个 ERP JSON。新增 `scripts/input_unit.py`（安全解压 / 垃圾文件过滤）、`merge_customer_data()`（主文件优先 + 冲突记账 + 扫描类整单元重跑）、`ingest_email` 多附件投成单元目录（见 0.0） |
+| **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
+
+### 1.0.38 详细变更 —— 子目录各算一份报价（批次拆分）
+
+**业务原话（2026-10-20 森西，回答 1.0.37 留下的边界问题）**：
+> 「2」—— 即「文件夹里有子目录就按子目录拆，子目录内合并」。
+
+| 输入 | 语义 | 产出 |
+|---|---|---|
+| 文件夹 / zip，**没有子目录** | 一份报价的全部参考文件 | 1 个 ERP JSON（1.0.37 口径，一行没变） |
+| 文件夹 / zip，**有子目录** | **每个子目录 = 一份独立报价**，子目录内部继续合并 | 每个子目录 1 个 ERP JSON |
+| 子目录之外、根下散着的受支持文件 | 也算一份（绝不偷偷并进某个子目录） | 1 个 ERP JSON，名字 `<父目录名>_根目录文件` |
+| 邮件 ≥2 个附件且都是子目录 | 一封邮件一次询价，但里面是多个独立单 | 多份，各 1 个 ERP JSON |
+
+**规则细节**
+
+- 入口 `resolve_input_units(path) -> list[InputUnit]`：返回 1 个 = 老行为；返回多个 = 逐份处理，
+  **互不影响**（一份失败不影响其余份）。
+- 「有子目录」= 子目录里**确实有受支持的文件**（空目录、`__MACOSX` 不算）。
+- 子目录内部**不再往下拆**：`A/B/x.txt` 全部算 A 那一份（「子目录内合并」）。
+- 每份产物：`processed/<任务ID>/` 下 ERP JSON / extracted / validation / CSV + **它自己那个子目录**
+  （整包搬进去，参考文件跟着自己那份走）。
+- 压缩包拆成多份：**压缩包只随第 1 份归档**（`archive_owner=True`），其余份在 validation 里记
+  `source_archive`（包名）+ `archive_owner: false` —— 不复制 N 份压缩包。
+- 共享邮件副档 `_email.meta.json`：每份**复制**一份；批次收尾清原件；失败那份复制进 `failed/` 留证。
+- 批次收尾 `finalize_batch()`：父目录被搬空 → 删掉；还剩东西（不支持的类型等）→ 日志明说
+  「没被任何一份报价用上」。
+- 退出码：全部成功 `0`；**任一份失败 → `1`**（成功那几份的 ERP JSON 照样在 processed 里）。
+- 失败隔离：失败那份的原路径搬进 `failed/failed_<时间>/`（zip 拆出来的份是复制），日志写
+  `处理状态: 失败 —— 继续处理同批剩余的 N 份`。
+
+**新增/改动**
+
+- `scripts/input_unit.py`：`InputUnit` 增 `origin / role / from_archive / archive_owner` 与
+  `is_batch_member`；新增 `resolve_input_units()`、`finalize_batch()`、`_child_dirs_with_files()`、
+  `_root_files()`；`_email.meta.json` 不再被报成「跳过的客户文件」；
+  `find_unit_meta()` 支持「子单元 → 父目录 → 压缩包旁」三级查找。
+- `scripts/main.py`：`main()` 改为「解析成 N 份 → 循环 + 逐份失败隔离 + 批次汇总」；
+  原单份流程收进 `process_unit()`；新增 `move_unit_to_failed()`；
+  `step6` 增加「压缩包只归档一次」「共享副档复制」；validation 的 `unit` 增
+  `kind_cn / role / path / origin / source_archive / archive_owner`。
+- 测试：`tests/test_input_unit.py` +6 项（子目录拆分与根下散文件、无子目录老口径不变、
+  zip 拆分 + 只归档一次、批次收尾两种结局、端到端两个子目录出两份报价）。
+
+> ⚠️ 别把「一个文件夹 = 一份报价」和「子目录 = 一份报价」记混：**看有没有子目录**。
+> 一个文件夹里躺着单号 A、单号 B 两个目录 → 两份报价、两个 ERP JSON。
+
+### 1.0.37 详细变更 —— 输入单元：一份报价由几个文件组成
+
+**业务原话（2026-10-20 森西）**：
+> 「单个文件属于独一份报价，文件夹和压缩包里的文件则为报价的全部参考文件。」
+
+| 输入 | 语义 | 产出 | 实现 |
+|---|---|---|---|
+| 单文件 | **独一份报价** | 1 个 ERP JSON | 老路径，行为不变 |
+| 文件夹 | 这一份报价的**全部参考文件** | 1 个 ERP JSON | `input_unit.resolve_input_unit` → `folder` |
+| `.zip` | 同上 | 1 个 ERP JSON | 安全解压到临时目录 → 同 folder（用完删） |
+| 邮件 ≥2 附件 | 同上（一次询价） | 1 个 ERP JSON | `ingest_email.ingest` 投成 `pending/<标题>_<时间>/` + `_email.meta.json` |
+
+**新增/改动**
+- `scripts/input_unit.py`（新）：单元解析、zip 安全解压（拒 `..` / 绝对路径，上限 200 个文件 / 200 MB）、
+  垃圾文件过滤（`__MACOSX` `.DS_Store` `Thumbs.db` `~$*` 隐藏文件 不支持的扩展名）并记账到 `unit.skipped`。
+- `extract_fields.merge_customer_data()` / `load_customer_unit()`（新）：多文件合并成**一个** `CustomerData`；
+  主文件 = 规范键最多的（同分→表格类→文件名），同键不同值 → `conflicts`；`rules.scan` 整单元重跑；
+  文本块按 `# 文件：xxx` 分段；`sources[规范键] = 文件名` 可溯源。
+- `main.py`：`resolve_input_unit()` 统一入口；`step1/step2/step6` 改吃单元；
+  单元产出 `<单元名>.csv`（长表：来源文件 / 规范键 / 值）；原始文件夹/zip **整包**归档进 `processed/<任务ID>/`；
+  `validation.json` 增加 `unit`（kind/members/skipped）与 `conflicts`。
+- `ingest_email.py`：≥2 附件 → 单元目录 + 一份共享副档；1 个附件仍是单文件（不制造目录）。
+- 测试：`tests/test_input_unit.py`（9 项：单元识别 / 垃圾过滤 / zip 穿越 / 合并口径 / 端到端一个文件夹只出一份）
+  + `tests/test_ingest_email.py` 两项（多附件成单元、单附件不变）。
+
+> **一份报价 = 一个 ERP JSON。** 看到同一单产出多个 JSON，先查是不是把「参考文件」
+> 当成「独立报价」逐个跑了 —— 那是这个口径要防的错。
+
+### 1.0.36 详细变更 —— `ECPMC` 产品英文名
+
+**业务 2026-10-20 指出**：「JSON 中 CPMS 有了，但是 ECPMC 却没有」。
+
+ERP 表单里 `txtCPMC`（产品名称）与 `txtECPMC`（产品英文名）是**两个独立字段**。
+1.0.34 把 `CPMC` 改成中文译名后，英文品名就只剩 `ECPMC` 这一个去处，而它一直是空的。
+
+| 字段 | 这一单的值 | 来源 | 谁填 |
+|---|---|---|---|
+| `CPMC` | `复活节彩蛋涂色本` | agent 从 `Title: Ostermalblock` 翻译 | agent |
+| `ECPMC` | `Ostermalblock` | 客户原文**照抄**（不翻译、不拼类别、不带 FSC） | 脚本（`rules.ecpmc.source_keys`） |
+
+- 档案写法：`rules.ecpmc.source_keys: [product_name, series_name]`（按顺序取第一个非空）。
+- **没声明 `rules.ecpmc` 的客户不产出该字段** —— igl 的 CPMC 里已经含英文系列名，业务说「不需要更改」，所以 igl 维持空值。
+- 测试：`test_决策_产品英文名落ECPMC`（含「未声明就留空」的反例）。
+
+### 1.0.35 详细变更 —— 装订方向与书脊方向分家
+
+**业务原话（2026-10-20，实单 `CU26070802` / `Ostermalblock`）**：
+> 「装订方向 如果我们识别不到则设置为 书脊方向为 Null」
+
+| 事项 | 决定 | 落点 |
+| --- | --- | --- |
+| 装订方向写了 | 照抄原文（`at the top` → `装订在头部`） | CPMS「装订」段 |
+| 装订方向识别不到 | CPMS **不写方向词**（不猜「书脊方向」/「装订在长边」） | `assets/cpms_spec.yaml` 装订段 notes + `docs/CPMS_写作规范.md` 3.3 |
+| ERP `Drop_SJFX` | 有 `N mm side` → 按装订边与较长边比较；**没有 → 留空（JSON `null`）** + WARN。**不许**落「长书脊」当默认值，也**不许**由「装订在顶部」反推短书脊 | `customers/*/rules.spine`: `default: ""`、`scripts/main.py` 第 8 步 |
+| 方向原文的抽取 | 新增 `rules.scan: binding_direction`（`at the top / at the head / at the side`），**只给 CPMS 与日志用，不映射任何 ERP 字段** | NGV 档案 |
+
+> 为什么必须分开：`at the top` 说的是**装订边位置**，`Drop_SJFX` 说的是**书脊在长边还是短边**，
+> 两个维度正交。混在一起会得出「PAD 头书 = 短书脊」这种没有依据的结论；
+> 而落「长书脊」当默认值，则是**用默认值冒充事实**——业务要的是空着让人看见。
+
+**顺带修的 FSC 坑（同一单暴露，`scripts/extract_fields.py`）**：
+客户写混用时长这样 —— `230 gsm artcard C1S (FSC-Mix)`。旧正则 `FSC\s*Mix` 不认连字符，
+只扫到备注里的 `FSC Recycled` → 把「混用」误判成单一取值，`FSCMC` 险些落成 `FSC Recycled`。
+现在：正则分隔符 `[\s-]*` + `unique_ignore_separators: true`（判等时空格/连字符/破折号一视同仁）——
+`FSC Mix` / `FSC mix` / `FSC-Mix` 算同一个值，`FSC-Mix` vs `FSC Recycled` 才算混用 → 留空 + `scan_note`。
+
+### 1.0.34 详细变更 —— `CPMC` 只放产品名，业务员落 `YWY`
+
+业务 2026-10-19 对实单 `CU26070802` 的更正（原话）：
+「`CPMC` 是这个产品的名称，你应该从文件中翻译出来；而 `KM` 也就是你，是你的名字，
+他应该填写在 `YWY`。」
+
+| 项 | 旧（1.0.21–1.0.33） | 新 |
+|---|---|---|
+| `CPMC` | `KM/Aldi <英文原文>(<FSC>)` 或 `<业务员>/<类别>+<附属件> <原文>(FSC)` | **产品名称的中文译名**，无前缀无类别无 FSC |
+| `CPMC_ZH` | 中文复合串 | 与 `CPMC` 同值 |
+| `YWY` | 留空（ERP 侧） | **`KM`**（脚本 `erp_fixed` 固定） |
+| `CPMC` 含中文 | 报警 | `allow_chinese: true` 的客户不报 |
+
+落地：
+
+- `customers/ngv.yaml`：`erp_fixed.YWY: KM`；`rules.cpmc` 改 `template/zh_template = 【中文品名待定】`
+  + `allow_chinese: true`；`salesperson` 仅留档。
+- `scripts/main.py`：中文硬不变量改为按 `cpmc.allow_chinese` 开关；占位符 WARN 现在同时点名
+  `CPMC` 与 `CPMC_ZH`。
+- 测试：原「CPMC 存英文表达」用例改写为 `test_决策_CPMC是产品名称_业务员落YWY`
+  （断言 `CPMC=【中文品名待定】`、`YWY=KM`、Wire-O → 26.07），另加
+  `test_决策_未开allow_chinese的客户_CPMC中文要报警` 保护旧行为。
+
+### 1.0.33 详细变更 —— `.eml` 读取（实单 `CU26070802`）
+
+业务给了 `CU26070802 - price enquiry. Ostermalblock.eml`：**没有 xlsx 附件**，规格全在邮件正文
+（NGV / KiK 线，`Naumann & Göbel` 发的纯英文 enquiry）。旧流程只会写一份 `_email_*.json`，
+`main.py` 无从下手 —— 等于这单读不进来。
+
+四个改动：
+
+| # | 改动 | 位置 |
+|---|---|---|
+| 1 | **正文即任务**：无可用附件时把正文落成 `<单号>_<标题>.txt` + sidecar，`main.py` 文本通道直接处理（`--no-body-as-task` 可关） | `ingest_email.py::write_body_task` |
+| 2 | **HTML 表格压平**：`<td>TPS:</td><td>148 x 210 mm portrait</td>` → `TPS: 148 x 210 mm portrait`，纯文本缺失时也能抽 | `html_tables_to_text` |
+| 3 | **内嵌图片不当附件**：`Content-Disposition: inline` 的 logo/签名图不落 pending | `parse_eml` |
+| 4 | **单号可从 `.eml` 文件名取**：`CU26070802 - price enquiry….eml` → `KHDDH=CU26070802`，来源标「邮件文件名」 | `extract_numbers(extra_texts=)` |
+
+同时修掉两个**静默丢值**的 bug（都只有真实邮件能暴露）：
+
+- 文本模式对「标签下一行」用 `match_label()`（整词包含）判标签 →
+  `64 pp + cover`、`100 gsm offset paper`、`30.100cps (one title, one language)` 全被跳过。
+  改为只拒绝「整行就是一个标签」。
+- `Quantity:` 命中合成键 `quantity_tiers`（文本模式没有档位行）→ 改投 `quantity`，
+  由 `parse_single_quantity()` 解析德式千分位（`30.100cps → 30100`）。
+
+配套：NGV 档案补 `sender_domains`（vemag-medien.de 等）与英文 enquiry 正文特征
+（`price enquiry` / `Finished binding` / `euroscale`），该单识别得分 530；
+`fields:` 补 `title` / `ETD` / `content` / `finished binding` / `packaging` 别名。
+测试 +5（正文任务 / 关闭开关 / 文件名取号 / inline 图 / HTML 表格）。
+
+### 1.0.32 详细变更 —— 严格模式（CPMS 只转录客户文件）
+
+1.0.31 把「人工确认单」当成补全清单，把确认单里才有的信息写进了 `CPMS`（窗口尺寸、钻石材质、
+背卡、料号、指定供应商、箱唛…），业务当场纠正：**没有就是没有**。
+
+规则（已写进第 5 节）：
+
+- `CPMS` 只允许写**客户提供的文件（附件 / 邮件正文）**里出现过的事实；
+- 客户没给的尺寸/材料/颜色数/料号/责任方，**一律不写**；空栏就是空栏；
+- 客户给区间（`50-60 stickers`）就照抄区间，不许「补成 60」；
+- `polybag` 不许推断成 `OPP`，`foil package` 不许换材料；
+- 业务/ERP 侧信息（指定供应商、纸箱强度、料号、供料责任）走 ERP 字段或邮件回复。
+
+落地：
+
+| 文件 | 变化 |
+|---|---|
+| `docs/CPMS_规范与样例集.md` | 5.1 节改为「严格模式 + 转录九问」；样例 7 换成严格版（含「删掉了什么」清单） |
+| `scripts/cpms_content_audit.py` | 新增：`--cpms <ERP.json> --source <客户文件>`，退出码 = **无出处条目数**，必须 0；同时报「客户有、我们没写」的漏抄项 |
+| `tests/test_cpms_content_audit.py` | 新增 11 项：编造数字/料号必须被抓、计数词按数字溯源、数字与单位分处两格可溯源、`gsm≡g`、`UV/0C` 不算料号 |
+| `references/cpms-real-sample-bjqx260704002.md` | 实单复盘：附件事实全集、合并版 vs 严格版、工具用法 |
+| `SKILL.md` 新增 0.1 节 | **一页速查**：严格模式 7 条 + 交付四道门命令 + 产物两份文件 + 档案别硬合并近义词 |
+| 两个子技能交付清单 | IGL 第 8 节 / NGV 第 10 节各加 3 条：严格模式、溯源审计 0、产物留来源对照 |
+
+实测：本单严格版 **0 无出处 / 0 漏抄**；合并版会被抓出 8 处无出处。
+
+### 1.0.31 详细变更 —— 真实确认单当参照，补「内容完整性」
+
+业务 2026-10-19：给真实 ERP 单据的目的**不是核对字段口径**，而是让 agent 对照人写的 `CPMS`
+学「写什么」（原单 `BDBH=BJXQ260704002`，线圈书 + 钻石贴纸装配）。
+
+落地：`docs/CPMS_规范与样例集.md` 新增样例 7 + 5.1 节「内容完整性九问」；
+`tests/test_cpms_doc_samples.py` 样例数 6 → 7；10 条内容维度差异与交付形状的复盘见
+`references/cpms-real-sample-bjqx260704002.md`；机械自检脚本 `scripts/cpms_content_audit.py`。
+同批还修了一处真错：`Wire-O` 被映射到 26.01 普通蛇圈书，真实是 **26.07 普通YO书**（Wire-O = 双线圈）。
 
 ### 1.0.30 详细变更 —— CPMS 规范 v2（业务拍板 5 条）
 

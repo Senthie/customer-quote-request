@@ -1,4 +1,4 @@
-"""钉住 `docs/CPMS_规范与样例集.md` 里的 6 份样例：**文档里的示例必须真能跑过 linter**。
+"""钉住 `docs/CPMS_规范与样例集.md` 里的 7 份样例：**文档里的示例必须真能跑过 linter**。
 
 理由（同 `test_cpms_lint.py` 开头）：规范文档里贴的示例如果自己不合规，规范就是废纸。
 这份测试直接从 markdown 里抽代码块，按同一份 `assets/cpms_spec.yaml` 校验，
@@ -53,9 +53,9 @@ def parse_samples(text: str) -> list[tuple[str, dict, str]]:
 SAMPLES = parse_samples(DOC.read_text(encoding="utf-8"))
 
 
-def test_文档存在且有六份样例():
+def test_文档存在且有七份样例():
     assert DOC.exists(), f"缺少规范文档：{DOC}"
-    assert len(SAMPLES) == 6, [t for t, _, _ in SAMPLES]
+    assert len(SAMPLES) == 7, [t for t, _, _ in SAMPLES]
 
 
 @pytest.mark.parametrize("title,fields,cpms", SAMPLES, ids=[s[0][:24] for s in SAMPLES])

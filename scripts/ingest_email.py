@@ -65,34 +65,77 @@ def html_to_text(html: str) -> str:
     return unescape(re.sub(r"[ \t]+", " ", html))
 
 
+def html_tables_to_text(html: str) -> str:
+    """把 HTML 表格压成 `标签: 值` 行 —— 报价需求常把规格写在表格里。
+
+    只处理「一行两列」这种 label/value 形态（客户邮件最常见），其余行按 `|` 拼接，
+    交给 text 解析器当自由文本扫。纯文本正文缺失时，这是唯一的规格来源。
+    """
+    out: list[str] = []
+    for table in re.findall(r"(?is)<table.*?</table>", html):
+        for row in re.findall(r"(?is)<tr.*?</tr>", table):
+            cells = [
+                re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cell))).strip()
+                for cell in re.findall(r"(?is)<t[dh][^>]*>(.*?)</t[dh]>", row)
+            ]
+            cells = [c for c in cells if c]
+            if not cells:
+                continue
+            if len(cells) == 2 and cells[0].rstrip().endswith((":", "：")):
+                out.append(f"{cells[0].strip()} {cells[1]}")
+            else:
+                out.append(" | ".join(cells))
+    return "\n".join(out).strip()
+
+
 def parse_eml(path: Path) -> dict:
-    """解析 .eml → {subject, sender, date, body, attachments:[(name, bytes)]}"""
+    """解析 .eml → {subject, sender, date, body, body_plain, body_html, attachments}
+
+    body 取值顺序：text/plain 正文 → HTML 转文本 → HTML 表格压平结果。
+    附件只认真正的 `Content-Disposition: attachment`；内嵌图片（logo/签名）不落盘。
+    """
     with open(path, "rb") as f:
         msg = email.message_from_bytes(f.read(), policy=policy.default)
 
-    body_parts = []
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
     attachments = []
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
             continue
-        disposition = str(part.get("Content-Disposition") or "")
+        disposition = str(part.get("Content-Disposition") or "").lower()
         filename = part.get_filename()
-        if "attachment" in disposition.lower() or (filename and not disposition):
+        if "attachment" in disposition or (filename and not disposition):
+            # inline 图片（logo、签名图）不是报价材料，跳过
+            if "inline" in disposition and part.get_content_maintype() == "image":
+                continue
             if not filename:
                 continue
             payload = part.get_payload(decode=True) or b""
             attachments.append((filename, payload))
             continue
         if part.get_content_type() == "text/plain":
-            body_parts.append(part.get_content())
+            plain_parts.append(part.get_content())
         elif part.get_content_type() == "text/html":
-            body_parts.append(html_to_text(part.get_content()))
+            html_parts.append(part.get_content())
+
+    plain = "\n".join(p for p in plain_parts if p).strip()
+    html_raw = "\n".join(html_parts)
+    html_text = html_to_text(html_raw).strip() if html_raw else ""
+    tables = html_tables_to_text(html_raw) if html_raw else ""
+    body = plain or html_text or tables
+    if tables and tables not in body:
+        # 正文是纯文本、规格却在表格里时，追加（重复的会被 text 解析器后写覆盖）
+        body = f"{body}\n\n{tables}".strip()
 
     return {
         "subject": str(msg.get("Subject") or "").strip(),
         "sender": str(msg.get("From") or "").strip(),
         "date": str(msg.get("Date") or "").strip(),
-        "body": "\n".join(p for p in body_parts if p).strip(),
+        "body": body,
+        "body_plain": plain,
+        "body_html": html_text,
+        "body_tables": tables,
         "attachments": attachments,
     }
 
@@ -105,7 +148,7 @@ def normalize_khdh(value: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def extract_numbers(profile, subject: str, body: str, logger=None) -> tuple:
+def extract_numbers(profile, subject: str, body: str, logger=None, extra_texts=None) -> tuple:
     """按档案 email 段声明的**每一组**单号规则，从标题/正文取号。
 
     返回 (numbers, sources)：
@@ -117,11 +160,16 @@ def extract_numbers(profile, subject: str, body: str, logger=None) -> tuple:
     """
     numbers: dict = {}
     sources: dict = {}
+    extra = [t for t in (extra_texts or []) if t]
     for rule_key, cfg, target in profile.number_rules():
-        for section, label, text in (
+        candidates = [
             ("subject_patterns", "邮件标题", subject),
             ("body_patterns", "邮件正文", body),
-        ):
+        ]
+        # 额外文本（.eml 文件名、附件名）用同一套规则再扫一遍 ——
+        # 实测 NGV 的香港单号常只出现在邮件文件名里（`CU26070802 - price enquiry….eml`）
+        candidates += [("body_patterns", "邮件文件名", t) for t in extra]
+        for section, label, text in candidates:
             if not text:
                 continue
             for pattern in cfg.get(section) or []:
@@ -157,6 +205,26 @@ def _unique_path(directory: Path, name: str) -> Path:
         target = directory / f"{stem}__{counter}{suffix}"
         counter += 1
     return target
+
+
+def _unit_dir_name(subject: str, eml_name: str = "") -> str:
+    """多附件邮件的单元目录名：标题（或 .eml 名）做人能认的名字。"""
+    raw = (subject or Path(eml_name).stem or "email").strip()
+    slug = re.sub(r"[^\w\u4e00-\u9fff.\- ]+", "", raw).strip().replace(" ", "_")
+    slug = re.sub(r"_+", "_", slug)[:70].strip("_") or "email"
+    return f"{slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _unique_dir(parent: Path, name: str) -> Path:
+    """建一个不重名的单元目录。"""
+    target = parent / name
+    counter = 1
+    while target.exists():
+        target = parent / f"{name}__{counter}"
+        counter += 1
+    target.mkdir(parents=True, exist_ok=False)
+    return target
+
 
 
 def write_meta(attachment_path: Path, meta: dict) -> Path:
@@ -199,8 +267,15 @@ def ingest(
     customer: str,
     pending_dir: Path,
     logger=None,
+    eml_name: str = "",
+    body_as_task: bool = True,
+    body_extra: str = "",
 ) -> dict:
-    """把附件落到 pending 并写 sidecar。attachments: [(文件名, bytes)]"""
+    """把附件落到 pending 并写 sidecar。attachments: [(文件名, bytes)]
+
+    没有可用附件时（客户把规格写在邮件正文里），body_as_task=True 会把正文
+    落成 `.txt` 任务，main.py 的文本通道可直接处理。
+    """
     pending_dir.mkdir(parents=True, exist_ok=True)
 
     probe_texts = [subject, body] + [name for name, _ in attachments]
@@ -210,7 +285,7 @@ def ingest(
     )
 
     # 先落盘，再用附件内容把客户身份判准（认不出时才有意义）
-    saved_paths = []
+    usable = []
     skipped = []
     for name, payload in attachments:
         suffix = Path(name).suffix.lower()
@@ -219,7 +294,25 @@ def ingest(
                 logger.warn(f"跳过不支持的附件类型: {name}")
             skipped.append(name)
             continue
-        target = _unique_path(pending_dir, Path(name).name)
+        usable.append((name, payload))
+
+    # ★ 一封邮件的 **≥2 个附件 = 同一份报价的全部参考文件**（业务 2026-10-20 口径）：
+    #   不能拆成多个任务（那样会变成 N 份报价），要把它们投递成一个**单元目录**，
+    #   main.py 把目录当一份报价处理（见 scripts/input_unit.py）。
+    #   只有 1 个附件时保持老行为（单文件 + 副档），不制造多余的目录。
+    unit_dir = None
+    if len(usable) >= 2:
+        unit_dir = _unique_dir(pending_dir, _unit_dir_name(subject, eml_name))
+        delivery_dir = unit_dir
+        if logger:
+            logger.info(f"本次邮件 {len(usable)} 个附件 → 视为**同一份报价**，"
+                        f"投递到单元目录: {unit_dir.name}/")
+    else:
+        delivery_dir = pending_dir
+
+    saved_paths = []
+    for name, payload in usable:
+        target = _unique_path(delivery_dir, Path(name).name)
         with open(target, "wb") as f:
             f.write(payload)
         saved_paths.append(target)
@@ -231,18 +324,62 @@ def ingest(
         if not profile.is_calibrated and logger:
             logger.warn(f"档案 {profile.id} 状态为 {profile.status} —— 未经校准，字段值需人工核对")
 
-    numbers, number_sources = extract_numbers(profile, subject, body, logger)
+    numbers, number_sources = extract_numbers(
+        profile, subject, body, logger, extra_texts=[eml_name] if eml_name else None)
     subject_khdh = numbers.get("KHDH", "")
     subject_src = number_sources.get("KHDH", "")
 
+    common_meta = {
+        "source": "email",
+        "ingested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "subject": subject,
+        "sender": sender,
+        "eml_name": eml_name,
+        "body": body,
+        "customer_profile": profile.id,
+        "customer_source": source,
+        "numbers": numbers,
+        "number_sources": number_sources,
+        "khdh": numbers.get("KHDH", ""),
+        "khdh_source": number_sources.get("KHDH", ""),
+    }
+
+    # 正文即任务：客户没附文件、规格全写在邮件里（NGV/KiK 这种 enquiry 邮件）
+    body_task_path = None
+    if not saved_paths and body.strip() and body_as_task:
+        body_task_path, _ = write_body_task(pending_dir, body, common_meta)
+        saved_paths.append(body_task_path)
+        if logger:
+            logger.info(f"邮件无可用附件 —— 正文已落为任务: {body_task_path.name}")
+
     saved = []
+    unit_meta_path = None
+    if unit_dir is not None:
+        # 单元：一份邮件上下文（标题/正文/单号）+ 全部参考文件，放在同一个目录里；
+        # main.py 读目录时用 `_email.meta.json`（见 input_unit.find_unit_meta）。
+        unit_meta = dict(
+            common_meta,
+            body_extra=body_extra,
+            attachments=[p.name for p in saved_paths],
+            attachment_original_name=unit_dir.name,
+            body_is_task=False,
+            is_unit=True,
+        )
+        unit_meta_path = unit_dir / "_email.meta.json"
+        with open(unit_meta_path, "w", encoding="utf-8") as f:
+            json.dump(unit_meta, f, ensure_ascii=False, indent=2)
+        if logger:
+            logger.info(f"单元副档: {unit_meta_path.name}（{len(saved_paths)} 个附件共用）")
+
     for target in saved_paths:
         meta = {
             "source": "email",
             "ingested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "subject": subject,
             "sender": sender,
+            "eml_name": eml_name,
             "body": body,
+            "body_extra": body_extra,
             "customer_profile": profile.id,
             "customer_source": source,
             # 单号：按目标 ERP 字段分别存（KHDH 客户单号 / KHDDH 香港单号 …）
@@ -252,11 +389,18 @@ def ingest(
             "khdh": subject_khdh,
             "khdh_source": subject_src,
             "attachment_original_name": target.name,
+            "body_is_task": target == body_task_path,
         }
-        meta_path = write_meta(target, meta)
-        if logger:
-            logger.info(f"附件已投递: {target.name} -> 副档 {meta_path.name}")
-        saved.append({"file": str(target), "meta": str(meta_path), "original_name": target.name})
+        if unit_meta_path is not None:
+            meta_path = unit_meta_path
+        else:
+            meta_path = write_meta(target, meta)
+            if logger:
+                logger.info(f"附件已投递: {target.name} -> 副档 {meta_path.name}")
+        saved.append({
+            "file": str(target), "meta": str(meta_path), "original_name": target.name,
+            "body_is_task": bool(meta.get("body_is_task")),
+        })
 
     # 即使没有附件也留一份邮件记录（正文/单号不能丢）
     email_record = pending_dir / f"_email_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -275,6 +419,8 @@ def ingest(
             "khdh_source": subject_src,
             "attachments": [s["original_name"] for s in saved],
             "skipped_attachments": skipped,
+            "body_task": body_task_path.name if body_task_path else "",
+            "body_is_task": bool(body_task_path),
         }, f, ensure_ascii=False, indent=2)
 
     return {
@@ -286,8 +432,38 @@ def ingest(
         "khdh_source": subject_src,
         "attachments": saved,
         "skipped_attachments": skipped,
+        "body_task": body_task_path.name if body_task_path else "",
+        "body_is_task": bool(body_task_path),
         "email_record": str(email_record),
+        # 多附件 → 一个单元目录（一份报价的全部参考文件）
+        "unit_dir": str(unit_dir) if unit_dir else "",
+        "is_unit": bool(unit_dir),
     }
+
+
+def body_task_name(subject: str, eml_name: str = "", numbers: dict | None = None) -> str:
+    """给「正文即任务」的 .txt 起名：单号前缀 + 标题，便于认。"""
+    number = ""
+    for key in ("KHDDH", "KHDH"):
+        if numbers and numbers.get(key):
+            number = str(numbers[key]).split(" / ")[0].strip()
+            break
+    raw = " ".join(x for x in (number, subject or Path(eml_name).stem) if x).strip()
+    slug = re.sub(r"[^\w\u4e00-\u9fff.\- ]+", "", raw).strip().replace(" ", "_")
+    slug = re.sub(r"_+", "_", slug)[:80].strip("_") or "email_body"
+    return f"{slug}.txt"
+
+
+def write_body_task(pending_dir: Path, body: str, meta: dict) -> tuple:
+    """没有可用附件时，把邮件正文落成 `.txt` 任务 —— main.py 的文本通道可直接吃。"""
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    name = body_task_name(meta.get("subject", ""), meta.get("eml_name", ""), meta.get("numbers") or {})
+    target = _unique_path(pending_dir, name)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(body.strip() + "\n")
+    meta = dict(meta, body_is_task=True, attachment_original_name=target.name)
+    meta_path = write_meta(target, meta)
+    return target, meta_path
 
 
 def read_attachment_meta(attachment_path: Path) -> dict:
@@ -323,6 +499,12 @@ def main() -> int:
     parser.add_argument("--attach", action="append", default=[], help="附件路径，可重复")
     parser.add_argument("--attach-dir", help="把该目录下所有支持的文件当附件投递")
     parser.add_argument("--customer", "-c", default="auto", help="客户 id（默认自动识别）")
+    parser.add_argument(
+        "--body-as-task", dest="body_as_task", action="store_true", default=True,
+        help="邮件没有可用附件时，把正文落成 .txt 任务（默认开）")
+    parser.add_argument(
+        "--no-body-as-task", dest="body_as_task", action="store_false",
+        help="只留邮件记录，不把正文落成任务")
     parser.add_argument("--pending-dir", default=str(PENDING_DIR), help="投递目录")
     parser.add_argument("--json", action="store_true", help="只输出 JSON 汇总")
     args = parser.parse_args()
@@ -330,6 +512,8 @@ def main() -> int:
     logger = _Logger()
     attachments = []
     subject, body, sender = args.subject, args.body, args.sender
+    eml_name = ""
+    body_extra = ""
 
     if args.eml:
         eml_path = Path(args.eml)
@@ -337,11 +521,15 @@ def main() -> int:
             print(f"文件不存在: {eml_path}", file=sys.stderr)
             return 1
         parsed = parse_eml(eml_path)
+        eml_name = eml_path.name
         subject = subject or parsed["subject"]
         body = body or parsed["body"]
         sender = sender or parsed["sender"]
+        body_extra = parsed.get("body_tables", "")
         attachments.extend(parsed["attachments"])
-        logger.info(f"解析 .eml: {eml_path.name}（附件 {len(parsed['attachments'])} 个）")
+        logger.info(
+            f"解析 .eml: {eml_path.name}"
+            f"（正文 {len(parsed['body'])} 字，附件 {len(parsed['attachments'])} 个）")
 
     for raw in args.attach:
         path = Path(raw)
@@ -374,6 +562,9 @@ def main() -> int:
         customer=args.customer,
         pending_dir=Path(args.pending_dir),
         logger=logger,
+        eml_name=eml_name,
+        body_as_task=args.body_as_task,
+        body_extra=body_extra,
     )
 
     if args.json:
@@ -387,13 +578,21 @@ def main() -> int:
                 print(f"单号 {target}: {value}{'  来源: ' + src if src else ''}")
         else:
             print("单号: 未从标题/正文取到（将由附件列/全表扫描兜底）")
+        if result.get("body_is_task"):
+            print("正文即任务: 邮件没有可用附件，正文已落为 .txt（规格在邮件里）")
         print(f"投递附件: {len(result['attachments'])} 个")
         for item in result["attachments"]:
             print(f"  - {item['original_name']}  →  {item['file']}")
         print(f"邮件记录: {result['email_record']}")
         print()
-        print("下一步: uv run ./scripts/main.py <上面任一附件> --customer auto")
-        print("        （main.py 会自动读副档里的邮件上下文与客户单号）")
+        if result.get("is_unit"):
+            print(f"这封邮件的 {len(result['attachments'])} 个附件 = 同一份报价的参考文件")
+            print(f"→ 已放进单元目录: {result['unit_dir']}")
+            print(f"下一步: uv run ./scripts/main.py \"{result['unit_dir']}\" --customer auto")
+            print("        （把目录整体当作一份报价处理，只产出一个 ERP JSON）")
+        else:
+            print("下一步: uv run ./scripts/main.py <上面任一附件> --customer auto")
+            print("        （main.py 会自动读副档里的邮件上下文与客户单号）")
     return 0
 
 

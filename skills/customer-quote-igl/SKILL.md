@@ -16,6 +16,15 @@ metadata:
 > **`CPMS` 必须 agent 手写** / 校验方法 / 新增客户 SOP。本文件只讲 **IGL 这一家**。
 > **唯一真源是档案 `customers/igl.yaml`** —— 改 IGL 的行为 = 改它，不改代码。
 > 改完必须重跑：`uv run pytest`（含端到端基线 `tests/test_pipeline.py`）。
+>
+> ★ 开工前先读总纲 `references/business-alignment-and-scope.md`：
+> 业务给参照单先问「比哪一层」（默认学 `CPMS`）、`CPMS` 严格模式、「没有就是没有」、
+> 口径变更四处同步、交付四道门。
+>
+> ⚠️ **`CPMC` 口径正在变更（2026-10-19 业务拍板）**：新口径是「`CPMC` = 产品名称（中文译名）」，
+> 业务员代号 `KM` 落 `YWY`，品牌/类别/FSC 都不进产品名。**NGV 已切换**，IGL 仍用旧写法
+> `23.01;无线胶装书-<系列名>`（端到端基线钉着）。给 IGL 改之前**先问业务**，
+> 改则四处同步（档案 → main.py → `tests/test_pipeline.py` 基线 → 本文件 + 总纲）。
 
 - 客户：IGL（香港书商；许可证 `LICENSE` 同仓库）
 - 状态：`calibrated`（用真实报价表 `PUZZLE COLOUR DISNEY.xlsx` 校准）
@@ -106,6 +115,12 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 `BGMS` `Remark4` `Remark3` —— 它们应**等于模板默认值**，`tests/test_pipeline.py`
 的 `UNTOUCHED` 列表逐个断言。往这些字段里加逻辑前先想清楚：**是通用能力还是 IGL 特有**。
 
+> ★ **`ECPMC`（产品英文名）2026-10-20 的业务口径**：NGV 已切到「`CPMC`=中文品名 / `ECPMC`=英文原文」，
+> **IGL 明确不改**（`CPMC` 仍是 `23.01;无线胶装书-<系列名>`，`ECPMC` 保持空）。
+> 所以 IGL 的 `ECPMC` 留在 `UNTOUCHED` 里是正确的。若业务以后要开：档案加
+> `rules.ecpmc.source_keys: [series_name]`，**同时**把 `ECPMC` 从 `UNTOUCHED` 移出并更新
+> `tests/test_pipeline.py` 基线 —— 只改档案会让基线测试红。
+
 ---
 
 ## 6. 回归基线与命令
@@ -165,10 +180,20 @@ CPMS=''（必须为空，交给 agent）
 ## 8. 交付检查清单（IGL 专用）
 
 - [ ] 客户识别是 `igl`（不是 NGV；正文特征优先）
+- [ ] ★ 若输入是**文件夹 / 压缩包 / 多附件邮件**：确认里面**确实是同一单**的参考文件
+      （`validation.json` 的 `unit.members` 全是这一单的材料、`conflicts` 已核对）。
+      IGL 常一单一个报价表；客户把**多单**塞进一个目录时会被合并成一份 —— 那是错的，
+      要拆开逐个跑（口径见总纲 `references/input-unit-multifile-quotes.md`）
 - [ ] 59 键顺序断言通过、`.validation.json` 里 **0 error**
 - [ ] 与 `tests/test_pipeline.py` 的基线逐字段一致（尤其是 `CPSL1~7`、`CD/KD/GD`）
 - [ ] `CPLB` 是树里真实节点，名称与树一致
 - [ ] `KHDH` 来自邮件或附件列，允许 `23992 / 23993` 这种多号写法
 - [ ] 档位数与客户表一致的**列序**（这是「档位顺序口径」待确认项，若业务改口径需重写规则）
-- [ ] `CPMS` 已由 agent 手写（非空），`extras_found` 里的附加信息一条不漏
+- [ ] `CPMS` 已由 agent 手写（非空），**严格模式**：只写客户文件里的事实，确认单/历史单据的补充信息不进 CPMS
+      —— 业务给真实单据时，目的是**学交付物怎么写**，不是逐字段对账；确需对账也只报「真错 / 口径差 / 格式差」三层
+      （口径与依据见 `customer-quote-ngv` 3.2、总纲第 5 节严格模式）
+      —— 规则与五种「柔性造数」见 `customer-quote-request/references/data-provenance-strict-mode.md`
+- [ ] ★ 严格模式自检：`uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <客户原始文件>` 退出码 0；
+      产物目录有 `CPMS_来源对照.md`（逐句出处）
+- [ ] `extras_found` 里的附加信息一条不漏
       （纸箱重量/尺寸、报价有效期、加箔/UV/击凸等增值工序都只存在于此）

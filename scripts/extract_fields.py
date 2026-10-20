@@ -65,6 +65,12 @@ class CustomerData:
     scan_notes: list = field(default_factory=list)        # 扫描过程中的「为什么没落值」（审计用）
     layout: str = ""                                      # 实际命中的抽取路径（审计用）
     profile_id: str = ""
+    # ── 输入单元（一份报价 = 单文件 / 文件夹 / 压缩包，2026-10-20）──────────
+    unit_kind: str = "file"                               # file | folder | archive
+    unit_label: str = ""                                  # 人看的说明（「文件夹（3 个参考文件）」）
+    members: list = field(default_factory=list)           # 这份报价由哪些文件组成
+    sources: dict = field(default_factory=dict)           # 规范键 → 出自哪个文件（溯源）
+    conflicts: list = field(default_factory=list)         # 同键不同值（交付前必须核对）
 
     def get(self, key: str, default: Any = "") -> Any:
         """先看分区/平铺抽出来的值，再退回 rules.scan 正则扫描出来的值。
@@ -84,7 +90,7 @@ class CustomerData:
         return bool(str(self.get(key, "") or "").strip())
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "profile_id": self.profile_id,
             "layout": self.layout,
             "values": self.values,
@@ -94,6 +100,16 @@ class CustomerData:
             "unmatched_labels": self.unmatched,
             "extras_found": self.extras_found,
         }
+        # 单文件保持老结构（下游/测试都按这 8 个键读），单元才追加溯源信息
+        if self.unit_kind != "file" or self.members:
+            out["unit"] = {
+                "kind": self.unit_kind,
+                "label": self.unit_label,
+                "members": self.members,
+            }
+            out["sources"] = self.sources
+            out["conflicts"] = self.conflicts
+        return out
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), ensure_ascii=False, indent=2)
@@ -400,9 +416,27 @@ def scan_values(texts: list, profile: CustomerProfile, logger=None,
 
         if entry.get("unique"):
             distinct: list = []
+
+            def _dedupe_key(v: str) -> str:
+                """「不唯一」的判等口径。
+
+                `unique_ignore_separators: true` 时把空格/连字符/短破折号一律当空格 ——
+                实测（CU26051601-01 / CU26070802）：同一个 FSC 值客户会写成
+                `FSC Mix`、`FSC mix`、`FSC-Mix` 三种，旧实现按字面判等会把它当成
+                「2 个不同取值」而误留空；反过来只认空格分隔时又会把真正的
+                `FSC-Mix` 混用漏掉、错落成单一取值。两种错都在真单上出现过。
+                """
+                s = v.strip().lower()
+                if entry.get("unique_ignore_separators"):
+                    s = re.sub(r"[\s\-–—_]+", " ", s)
+                return s
+
+            keys: list = []
             for m in matches:
                 n = _norm(m)
-                if n.lower() not in [d.lower() for d in distinct]:
+                k = _dedupe_key(n)
+                if k not in keys:
+                    keys.append(k)
                     distinct.append(n)
             if len(distinct) > 1:
                 msg = (f"rules.scan: {key} 在文件里出现 {len(distinct)} 个不同取值 "
@@ -716,7 +750,18 @@ def extract_from_text(file_path: str, profile: CustomerProfile, logger=None,
 
         if not canonical or not rest:
             continue
-        if not profile.match_label(rest):
+        # `quantity_tiers` 是「多档位行」的合成键，文本模式里没有档位行：
+        # 客户写 `Quantity: 30.100cps` 时，这个字符串就是**单一数量**，
+        # 交给 main.parse_single_quantity() 解析（德式千分位、`= 总数` 都在那儿处理）。
+        if canonical == "quantity_tiers":
+            canonical = "quantity"
+        # 只拒绝「整行就是一个标签」（密集标签行的下一行还是标签）；
+        # 不能用 match_label（整词包含）—— 值里带标签词很常见：
+        # `64 pp + cover`（含 cover）、`100 gsm offset paper`（含 paper）、
+        # `30.100cps (one title, one language)`（含 title），那样这些值会被整条丢掉。
+        rest_is_label = bool(profile.match_label_exact(rest)
+                             or profile.match_label_exact(rest.rstrip(" :：=")))
+        if not rest_is_label:
             values.setdefault(canonical, rest)
             raw_labels.setdefault(line[:end].strip(" :=\t-|"), rest)
 
@@ -763,6 +808,142 @@ def load_customer_data(file_path: str, profile: CustomerProfile, logger=None,
     if suffix in TEXT_SUFFIXES:
         return extract_from_text(file_path, profile, logger, filename=name)
     raise ValueError(f"不支持的文件格式: {suffix}（支持 {TABLE_SUFFIXES + TEXT_SUFFIXES}）")
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────
+def merge_customer_data(items: list, profile: CustomerProfile, logger=None,
+                        unit_kind: str = "folder", unit_label: str = "") -> CustomerData:
+    """把「一份报价的多个参考文件」合成**一个** CustomerData。
+
+    业务口径（2026-10-20）：文件夹 / 压缩包里的文件是**同一份报价**的参考材料
+    （规格表 + 确认单 + 补充说明 ……），所以字段要合并成一份，而不是一个文件一份。
+
+    合并规则（都要能在产物里看得见）：
+      1. **主文件** = 抽到规范键最多的那个；同分时表格类优先，再按文件名排序。
+      2. 同一规范键，主文件的值胜出；**其它文件给了不同的值 → 记进 `conflicts`**
+         （交付前必须人工核对，不许静默丢）。
+      3. `rules.scan`（FSC 这类）**在整个单元上重跑**，而不是各文件各判 ——
+         否则「规格表写 FSC-Mix、备注写 FSC Recycled」这种真混用会被单文件视角漏掉。
+      4. 文本块按文件分段拼接（`# 文件：xxx`），CPMS 与溯源审计都靠它。
+
+    items: [(文件名, CustomerData), ...]
+    """
+    def log(msg: str, level: str = "info"):
+        if logger is not None:
+            getattr(logger, level, logger.info)(msg)
+
+    if not items:
+        raise ValueError("merge_customer_data: 空输入")
+
+    table_suffixes = TABLE_SUFFIXES
+    ordered = sorted(
+        items,
+        key=lambda it: (
+            -len(it[1].values),                                    # 规范键多的优先
+            0 if Path(it[0]).suffix.lower() in table_suffixes else 1,  # 表格类优先
+            it[0],                                                  # 再按文件名，保证可复现
+        ),
+    )
+    primary_name = ordered[0][0]
+    merged = CustomerData(profile_id=ordered[0][1].profile_id or profile.id,
+                          unit_kind=unit_kind, unit_label=unit_label,
+                          members=[name for name, _ in items])
+
+    # ① 规范键：主文件优先，冲突留痕
+    for name, data in ordered:
+        for key, value in (data.values or {}).items():
+            val = str(value).strip() if value is not None else ""
+            if not val:
+                continue
+            if key not in merged.values:
+                merged.values[key] = value
+                merged.sources[key] = name
+                continue
+            kept = str(merged.values.get(key) or "").strip()
+            if _norm_for_compare(kept) != _norm_for_compare(val):
+                merged.conflicts.append({
+                    "key": key,
+                    "kept": kept,
+                    "kept_from": merged.sources.get(key, primary_name),
+                    "other": val,
+                    "other_from": name,
+                })
+
+    # ② 数量档位 / 原始标签：第一个非空
+    for _, data in ordered:
+        if not merged.quantity_tiers and data.quantity_tiers:
+            merged.quantity_tiers = list(data.quantity_tiers)
+        for label, value in (data.raw_labels or {}).items():
+            merged.raw_labels.setdefault(label, value)
+
+    # ③ 文本块：按文件分段（CPMS / 溯源 / 人工核对都靠它）
+    for name, data in ordered:
+        merged.text_blocks.append(f"# 文件：{name}")
+        merged.text_blocks.extend(str(b) for b in (data.text_blocks or []))
+    # 文件名也是线索（香港单号常只出现在文件名里）→ 拼进扫描语料
+    file_names = [name for name, _ in items]
+    merged.text_blocks.extend(f"# 文件名：{n}" for n in file_names)
+
+    # ④ 未识别标签 / 附加信息：合并 + 标明出处
+    for name, data in ordered:
+        for label in (data.unmatched or []):
+            merged.unmatched.append(f"{name}: {label}")
+        for extra in (data.extras_found or []):
+            if extra not in merged.extras_found:
+                merged.extras_found.append(extra)
+
+    # ⑤ 扫描类（unique 键）：整个单元重跑一次
+    notes: list = []
+    merged.scanned = scan_values(list(merged.text_blocks) + file_names, profile,
+                                 logger, notes=notes)
+    for name, data in ordered:
+        for note in (data.scan_notes or []):
+            if note not in notes:
+                notes.append(note)
+    merged.scan_notes = notes
+    merged.layout = f"unit[{unit_kind}]:" + "+".join(
+        (d.layout or "unknown") for _, d in ordered)
+
+    if merged.conflicts:
+        log(f"  ⚠ 单元内有 {len(merged.conflicts)} 处同键不同值（已保留主文件值，差异记账）:", "warn")
+        for c in merged.conflicts:
+            log(f"    - {c['key']}: 用 {c['kept']!r}（{c['kept_from']}）"
+                f"，另见 {c['other']!r}（{c['other_from']}）", "warn")
+    return merged
+
+
+def _norm_for_compare(value: str) -> str:
+    """判断「两个文件是不是给了同一个值」：只在空白/大小写上放宽，不做语义猜测。"""
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def load_customer_unit(unit, profile: CustomerProfile, logger=None) -> CustomerData:
+    """按输入单元（单文件 / 文件夹 / 压缩包）抽取数据。
+
+    单文件 = 独一份报价 → 走原来的单文件路径，行为一个字节都不变；
+    单元 → 逐个文件抽取后合并（见 merge_customer_data）。
+    """
+    members = list(getattr(unit, "members", []) or [])
+    kind = str(getattr(unit, "kind", "file"))
+    if kind == "file" or len(members) <= 1:
+        path = members[0] if members else getattr(unit, "path", None)
+        return load_customer_data(str(path), profile, logger)
+
+    items = []
+    for member in members:
+        if logger is not None:
+            logger.info(f"  · 参考文件: {member.name}")
+        try:
+            data = load_customer_data(str(member), profile, logger, filename=member.name)
+        except Exception as exc:  # 单个文件读不了不该拖垮整份报价
+            if logger is not None:
+                logger.warn(f"    读取失败，已跳过: {member.name}（{exc}）")
+            continue
+        items.append((member.name, data))
+    if not items:
+        raise ValueError(f"单元里的文件全部读取失败（{len(members)} 个）")
+    return merge_customer_data(items, profile, logger, unit_kind=kind,
+                               unit_label=str(getattr(unit, "label", "")))
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────

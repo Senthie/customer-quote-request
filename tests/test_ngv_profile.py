@@ -186,6 +186,70 @@ def test_扫描_装订边要带单位才认():
     assert scan_values(["210", "mm side"], NGV)["binding_side"] == "210"
 
 
+def test_扫描_装订方向原文只进CPMS不映射ERP():
+    """`perfect binding at the top` → 扫出 `at the top`，**只给 CPMS 用**。
+
+    业务口径（2026-10-20，实单 CU26070802 / Ostermalblock）：
+    装订边位置（顶/底/左/右）和 ERP 的「长/短书脊」是两个维度，
+    方向原文不许拿去反推 Drop_SJFX。
+    """
+    got = scan_values(["softcover, perfect binding at the top, square back"], NGV)
+    assert got["binding_direction"] == "at the top"
+    # 没有方向词的写法不许凭空造
+    assert "binding_direction" not in scan_values(["perfect binding"], NGV)
+
+
+def test_书脊方向_识别不到装订方向时留空():
+    """识别不到装订边/装订方向 → Drop_SJFX **留空（null）**，不猜「长书脊」。
+
+    业务原话（2026-10-20）：「装订方向 如果我们识别不到则设置为 书脊方向为 Null」。
+    ⚠️ 两个反例都钉在这里：
+      * 不能落「长书脊」（默认值 ≠ 事实，等于替业务拍板）；
+      * 不能因为 `at the top` 推成「短书脊」—— 那是装订边位置，不是书脊在长边/短边。
+    """
+    # 真实单的形态：148x210 portrait + perfect binding at the top，没有 `N mm side`
+    got = _map({
+        "size": "148 x 210 mm portrait",
+        "binding": "softcover, perfect binding at the top, square back",
+        "binding_direction": "at the top",
+    })
+    assert (got["CD"], got["KD"]) == (148, 210)
+    assert not got["Drop_SJFX"], "识别不到装订方向 → 书脊方向留空（null）"
+
+    # 连方向都没有：同样留空
+    got = _map({"size": "148 x 210 mm portrait", "binding": "perfect binding"})
+    assert not got["Drop_SJFX"]
+
+
+def test_书脊方向_给了装订边仍按装订边判():
+    """有 `N mm side` 时判据不变：装订边 ≥ 较长边 → 长书脊，否则短书脊。"""
+    got = _map({"size": "145 x 210 mm portrait", "binding_side": "210"})
+    assert got["Drop_SJFX"] == "长书脊"
+    got = _map({"size": "145 x 210 mm portrait", "binding_side": "145"})
+    assert got["Drop_SJFX"] == "短书脊"
+
+
+def test_扫描_连字符FSC写法要分开判真混用与同值():
+    """`FSC-Mix` 与 `FSC Mix` 是**同一个值**，`FSC-Mix` 与 `FSC Recycled` 才是混用。
+
+    两个真实单把这个坑踩全了：
+      * CU26051601-01：同一份附件里 `FSC mix` / `(FSC Mix)` / `(FSC-Mix)` 混着写
+        → 旧实现按字面判等 → 误当成 2 个取值 → FSCMC 被错留空；
+      * CU26070802：纸张 `FSC-Mix`、备注 `FSC Recycled` → 只认空格分隔的正则
+        把 `FSC-Mix` 漏掉 → 错落成 `FSC Recycled`。
+    """
+    # 同值（大小写 + 连字符差异）→ 正常落值
+    got = scan_values(["art card C1S (FSC Mix)", "sticker paper (FSC-Mix)",
+                       "text paper (FSC mix)"], NGV)
+    assert got["fsc"].lower().replace("-", " ") == "fsc mix"
+
+    # 真混用 → 留空 + 记账
+    notes: list = []
+    got = scan_values(["cover (FSC-Mix)", "noted: accept FSC Recycled"], NGV, notes=notes)
+    assert "fsc" not in got, "FSC-Mix 与 FSC Recycled 是真混用 → 不唯一就留空"
+    assert notes and "不唯一就留空" in notes[0]
+
+
 def test_扫描_不唯一就留空并记账():
     """`unique: true` —— 同一份文件里扫出多个不同取值时不落值（业务 2026-09-24 拍板）。
 
@@ -536,53 +600,62 @@ def test_真实样本_extras_found不再混入纯标签():
 #   ③ CPSX 取不到就显示「无」
 #   ④ 超过报价截止日期必须提醒业务
 
-def test_决策_CPMC存英文表达_CPMC_ZH存中文表达():
-    """业务 2026-09-24：「将 CPMC 修改为存英文表达，使用 CPMC_ZH 来标注中文表达」。
+def test_决策_CPMC是产品名称_业务员落YWY():
+    """业务 2026-10-19（实单 CU26070802）更正：
 
-    权威导出的历史写法（中文表达）是：
-        `<业务员>/Aldi <中文品名>[ <中文类别>]/<英文原文>(<FSC>)`
-    现在拆成两份：
-        CPMC    = `KM/Aldi <英文品名原文>(<FSC Mix>)`            ← 纯英文，不许有中文字符
-        CPMC_ZH = `KM/Aldi <中文品名> <中文类别>/<英文原文>(FSC)`  ← 中文表达
+    * `CPMC` **就是产品名称**，由 agent 从客户文件译出 —— 不带业务员、品牌（Aldi/KiK）、
+      类别、FSC。脚本不会翻译 → 两侧都写占位符，交付前必须被替换。
+    * 业务员代号 **KM 落 `YWY`**，不再作 CPMC 前缀（此前 `KM/Aldi …` 是错的）。
+    * Wire-O → CPLB 26.07 普通YO书（真实 ERP 反查过）。
     """
     values = {"product_name": "Basteln&Gestalten Diamantsticker Nageldesign",
               "fsc": "FSC Mix", "binding_instructions": "Wire-O Binding"}
     r = _map(values)
-    # CPMC：英文表达（业务员 + Aldi + 英文原文 + FSC），**不含中文**
-    assert r["CPMC"] == ("KM/Aldi Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)"), r["CPMC"]
-    assert not re.search(r"[\u4e00-\u9fff]", r["CPMC"]), "CPMC 里不许出现中文"
-    # CPMC_ZH：中文表达（内部字段，下划线键取）
-    assert r["_cpmc_zh"] == ("KM/Aldi 【中文品名待定】 普通蛇圈书/"
-                             "Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)"), r["_cpmc_zh"]
+    assert r["CPLB"] == "26.07;普通YO书", r["CPLB"]
+    # 产品名由 agent 翻译 → 脚本给可见占位符，不带任何前缀
+    assert r["CPMC"] == "【中文品名待定】", r["CPMC"]
+    assert r["_cpmc_zh"] == "【中文品名待定】", r["_cpmc_zh"]
+    # 业务员落 YWY
+    assert r["YWY"] == "KM", r["YWY"]
 
-    # 中文品名填好后（= 改档案 rules.cpmc.cn_name 一处）：CPMC 不变，只有 CPMC_ZH 变
+    # 译好之后（= 改产物里的两个字段）：CPMC 是纯中文品名，不触发「含中文」告警
     import dataclasses
 
-    cpmc_rules = dict(NGV.rules["cpmc"], cn_name="钻石贴纸美甲设计")
-    filled = dataclasses.replace(NGV, rules={**NGV.rules, "cpmc": cpmc_rules})
-    r2 = _map({**values, "fsc": "FSC mix"}, profile=filled)
-    assert r2["CPMC"] == "KM/Aldi Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)"
-    assert r2["_cpmc_zh"] == ("KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/"
-                              "Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)")
-    # FSC 的大小写要按 ERP 枚举归一化（表格里常写 "FSC mix"）
-    assert "(FSC Mix)" in r2["_cpmc_zh"]
-
-    # 业务员没配（留空）时不留前导斜杠
-    no_sales = dataclasses.replace(
-        NGV, rules={**NGV.rules, "cpmc": {**NGV.rules["cpmc"], "salesperson": ""}})
-    assert not _map(values, profile=no_sales)["CPMC"].startswith("/")
+    filled = dataclasses.replace(
+        NGV, rules={**NGV.rules,
+                    "cpmc": {**NGV.rules["cpmc"], "template": "钻石贴纸美甲设计",
+                             "zh_template": "钻石贴纸美甲设计"}})
+    r2 = _map(values, profile=filled)
+    assert r2["CPMC"] == "钻石贴纸美甲设计"
+    assert r2["_cpmc_zh"] == "钻石贴纸美甲设计"
 
 
-def test_决策_CPMC里出现中文要当场报警():
-    """硬不变量：声明了 zh_template 的客户，CPMC 里不许有中文 —— 写错档案要立刻可见。
+def test_决策_产品英文名落ECPMC():
+    """业务 2026-10-20：`CPMS` 有了、`ECPMC`（产品英文名）却空着 —— 必须落客户原文英文品名。
 
-    否则要等 ERP 那边报错才发现「中文跑进了 CPMC」。
+    ERP 里 `CPMC` / `ECPMC` 是两个独立字段（`txtCPMC` 产品名称 / `txtECPMC` 产品英文名）。
+    NGV 的 CPMC 现在是中文译名，英文名没有别的地方去 → `ECPMC`。
+    口径：**照抄客户文件原文**，不翻译、不拼类别、不带 FSC。
     """
+    r = _map({"product_name": "Ostermalblock", "fsc": "FSC Mix"})
+    assert r["ECPMC"] == "Ostermalblock", r["ECPMC"]
+    assert r["CPMC"] == "【中文品名待定】"      # 中文仍由 agent 译，两者互不影响
+
+    # 没声明 rules.ecpmc 的客户不产出该字段（不动 igl 基线）
+    import dataclasses
+    no_ecpmc = dataclasses.replace(
+        NGV, rules={k: v for k, v in NGV.rules.items() if k != "ecpmc"})
+    assert _map({"product_name": "Ostermalblock"}, profile=no_ecpmc)["ECPMC"] == ""
+
+
+def test_决策_未开allow_chinese的客户_CPMC中文要报警():
+    """默认口径仍然有效：没声明 `cpmc.allow_chinese` 的客户，CPMC 里不许有中文。"""
     import dataclasses
 
     bad = dataclasses.replace(
         NGV, rules={**NGV.rules,
-                    "cpmc": {**NGV.rules["cpmc"], "template": "{cn_name} {product_name}"}})
+                    "cpmc": {**NGV.rules["cpmc"], "allow_chinese": False,
+                             "template": "中文品名 {product_name}"}})
     warnings: list = []
 
     class _Rec:

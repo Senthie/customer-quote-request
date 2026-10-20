@@ -48,8 +48,18 @@ detect:
     - "VK-Verpackung"
     - "Sortierung/VE"
     - "Schutzumschlag"
+    # 2026-10-19：NGV 也会发「纯英文 enquiry 邮件」（正文即规格，无 xlsx 附件）。
+    # 这类没有 enquiry 表单标签，靠下面这几个正文特征识别（KiK / Ostermalblock 实单）。
+    - "price enquiry"
+    - "Finished binding"
+    - "euroscale"
+    - "Technical Specification and Print Runs"
   min_signature_hits: 2
-  sender_domains: []
+  # 发件方域名（Naumann & Göbel / VEMAG 出版社集团）；域名 30 分，配合正文特征才稳
+  sender_domains:
+    - vemag-medien.de
+    - naumann-goebel.de
+    - ngv.de
   subject_keywords:
     - ngv
 
@@ -59,15 +69,15 @@ detect:
 #   * 校准报告 / unmatched 统计用它；
 #   * 万一 NGV 换了平铺写法，auto_pairs 还能兜住。
 fields:
-  product_name:         ["enquiry", "Anfrage"]
+  product_name:         ["enquiry", "Anfrage", "title", "Titel"]
   quantity:             ["quantity", "Auflage"]
   versions:             ["versions", "Versionen"]
   offer_deadline:       ["offer deadline", "Angebotsfrist"]
   files_to_printer:     ["files to printer", "Inhalt an Drucker"]
-  delivery_date:        ["ETA w/h", "Lieferung"]
+  delivery_date:        ["ETA w/h", "Lieferung", "ETD"]
   size:                 ["TPS", "Format"]
   extent:               ["extent", "Umfang"]
-  text_material:        ["paper", "Papier"]
+  text_material:        ["paper", "Papier", "content", "Inhalt"]
   text_printing_spec:   ["printing", "Druck"]
   ends_material:        ["ends", "Vor-/Nachsatz"]
   boards:               ["boards", "MGP"]
@@ -75,11 +85,12 @@ fields:
   cover_material:       ["cover", "Umschlag"]
   finishes:             ["finishing", "Veredelung"]
   jacket_material:      ["jacket", "Schutzumschlag"]
-  binding:              ["binding"]
+  # 纯英文 enquiry 邮件写 `Finished binding:`（KiK / Ostermalblock 实单）
+  binding:              ["binding", "finished binding", "bindung fertig"]
   binding_instructions: ["Bindung"]
   back:                 ["back", "Rücken"]
   specials:             ["specials", "Sonstiges"]
-  primary_packaging:    ["primary packaging", "VK-Verpackung"]
+  primary_packaging:    ["primary packaging", "VK-Verpackung", "packaging", "verpackung"]
   sticker:              ["sticker", "Aufkleber"]
   packaging_unit:       ["packing unit", "VE"]
   assortment:           ["assortment", "Sortierung/VE"]
@@ -234,6 +245,9 @@ erp_fixed:
   SHFS: FOB(NGV)          # 送货方式：ERP 下拉里就有 FOB(NGV) 这一项
   BZFS: 纸箱包装
   TBLX: 不打卡板
+  # 业务员（YWY）：业务 2026-10-19 拍板 —— 业务员代号 **KM** 属于 YWY，
+  # **不是** CPMC 的前缀（此前把 KM 拼在 CPMC 最前面是错的）。
+  YWY: KM
   BZ: 美元
   PXH: ""                 # 显式留空（见上）
   # YYS 也显式留空：实际值由 rules.versions 决定（单语言 → 空、提取不到 → 0、
@@ -382,7 +396,11 @@ rules:
       - { match: "safety\\s*saddle|saddle[- ]stitch", node: "24.03" }   # 贴纸骑钉书
       - { match: "perfect\\s*binding|open\\s*pad|pad\\s*bind", node: "23.06" }  # PAD头书(全封面)
       - { match: "ridged\\s*box|folded\\s*box|\\blose\\b", node: "29.04" }      # 其它套装
-      - { match: "spiral|wire[- ]?o|线圈", node: "26.01" }
+      # ★ 2026-10-19 从真实 ERP 导出反查：`Wire-O Binding` → CPLB「普通YO书」(26.07)。
+      #   Wire-O 是**双线圈**（YO），26.01 是单线圈「普通蛇圈书」—— 之前把两者混在一个正则里、
+      #   落到 26.01，实际单据（BJXQ260704002 / PR-00091345）是 26.07。别合并回去。
+      - { match: "wire[- ]?o|wiro|YO书|双线圈", node: "26.07" }        # 普通YO书
+      - { match: "spiral|蛇圈|单线圈|线圈", node: "26.01" }                  # 普通蛇圈书
       - { match: "case\\s*bound|hardcover|精装", node: "22.02" }
   product_category:
     fallback: "32.00;其他"
@@ -400,14 +418,27 @@ rules:
   #   → CPMC 只留**英文**（业务员/Aldi + 英文品名原文 + FSC），
   #     中文表达（就是上面那条历史写法）落内部字段 **CPMC_ZH**（见
   #     assets/internal_export_fields.yaml）。main.py 会检查 CPMC 里没有中文字符。
+  # ★ 业务 2026-10-19 更正（实单 CU26070802）：**CPMC 就是产品名称**，
+  #   由 agent 从客户文件里译出来；业务员（KM）落 `YWY`，不进 CPMC。
+  #   品牌（Aldi/KiK）、类别、FSC 也都不再拼进产品名 —— 它们各有自己的字段。
   cpmc:
-    salesperson: KM
+    salesperson: KM        # 落 YWY（见 erp_fixed），不再作 CPMC 前缀
+    allow_chinese: true    # CPMC 允许中文（产品名的中文译名）
     # 中文品名是**每单**的（不是客户常量）→ 这个开关给「品名稳定」的客户偶尔用；
     # NGV 保持空，由 agent 交付前直接改产物 JSON 里的 CPMC_ZH（脚本会给可见占位符）。
     cn_name: ""
-    template: "{salesperson}/Aldi {product_name}({fsc})"
-    zh_template: "{salesperson}/Aldi {cn_name} {cplb_name}/{product_name}({fsc})"
+    # CPMC / CPMC_ZH 都只放**产品名称**。脚本不会翻译 → 两侧都给占位符，
+    # 交付前由 agent 从客户文件译出中文名并同时改这两个字段（严格模式：不许猜）。
+    template: "【中文品名待定】"
+    zh_template: "【中文品名待定】"
     needs_agent: true
+  # 产品英文名 ECPMC（ERP 独立字段 `txtECPMC`，label「产品英文名」）：
+  # ★ 业务 2026-10-20 指出：CPMS 有了、ECPMC 却空着 —— 它是**必看的品名字段**。
+  #   取值 = 客户文件里的英文品名原文（`Title: Ostermalblock` → `Ostermalblock`），
+  #   **照抄，不翻译、不拼类别、不带 FSC**（那些是 CPMC 的事）。
+  #   NGV 的英文品名在规范键 product_name；取不到再退回 series_name。
+  ecpmc:
+    source_keys: [product_name, series_name]
   # 产品属性 CPSX：NGV 的表单里**没有**年龄段/安全检查栏 → 推不出来时的口径由业务定：
   #   业务 2026-09-24：「CPSX 如果没有获取到就显示**无**」
   #   同日补充：「『无』使用 json 里的 null 填充」→ 产物里落的是 **null**（不是字符串「无」）。
@@ -431,13 +462,24 @@ rules:
     WCRQ: { mode: empty }
   # 书脊方向 Drop_SJFX：NGV 走「装订边」判据 —— Bindung 行右边给了
   # `<N> mm side`，N 等于较长边即长书脊（145x210 + 210 mm side → 长书脊，
-  # 与对应 ERP 导出一致）。没给装订边时退回 spine.default，
-  # 由 main.py 打 WARN 提示人工确认。套装类跳过（书脊方向无意义）。
+  # 与对应 ERP 导出一致）。
+  # ★ 业务口径（2026-10-20 二次拍板，实单 CU26070802 / Ostermalblock）：
+  #   **识别不到装订方向 / 装订边 → `Drop_SJFX` 留空（JSON `null`），不猜长/短书脊。**
+  #   为什么：邮件只说 `perfect binding at the top`，没给 `N mm side`。
+  #   「顶/底/左/右」是**装订边位置**，和 ERP 的「长/短书脊」不是同一维度，
+  #   反推不出长/短 → 认不出来就空着（业务原话：「识别不到则设置为 书脊方向为 Null」）。
+  #   装订方向原文（`at the top`）只写进 CPMS 的「装订」段，不参与 ERP 判定。
+  #   套装类跳过（书脊方向无意义）。
   spine:
     mode: binding_side
     long: 长书脊
     short: 短书脊
-    default: 长书脊
+    # 识别不到装订边 / 装订方向时的落库值：**空**（main.py 会写成 JSON null 并打 WARN）。
+    # ⚠️ 别改回「长书脊」—— 业务 2026-10-20 明确要求留空。
+    default: ""
+    default_note: "识别不到装订方向 → 书脊方向留空（null），不猜长/短书脊"
+    # 装订方向原文的规范键（rules.scan 扫出）；仅供 CPMS 与日志引用，不映射 ERP 字段。
+    direction_keys: [binding_direction]
     skip_tops: [套装]
   # 全表正则扫描：不挂标签、只在某处出现一次的值
   scan:
@@ -445,9 +487,17 @@ rules:
     # fsc 带 unique: true —— **不唯一就留空**（业务确认 2026-09-24）。
     # 实测 CU26072301 同时有 FSC Recycled（盒底）/ FSC Mix（盒盖纸+卡片）/
     # FSC 100%（竹底座），权威 ERP 导出里 FSCMC 是**空的** → 扫到第一个就填是错的。
-    - { key: fsc, unique: true, pattern: "FSC\\s*(?:Mix(?:\\s*\\d+%)?|100%|Recycled(?:\\s*\\d+%)?|Mix\\s*Credit)" }
+    # ★ 2026-10-20 修正（CU26070802 暴露）：客户把混用写成 **`FSC-Mix`（带连字符）**，
+    #   旧正则只认空格分隔 → 只扫到备注里的 `FSC Recycled`，把「混用」误判成单一取值，
+    #   险些落成 FSCMC=FSC Recycled。分隔符改成 `[\s-]*`，让 `FSC-Mix` 与 `FSC Recycled`
+    #   同时入账 → 不唯一 → 留空 + 记 scan_note（这才是业务要的结果）。
+    - { key: fsc, unique: true, unique_ignore_separators: true, pattern: "FSC[\\s-]*(?:Mix(?:[\\s-]*\\d+%)?|100%|Recycled(?:[\\s-]*\\d+%)?|Mix[\\s-]*Credit)" }
     - { key: text_thickness, pattern: "(\\d+(?:\\.\\d+)?)\\s*mm\\s*bookblock" }
     - { key: binding_side, pattern: "(\\d+(?:\\.\\d+)?)\\s*mm\\s*side" }
+    # 装订方向原文：`perfect binding at the top` / `at the head` / `at the side` …
+    # **只写进 CPMS 的「装订」段**，不映射 ERP 字段（业务 2026-10-20 口径：
+    # 装订边位置 ≠ ERP 的长/短书脊）。识别不到时 Drop_SJFX 走 rules.spine.default。
+    - { key: binding_direction, pattern: "(?i)(?:at|on|along)\\s+the\\s+(?:top|bottom|left|right|head|spine|short|long)\\b[\\w ]{0,12}" }
     # 香港单号：附件文件名里带「香港单号 CU26072301」，表内也常有。
     # ⚠️ 落到 **KHDDH**（模板第 43 键，中文标签就是「香港单号」），不是 KHDH。
     - { key: khddh, pattern: "香港单号\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)" }

@@ -15,6 +15,12 @@ metadata:
 > **总纲：** skill `customer-quote-request` —— 架构 / 抽取引擎 / 邮件入口 / 字段总览 /
 > **`CPMS` 必须 agent 手写** / 校验方法 / 新增客户 SOP。本文件只讲 **NGV 这一家**。
 > **唯一真源是档案 `customers/ngv.yaml`** —— 改 NGV 的行为 = 改它，不改代码。
+>
+> ★ **开工前先读总纲 `references/business-alignment-and-scope.md`**（2026-10-19 三次纠偏的沉淀）：
+> ① 业务给「真实已确认单据」时先问要哪一层 —— 默认是学 `CPMS` 写法，不是交全字段差异表；
+> ② 「没有就是没有」= `CPMS` 严格模式（只写客户文件事实 + 产物留 `CPMS_来源对照.md`）；
+> ③ 口径变更必须四处同步（档案 → 脚本 → 测试 → 文档），旧写法标「已作废」。
+> 交付四道门命令也在这页。
 > 改完必须重跑：`uv run pytest` + 本文件第 8 节的对照命令。
 
 - 客户：NGV（德国/欧洲的 Aldi、Circon 线）
@@ -75,6 +81,97 @@ metadata:
 
 ---
 
+## 1.5 ★ 第二种形态：纯英文 enquiry 邮件（KiK 线，2026-10-19 实单 `CU26070802`）
+
+> 实现细节、MIME 踩坑（inline 签名图、HTML 表格压平）、「正文即任务」契约、
+> 以及文本模式两个**静默丢值** bug 的成因与修法，见
+> `customer-quote-request/references/eml-reading.md`。这一节只留客户口径。
+
+NGV 不只发表单附件。`Naumann & Göbel` 的 KiK 线发的是**纯英文邮件、没有附件**，
+规格全在正文（有时只有 HTML 表格）：
+
+```
+This is a request for KiK:
+Title: Ostermalblock
+Quantity: 30.100cps (one title, one language)
+Files to printer: ??.??.2026 (please advise)
+ETD: Oct 23rd, 2026
+TPS: 148 x 210 mm portrait
+Extent: 64 pp + cover
+Content: 100 gsm offset paper (FSC-Mix) / 1x1 col. euroscale
+Cover: 230 gsm artcard C1S (FSC-Mix) / 4x0 col. euroscale dispersion varnish matt
+Finished binding: softcover, perfect binding at the top, square back, shape die-cutting egg form
+Packaging: NOT individually shrink-wrapped / 14 books per export carton
+Delivery: FOB (Incoterms 2020)
+```
+
+**流程**（脚本已支持，不用手工复制正文）：
+
+```bash
+uv run ./scripts/ingest_email.py --eml "CU26070802 - price enquiry. Ostermalblock.eml"
+# → 无附件 → 正文落成 CU26070802_price_enquiry._Ostermalblock.txt + sidecar
+uv run ./scripts/main.py customer-files/pending/CU26070802_price_enquiry._Ostermalblock.txt --customer auto
+```
+
+本单确认值（`ingest_email` + `main.py` 实跑）：
+
+| 字段 | 值 | 依据 |
+|---|---|---|
+| `CPLB` / `ZDFS` | `23.06;PAD头书(全封面)` / `胶装/PAD书` | `perfect binding at the top` |
+| `CPSL1` | `30100` | `30.100cps`（德式千分位） |
+| `CD`/`KD`/`GD` | `148` / `210` / `0` | `TPS: 148 x 210 mm portrait` |
+| `TZS` / `YYS` | `1` / `0` | `one title, one language`（单语言留空） |
+| `DWMC` | `本` | 档案口径 |
+| `KHDDH` | `CU26070802` | ★ 只在 **`.eml` 文件名**里，表内/正文都没有 |
+| `FSCMC` | **空** | 纸张写 `FSC-Mix`，同时又接受任意比例 `FSC Recycled` → 不唯一，按口径留空 |
+| `JHRQ` / `WCRQ` | 空 | 档案口径（ETD 只进 CPMS 备注，不落库） |
+
+**注意**：
+
+- 邮件里的 `ETD`（Oct 23rd, 2026）、`Files to printer: ??.??.2026`、`FOB (Incoterms 2020)`
+  → 进 **CPMS 备注**，不落到 `JHRQ`/`WCRQ`（档案 `dates.*.mode: empty`）。
+- 识别靠**发件人域名 + 正文特征**，不靠文件名：`vemag-medien.de` / `naumann-goebel.de`，
+  正文 `price enquiry`、`Finished binding`、`euroscale`（该单得分 530）。
+- `Aldi` 是 Aldi 线的品牌前缀；**KiK 单不能套 `Aldi`** —— `CPMC` 的品牌段需要业务确认，
+  脚本当前模板仍带 `Aldi`，交付前必须人工核对（本单已去掉）。
+
+## 1.6 ★ 一份报价可能不止一个文件（输入单元，2026-10-20）
+
+业务口径：**单个文件 = 独一份报价；文件夹 / 压缩包里的文件 = 这一份报价的全部参考文件**。
+所以 NGV 常见形态「规格 enquiry + 确认单 + 补充说明」要**合成一份**，不是三份：
+
+```bash
+# 文件夹 / zip / 多附件邮件投出来的单元目录，都直接当「一份报价」跑
+uv run ./scripts/main.py "customer-files/pending/<单号> 询价包/" --customer ngv
+uv run ./scripts/main.py customer-files/pending/询价包.zip --customer ngv
+```
+
+实现：`scripts/input_unit.py`（单元识别 + zip 安全解压）+ `extract_fields.merge_customer_data`
+（主文件优先 / 冲突记账 / `rules.scan` 整单元重跑 / 文本块按 `# 文件：` 分段）。
+细节与已知边界见总纲 `references/input-unit-multifile-quotes.md`。
+
+**NGV 场景的三个必看项**：
+1. `validation.json` 的 `unit.members` —— 清单对不对（`__MACOSX`、`~$` 临时文件应进 `skipped`）；
+2. `conflicts` —— 非空说明两份文件给了不同值（典型：`quantity` 规格表 30.100 vs 补充 28.000），
+   **交付前必须人工核对**，并让 `CPMS_来源对照.md` 写清用了哪份文件的哪个值；
+3. `sources` —— 每个规范键都要指到具体文件；`# 文件：xxx` 段就是写 CPMS 时的溯源锚点。
+
+> ⚠️ 别把同一封邮件的多个附件**分开跑**（那会变成 N 份报价、N 个 ERP JSON）。
+> `ingest_email.py` 遇到 ≥2 个附件会自动投成 `pending/<标题>_<时间>/` + 一份 `_email.meta.json`，
+> 直接对目录跑即可；只有 1 个附件时才是单文件 + `<附件>.meta.json`。
+
+**反过来：一个文件夹里有子目录 = 多份报价（1.0.38）**。客户把两张单放在
+`两张单/CU26070001/`、`两张单/CU26070002/` 里时，直接对**父文件夹**跑，脚本会
+把子目录各算一份、出一一对应的 N 个 ERP JSON（一条命令，逐份失败隔离）：
+
+```bash
+uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
+```
+
+判据只有一条：**看有没有子目录**。有 → 拆；没有 → 整包一份。
+拆出来的每份在 `validation.json` 的 `unit.role = "subdir"`、`unit.origin` 指回父目录；
+压缩包拆多份时原包只随第 1 份归档（`archive_owner`），其余份记 `source_archive`（包名）。
+
 ## 2. 怎么认出这是 NGV
 
 - **文件名关键词**：`ngv`
@@ -107,7 +204,7 @@ metadata:
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| `CPLB` | `26.01;普通蛇圈书` | `binding_instructions = Wire-O Binding` 命中档案 `cplb.map` 的 `wire[- ]?o` |
+| `CPLB` | `26.07;普通YO书` | ★ **2026-10-19 用真实 ERP 导出（`BJXQ260704002`）反查更正**：`Wire-O Binding` 是**双线圈 YO** → 26.07；旧实现把 `spiral|wire-o|线圈` 塞进同一条正则落 26.01「普通蛇圈书」（单线圈）是错的 |
 | `ZDFS` | `线圈书` | ★ 本次新增映射（REP 合法值里叫「线圈书」，不是「蛇圈书」） |
 | `CPSL1` | `21000` | 数量写法 `3 x 7000 cps. = 21.000 cps` —— ★ 见第 9 节「带 = 总数的写法」 |
 | `CD`/`KD`/`GD` | `210` / `280` / `0` | 210 × 280 mm portrait；`GD` 恒 0（`thickness.enabled: false`） |
@@ -118,7 +215,7 @@ metadata:
 | `CPSX` | `null`（JSON null） | 附件没有年龄段/安全检查栏 → 档案给「无」→ 按业务口径（`rules.null_values`）落 **JSON null**，不是字符串「无」 |
 | `offer_deadline` | `2026-06-26` | ★ 「offer deadline / Angebotsfrist」那行**有值** —— 该单已**过期 90 天**（基准日 2026-09-24）→ 触发提醒 |
 | `CPMC` | `KM/Aldi Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)` | **英文表达**（1.0.22 起）；业务员 `KM` 由脚本带出 |
-| `CPMC_ZH` | `KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)` | 内部字段：**中文表达**；中文品名由 agent 补 |
+| `CPMC_ZH` | `KM/Aldi 钻石贴纸美甲设计 普通YO书/Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)` | 内部字段：**中文表达**；中文品名由 agent 补。⚠️ 真实单据里业务员是 `Corinna`、且**不带 `Aldi`**、还带类别与附属件 —— 见 3.2 |
 | `ID` | 本次任务号 | 内部字段：= 产物目录名 = 日志里的「任务ID」 |
 | `Reminder` | `报价截止日期 2026-06-26 已过期 90 天（基准日 2026-09-24） —— 请与业务确认这单是否还要报价` | 内部字段：把提醒固化进产物（1.0.23 起） |
 | `version` | `2` | 内部字段：当前配置的版本（1.0.24 起）；来源 = 档案顶层 `version:`，改口径就 +1 |
@@ -133,9 +230,37 @@ metadata:
 `Drop_SJFX` 走 `spine.mode: binding_side`（附件给 `<N> mm side` 与较长边比较），
 套装经 `spine.skip_tops: [套装]` 直接留空。
 
+### 3.2 真实 ERP 回灌（2026-10-19，业务给了 `BJXQ260704002` 的完整 59 键）
+
+> ★ **业务给真实单据时的正确姿势**（2026-10-19 被纠正过两次）：
+>
+> 1. **先确认它是用来教哪一块的** —— 原话是「给真实单据的目的是让你聚集到 CPMS 的编写」。
+>    默认假设是「学交付物怎么写」，**不是**「逐字段对账」。别一上来就甩 59 字段差异表。
+> 2. 确实要对账时才给，且分三层：**真错**（映射/规则写错 → 改代码 + 加测试）/
+>    **口径差**（业务当初拍板 vs 真实单据 → 列出让业务定，不许自行改）/ **格式差**（忽略）。
+> 3. **真实单据的内容不许搬进交付物** —— 它是范本，不是数据源。业务原话：「没有就是没有」。
+>    `CPMS` 只写客户文件里的事实（严格模式见 9.5）。
+
+业务直接甩来同一单的**真实 ERP JSON** 让对比 —— 这是最省钱的校准方式，**每次拿到都必须做**。
+完整逐字段差异表 + 处置状态：`references/real-erp-diff-BJXQ260704002.md`。
+
+四类差异，**不要混着报**：
+
+| 类 | 含义 | 例子（本单） |
+|---|---|---|
+| ① 真错 | 档案/规则错，必须改代码 | `CPLB` 26.01 → **26.07;普通YO书**（Wire-O 是双线圈） |
+| ② 口径 | 我们按拍的板填、真实单据相反，**要业务再拍** | `CPMC` 业务员 KM vs **Corinna**；`SFYPJ` 空 vs **是**；`Remark1` 空 vs **自厂购**；`Remark3` 空 vs **新款报价**；`PXH` 空 vs **1**；`DWMC`/`FSCMC`/`Drop_SJFX` 我们填、真实空；`CPSL1` 21000 vs **真实全空** |
+| ③ 没抽 | 内部/ERP 侧字段，脚本按「不该碰」留空 | `BDBH=BJXQ260704002`、`YWY=颜娟`、`KHZL=NGVS16`、`GDY=肖也` |
+| ④ 格式 | 客户明说「格式问题忽略」 | `CPLB` 无编号前缀、CPMC 双空格、导出叫 `KHCPMC` 而模板叫 `OLD_KHDDH` |
+
+⚠️ **`CPMC` 的 `Aldi` 是模板写死的，NGV 不只做 Aldi**：本单是 **TCHIBO**
+（外箱 YJF Jupiter / TCHIBO 封箱要求），真实 CPMC 是
+`Corinna/普通YO书+钻石贴纸 <原文>  (FSC Mix)` —— 无 `Aldi`、带类别名+附属件、业务员按单变。
+改模板前先确认这三件事，别默认 Aldi+KM。
+
 ---
 
-## 4. 口径（业务已拍板 —— 三批，共 19 条）
+## 4. 口径（业务已拍板 —— 四批，共 22 条）
 
 ### 4.1 第一批（2026-09-24，第二批权威导出）
 
@@ -173,10 +298,28 @@ metadata:
 
 | 业务原话 | 决定 | 落点 |
 | --- | --- | --- |
-| 「业务员使用 **KM**」 | `CPMC` 的第一段固定写 `KM`（不再留 `【业务员待填】`）；**中文品名是每单的**，仍由 agent 交付前补 | `rules.cpmc.salesperson: KM` + `cpmc.template: "{salesperson}/Aldi {product_name}({fsc})"`（英文）+ `cpmc.zh_template: "{salesperson}/Aldi {cn_name} {cplb_name}/…"`（中文 → `CPMC_ZH`） |
+| 「业务员使用 **KM**」 | ~~`CPMC` 的第一段固定写 `KM`~~ **⚠️ 已被第 6 节取代（2026-10-19）**：`CPMC` 只放产品名称，`KM` 落 `YWY` | ~~`cpmc.template` 前缀~~ → 见第 6 节 |
 | 「`KHDH`、`KHDDH` 香港单号默认是空」 | `KHDDH` 扫不到就是空，**不算缺陷**（不再报假 error）；扫到「香港单号 CU…」照常落库 | `rules.required_empty: [KHDH, KHDDH, Drop_SJFX]` |
 | 「`CPSX` 如果没有获取到就显示**无**」 | 推不出年龄段 → 落「无」；**同日补充**：「『无』使用 json 里的 null 填充」→ 产物里是 **JSON `null`** | `rules.cpsx.when_missing: 无` + 全局 `rules.null_values: ["无"]`（null 属空值，不触发枚举校验 → 1.0.21 的 `enum_exceptions` 声明已删） |
 | 「超过了报价截止日期，你记得提醒」 | 跑完在 stdout 末尾醒目提醒 + `validation.json` 的 `reminders` 段 + **内部字段 `Reminder`** | 引擎级 `check_offer_deadline()`（取 `offer_deadline` 规范键）+ `--today` 基准日期 |
+
+### 4.5 第四批（2026-10-20，实单 `CU26070802` / Ostermalblock）
+
+| 业务原话 | 决定 | 落点 |
+| --- | --- | --- |
+| 「`Ostermalblock` 译**复活节彩蛋涂色本**」 | 中文品名照此确认（存档备查，下次同类产品别另译一套） | 本节 |
+| 「IGL 的 CPMC **不需要更改**」 | IGL 继续用「类别;系列名」旧写法，**不做**迁移 —— 改它会动 IGL 端到端基线 | IGL 档案不动（基线保持原样） |
+| 「装订方向，如果我们识别不到则设置为**书脊方向为 Null**」 | ① 文件写了方向（`at the top` / `at the head` / `装订在顶部`）→ CPMS 照抄（`装订在头部`）；② **识别不到 → CPMS 不写方向词**；③ ERP `Drop_SJFX` 有 `N mm side` 才判长/短，**没有就留空（JSON `null`）** + WARN —— **不许**落「长书脊」当默认值，也不许由「装订在顶部」反推长/短 | `assets/cpms_spec.yaml`（装订段 notes + `meta.business_decisions`）、`docs/CPMS_写作规范.md` 3.3、`customers/ngv.yaml` `rules.spine.default: ""`、`scripts/main.py` 第 8 步日志、新增 `rules.scan: binding_direction`（只进 CPMS，不映射 ERP） |
+
+> **为什么方向不能反推书脊**：`at the top` 说的是**装订边位置**（顶部/左侧…），
+> `Drop_SJFX` 说的是**书脊在长边还是短边**，两个维度正交。
+> 实单 `CU26070802` 就是 `perfect binding at the top` + 无 `N mm side` → `Drop_SJFX` **留空（null）**。
+
+> 🔁 **复跑验证必读**（总纲 `references/复跑验证与默认值陷阱.md`）：改完档案要证明没弄坏已交付的单时，
+> 三条会**静默出错**的操作 —— ① 只拷 `.txt` 不带 `.txt.meta.json` → 客户档案掉回 `generic`、
+> 字段全空但 `校验通过` 照样打印；② `-o` 不决定产物落点，产物在 `<processed-dir>/<task_id>/`；
+> ③ 源文件跑一次就被搬走。纪律：`profile.rule()` 第二个参数**不许**写业务默认值（写 `""`），
+> 复跑 vs 交付的 diff 只允许 `ID/version/CPMC/CPMC_ZH/CPMS` 五项。
 
 > ✅ **`CPSX` 已无待确认项**：落 `null`（= 空值）与 4 份权威导出完全一致，
 > 导入端按空值处理，不需要业务再拍板「无 vs 其他」。
@@ -211,44 +354,58 @@ email:
 - ★ **业务 2026-09-24：「`KHDH`、`KHDDH` 香港单号默认是空」** —— 扫不到就留空是**预期结果**，
   不是缺陷；已进 `rules.required_empty`，不再因此报假 error（`--check --customer ngv` → 0 error）。
   附件里带「香港单号 CU…」/ 邮件里有的，照常落库。
+- ⚠️ **香港单号前缀不只 `CU`**：真实单据 `BJXQ260704002` 的 `KHDDH = YJ26070401`。
+  档案里 `[A-Z]{2}\d{6,}` 本来就吃得下 `YJ`，真正的问题是**附件里根本没写**
+  （文件名只有 `PR-00091345`）→ 只能从邮件取，`KHDDH` 会留空。别因为「前缀不是 CU」就判规则失效。
 - ⚠️ **写单号正则要严**：`\b(?:po|order)\s*(?:no)?\s*([A-Z0-9]{5,})` 会把
   `Postkarten in Box` 的 `Po` 抓成 `stkarten` —— 必须要求出现 `no/nr/number/#` 这类编号词。
   有测试钉着（`test_客户单号正则不许被单词前缀误捕`）。
 
 ---
 
-## 6. `CPMC` 存英文表达、`CPMC_ZH` 存中文表达
+## 6. `CPMC` = 产品名称（中文译名）；业务员 `KM` 落 `YWY`
 
-业务 2026-09-24：「将 `CPMC` 修改为存英文表达，使用 `CPMC_ZH` 来标注中文表达」。
+**业务 2026-10-19 更正（实单 `CU26070802`）**：
 
-档案声明**两个**模板（占位符相同）：
+> 「`CPMC` 是这个产品的名称，你应该从文件中翻译出来；而 `KM` 也就是你，是你的名字，
+> 他应该填写在 `YWY`。」
+
+所以：
+
+| 字段 | 内容 | 谁填 |
+|---|---|---|
+| **`CPMC`** | **产品名称**（从客户文件译成中文），不带业务员/品牌/类别/FSC | agent（脚本写 `【中文品名待定】` 占位） |
+| **`ECPMC`** | **产品英文名**（客户原文 `Title: Ostermalblock` → `Ostermalblock`，照抄不翻译） | 脚本（`rules.ecpmc.source_keys: [product_name, series_name]`） |
+| **`CPMC_ZH`** | 与 `CPMC` 一致（内部字段，保持两边同值） | agent |
+| **`YWY`** | 业务员代号 `KM` | 脚本（`erp_fixed.YWY: KM`） |
+
+档案配置：
 
 ```yaml
-cpmc:
-  salesperson: KM
-  cn_name: ""                                                    # 每单 agent 补
-  template:    "{salesperson}/Aldi {product_name}({fsc})"          # → CPMC（纯英文）
-  zh_template: "{salesperson}/Aldi {cn_name} {cplb_name}/{product_name}({fsc})"  # → CPMC_ZH
-  needs_agent: true
+erp_fixed:
+  YWY: KM                     # 业务员，不是 CPMC 前缀
+rules:
+  cpmc:
+    salesperson: KM           # 仅留档说明，不再参与拼装
+    allow_chinese: true       # CPMC 允许中文（产品名的中文译名）
+    template: "【中文品名待定】"
+    zh_template: "【中文品名待定】"
+    needs_agent: true
 ```
 
-```
-CPMC    = KM/Aldi Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)          ← 英文
-CPMC_ZH = KM/Aldi 钻石贴纸美甲设计 普通蛇圈书/Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)
-```
-
-- `CPMC_ZH` 的写法 = **1.0.21 之前 `CPMC` 的历史写法**（权威导出格式：`<业务员>/Aldi <中文品名>
-  [ <中文类别>]/<客户原文>(<FSC>)`），只是换了存放字段 —— 例：
-  `Corinna/Aldi B款 开脊PAD头书/Type B - A00125 Post- und Klappkarten - Klappkarten-Buch (4 titles)(FSC Mix)`。
-- **业务员固定 `KM`**（业务 2026-09-24 拍板）→ 脚本自动带出，不用管。
-- **中文品名是每单的**（不是客户常量）：脚本在 `CPMC_ZH` 里填占位符 `【中文品名待定】` 并打 WARN
-  点名；交付时 **agent 直接改产物 JSON 里的 `CPMC_ZH`**（`rules.cpmc.cn_name` 是给「品名稳定」
-  的客户偶尔用的开关，NGV 保持空）。
-- **`CPMC` 里出现中文 → 当场 WARN**（脚本检查中文字符），不用等 ERP 报错。
-- 中文类别取 **CPLB 树里的权威名**（导出里人写的 `其他套装` 与树里的 `其它套装` 不一致 ——
-  统一取树里的，差异记在 `customers/ngv.erp_diff.json`）。
+- **产品名只能译，不能编**：`Title: Ostermalblock` → `复活节彩蛋涂色本`（Ostern 复活节 + Malblock 涂色本）。
+  译名不确定就写来源 + 存疑（`备注`/交付说明），不许硬凑品类词。
+- **`KM` 不是业务员姓名，是「我」的代号** → 只进 `YWY`；`CPMC` 里出现 `KM/Aldi` 是旧口径，已废。
+- 品牌（Aldi / KiK / Tchibo）**各自有归属**：`KiK` 这类信息写在 `CPMS` 备注，不往 `CPMC` 里塞；
+  Aldi 线历史导出里的 `Aldi` 前缀属于旧写法，不要照搬。
+- `allow_chinese: true` 的客户，`CPMC` 出现中文**不再报警**；没声明的客户仍会 WARN
+  （`test_决策_未开allow_chinese的客户_CPMC中文要报警` 钉住）。
 - `CPMC_ZH` 是**内部字段**（`assets/internal_export_fields.yaml`），追加在 59 键之后；
   导入 ERP 前若被告知「不收未知字段」，用 `--strip-internal` 只输出 59 键。
+
+> 历史写法（1.0.21–1.0.33）是 `<业务员>/Aldi <中文品名> <类别>/<原文>(<FSC>)`，
+> 真实导出 `BJXQ260704002` 是 `Corinna/普通YO书+钻石贴纸 <原文>  (FSC Mix)` ——
+> **这些都已作废**，只用于理解老单据，不要拿来拼新单。
 
 ---
 
@@ -262,6 +419,26 @@ NGV 每单固定的第三方检测清单（378 字符，3 份导出逐字相同�
 ---
 
 ## 8. 回归与核对命令
+
+> ★ **改完档案/脚本，先跑这条再交付**：`scripts/recheck_order.py`（本技能自带）——
+> 重新投递 + 重新映射一单，并与已交付 JSON 逐字段比对，只允许
+> `ID/version/CPMC/CPMC_ZH/CPMS` 不同。它把「副档 `.meta.json` 必须一起带」
+> 「`-o` 不决定落点」「源文件会被搬走」三个坑都处理好了。
+> ```bash
+> uv run python ~/.hermes/profiles/igl_agent/skills/customer-quote-ngv/scripts/recheck_order.py \
+>     --eml "customer-files/processed/<task>/<原邮件>.eml" \
+>     --delivered "customer-files/processed/<task>/ERP_*.json" --today 2026-10-20
+> ```
+>
+> CPMS 写法样例：`references/cpms-线圈书水钻贴纸.md`（线圈书 + 水钻贴纸 + 多材料内文，
+> v2 规范 0 error/0 warn，含逐条写法决策表）。
+> 真实 ERP 逐字段差异表：`references/real-erp-diff-BJXQ260704002.md`（Wire-O 类别、CPMC 业务员、
+> CPSL 空值等 8 条口径分歧的来源单据）。
+
+> ⚙️ **执行环境**：本 profile 的会话里终端默认 cwd 可能指向一个已不存在的目录
+> （命令会直接报 `cd: … No such file or directory`，连 `pwd` 都跑不了）。
+> 每条命令都显式带 `workdir=/home/claw/customer-quote-request`（或命令里先绝对路径 `cd`），
+> 不要依赖会话默认目录。
 
 ```bash
 cd /home/claw/customer-quote-request
@@ -314,8 +491,11 @@ uv run ./scripts/customer_profile.py --prefs ngv
   旧实现只认整串 `^N x M$`，匹配失败后退回「取第一个数字」，**静默落成 3**（真值 21000）。
   现在按「① `=` 后的总数 → ② `N x M` 乘法 → ③ 全串只有一个数字」解析，两者不一致会 WARN
   并以总数为准。数字写法的坑一律属于「错了整单报价都错」，看到数量先核。
-- ★ **装订写 `Wire-O` 时 `ZDFS` 是「线圈书」**（不是「蛇圈书」—— 那是 CPLB 树里的类别名，
-  两者别混）。档案 `binding.map` 已补 `wire-o / wiro / spiral / coil`。
+- ★ **装订写 `Wire-O` 时 `ZDFS` 是「线圈书」**，而 **`CPLB` 是 `26.07;普通YO书`**
+  （Wire-O = 双线圈 YO；`26.01;普通蛇圈书` 是**单线圈**，两者是不同树节点 ——
+  2026-10-19 真实导出反查更正过，之前统一落 26.01 是错的）。档案 `cplb.map` 已拆成
+  `wire[- ]?o|wiro|YO书|双线圈 → 26.07` 与 `spiral|蛇圈|单线圈|线圈 → 26.01` 两条，
+  **别合并回去**。测试 `test_决策_CPMC存英文表达_CPMC_ZH存中文表达` 钉住了这条。
 - **`KHDDH` 取不到不等于出错**：文件名与表内都没有「香港单号 CU…」时（实测 PR-00091345 就是这种）
   留空是**业务认的正常状态**（2026-09-24 拍板），已进 `required_empty`，不报 error；
   绝不能拿 `our_ref`（`PR-…`）冒充，需要时由邮件补。
@@ -329,18 +509,72 @@ uv run ./scripts/customer_profile.py --prefs ngv
   跑完脚本**必须看 stdout 末尾的「提醒业务」块**，并把它写进给业务的消息里
   （业务 2026-09-24 明确要求提醒）。它是 `validation.json` 的 `reminders`，**不计入** error/warn。
 - **`CPMS` 脚本不许生成**：跑完必须由 agent 通读原文、翻译、分段后手写（总纲第 5 节）。
+- ★ **业务给「真实 ERP 单据」时，那是 CPMS 的学习素材，不是字段核对题**（2026-10-19 被纠正过一次）：
+  对方会把某单在 ERP 里**已确认**的导出丢过来。正确动作是**逐条对照人写的 `CPMS`**，
+  看自己漏了哪些**信息维度**（估值有没有写「约/预估/暂定」、料号有没有留、材料的面/底与产地、
+  责任方、客户说的「见某文件/按某要求」、工序先后、排布与随机性、客户专名），
+  然后**重写自己的 CPMS**。字段级差异（导出侧留空、`PXH`/`DWMC`/`CPSL` 口径、`CPMC` 业务员）
+  只在末尾做一小段附注，**不要拿二十行字段 diff 当主交付** —— 那等于没听懂需求。
+  清单与真实样例：总纲第 5 节 + `docs/CPMS_规范与样例集.md` 样例 7 / 5.1「内容完整性九问」；
+  复盘细节见总纲 `references/cpms-real-sample-bjqx260704002.md`。
 - **`CPMC` 的中文品名同理** —— 业务员 `KM` 由脚本带出，**中文品名仍是每单 agent 补**。
+- **跑完原附件就不在 `pending/` 了**：`main.py` 会把它移进 `processed/<task_id>/`，
+  复核原文 / 重写 CPMS 读产物目录里的副本（实测直接读 `pending/` 会 `FileNotFoundError`）。
+- **重复提取（2026-10-19 实跑 PR-00091345 第二次）**：`processed/` 里旧任务的 `CPMS` / `CPMC_ZH`
+  可以直接拿来复用再按 v2 规范复核，不必从零通读；但交付必须用**新**任务目录的产物。
+- **CPMS 多材料内文分行**：`内文` 标签重复三行（32PP 书纸 / 8PP 模切件 / 2PP 可移贴纸）是合法写法，
+  lint 不查重复标签；但 `包装` / `装箱` 里的 `1/0C` 要手改 `1C/0C` —— `--fix` 只覆盖部件行。
+- ★ **别用「默认值」冒充事实**（2026-10-20 被业务纠正过）：`rules.spine.default: 长书脊`
+  让「认不出来的书脊方向」变成「长书脊」—— 四道门全过、日志还写了来源，错得像真的。
+  业务口径是「识别不到 → **Null**」。纪律：`profile.rule(key, 默认值)` 的第二个参数
+  **不许**写业务语义默认值（写 `""` / `None`），认不出来就留空 + WARN，让业务看见空白。
+- ★ **业务短句要先落成「字段 → 值」，别扩写成文案**：原话「装订方向 如果我们识别不到
+  则设置为 书脊方向为 Null」，我第一版理解成「CPMS 里写『装订在书脊方向』」并一路写进了
+  `cpms_spec` / 文档 / 测试，被纠正。正确顺序：① 把它翻译成 `Drop_SJFX = null`；
+  ② 只改这一个字段的链路；③ 短句里的措辞**不是**让我造新描述词。拿不准就用一句话复述
+  「所以是 X 字段填 Y？」再动手 —— 比返工四处同步便宜。
+- ★ **客户把混用写成 `FSC-Mix`（带连字符）**：正则 `FSC\s*Mix` 不认 `-` → 只扫到备注里的
+  `FSC Recycled` → 把「真混用」误判成单一取值，`FSCMC` 差点落成 `FSC Recycled`。
+  现在 `[\s-]*` + `unique_ignore_separators: true`：`FSC Mix` / `FSC mix` / `FSC-Mix` 算同一个值，
+  `FSC-Mix` vs `FSC Recycled` 才算混用。**两条都栽过**（一次误留空、一次误填值），
+  改这条正则必须同时跑 `test_扫描_连字符FSC写法要分开判真混用与同值`。
 
 ---
+
+## 9.5 ★ CPMS 严格模式（业务 2026-10-19 拍板）
+
+`CPMS` **只写客户文件（附件/邮件正文）里出现过的事实**。业务确认单、ERP 导出、历史单据、
+同类产品经验 —— 一律不能拿来「补」描述。
+
+- 一句话判定：**每一句都要能指到客户附件的一个位置；指不到的删掉。**
+- 漏抄（客户写了没写进来）是缺陷；**多写（客户没写却写进来）是错误信息，更严重**。
+- 五种最常见的「柔性造数」：区间补成整数（`50-60` → `60`）、空栏补合理值（没给窗口尺寸就写 100\*100）、
+  升级材料名（`polybag` → `OPP`）、搬确认单里的料号/指定供应商、把 `暂定/预估/see below` 丢掉。
+- 机械门禁：`uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <客户原始文件>`
+  （退出码 = 无出处条目数，必须 0）。
+- 每单在产物目录留一份 `CPMS_来源对照.md`（逐行 → 单元格坐标 + 删除清单），交付时一起给业务。
+- 详细案例（`BJXQ260704002`：合并版 1040 字 vs 严格版 521 字、被删的 12 组、工具用法）：
+  `customer-quote-request/references/cpms-real-sample-bjqx260704002.md`；
+  通用铁律与五种造数：`customer-quote-request/references/data-provenance-strict-mode.md`。
+- 交互侧：业务丢来「已确认的真实单据」时，先问一句「要我校对字段口径，还是学 CPMS 写法？」
+  —— 2026-10-19 默认做了 59 字段逐项差异对比，白跑一轮。
 
 ## 10. 交付检查清单（NGV 专用）
 
 - [ ] 客户识别是 `ngv`（不是 igl；注意文件名含 `Colour`/`Puzzle` 的陷阱）
+- [ ] ★ 若输入是**文件夹 / 压缩包 / 多附件邮件**：`validation.json` 的 `unit.members`
+      与预期文件清单一致、`unit.skipped` 只有垃圾文件、**`conflicts` 为空或已人工核对**
+      （参考文件合并成**一个** ERP JSON，不是一个文件一份 —— 见 1.6）
 - [ ] 59 键顺序断言通过、`.validation.json` 里 **0 error / 0 warn**
 - [ ] ★ **报价截止日期**：`Reminder` 字段（和 stdout 醒目块）有内容 → **必须写进给业务的消息**
       （业务要求提醒；现已过期的单要问「还报不报」）
-- [ ] `CPLB` 与真实业务一致（套装 29.04 / 贴纸骑钉书 24.03 / PAD头书 23.06 / 蛇圈 26.01）
-- [ ] 套装单尺寸是 `0/0/0`，`Drop_SJFX` 空；非套装单尺寸、书脊方向正确
+- [ ] `CPLB` 与真实业务一致（套装 29.04 / 贴纸骑钉书 24.03 / PAD头书 23.06 / **Wire-O → 26.07;普通YO书** / 单线圈 → 26.01;普通蛇圈书）
+- [ ] 套装单尺寸是 `0/0/0`，`Drop_SJFX` 空；非套装单：有 `N mm side` 才判长/短，**识别不到就是 `null`（空着算正常，不是缺陷）**
+- [ ] ★ **品名三件套**（2026-10-20 起，替代旧的 `KM/Aldi …` 写法 —— 旧检查项已作废）：
+      `CPMC` = **中文产品名**（agent 从 `Title:` 译，无占位符、无业务员/品牌/类别/FSC）；
+      `ECPMC` = **英文产品名**（客户原文照抄，不许空 —— 空着多半是档案没声明 `rules.ecpmc.source_keys`）；
+      `CPMC_ZH` = 与 `CPMC` 同值
+- [ ] `YWY` = `KM`（业务员在 `YWY`，**不在** `CPMC` 前缀里）
 - [ ] `KHDDH` = 香港单号（扫不到就空 = 正常）；`KHDH` 只在邮件里有时才填（**不许拿 our_ref 冒充**）
 - [ ] 数量核对：带 `= 总数` 的写法以总数为准，且 CPSL1 是「款数 × 每款数」的结果
 - [ ] `ZDFS` 非空（装订类词如 Wire-O 已在映射表里；空的要先查是不是新写法）
@@ -350,9 +584,12 @@ uv run ./scripts/customer_profile.py --prefs ngv
 - [ ] `Remark4` 与 ERP 原文逐字一致（含错别字）
 - [ ] `CPSX` = **JSON `null`**（附件没有年龄段栏 → 档案给「无」→ 按 `rules.null_values` 落 null；
       null 属空值，与权威导出一致，导入端按空处理）
-- [ ] **`CPMS` 已由 agent 手写**（非空）
-- [ ] `CPMC` = `KM/Aldi <英文品名原文>(FSC Mix)` —— **纯英文**，里面没有中文字符
-- [ ] `CPMC_ZH` = `KM/Aldi <中文品名> <中文类别>/<英文品名原文>(FSC Mix)`
-      —— **中文品名已补、没有 `【中文品名待定】` 占位符**
+- [ ] **`CPMS` 已由 agent 手写**（非空）；**严格模式**：只写客户文件里的事实，确认单/ERP 导出的补充信息不进 CPMS
+- [ ] ★ **`cpms_content_audit.py` 退出码 0**（CPMS 里每个数字/单位/料号都能在客户附件里找到）
+- [ ] ★ 产物目录有 `CPMS_来源对照.md`（逐句出处 + 从确认单删掉的内容清单）
+- [ ] ★ **字段级自检（四道门抓不到这一层）**：`cpms_lint` / `cpms_content_audit` / `erp_schema` / `pytest`
+      校验的都是「已经有值的字段」，**整个字段空着照样全绿**。交付前逐字段过一遍
+      「本该有值的是否有值」：`CPMC` / `ECPMC` / `CPMC_ZH` / `CPLB` / `ZDFS` / `CPSL1` / `CD` / `KD` / `DWMC` /
+      `KHDDH`（可空但要知道为什么空）/ `Remark4`。空着的必须能说出依据，说不出的就是漏项。
 - [ ] `ID` = 本次任务号（= 产物目录名；排查问题时拿它对日志）
 - [ ] `compare_with_erp.py` 白名单外差异 0 条

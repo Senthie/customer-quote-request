@@ -23,6 +23,7 @@ main.py - 客户报价请求处理主入口
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -35,8 +36,11 @@ import cplb_tree  # noqa: E402  （ERP 产品类别树）
 from customer_profile import CustomerProfile, resolve_profile  # noqa: E402
 from erp_schema import (declared_exceptions, normalize_result,  # noqa: E402
                         normalize_value, validate_result)
-from extract_fields import CustomerData, load_customer_data  # noqa: E402
+from extract_fields import (CustomerData, load_customer_data,  # noqa: E402
+                            load_customer_unit)
 from ingest_email import read_attachment_meta  # noqa: E402
+from input_unit import (InputUnit, finalize_batch, find_unit_meta,  # noqa: E402
+                        resolve_input_unit, resolve_input_units)
 from internal_fields import internal_field_keys, load_internal_fields  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +51,8 @@ SAMPLES_DIR = REPO_ROOT / "customer-files" / "samples"
 
 # 布局/取值兜底常量
 DEFAULT_UNIT = "mm"
+# 单文件通道支持的格式（文件夹/压缩包里的成员由 input_unit 逐个筛，规则一致）
+SUPPORTED_INPUT_SUFFIXES = (".csv", ".xlsx", ".xls", ".docx", ".txt", ".pdf")
 
 # ── 运行基准日期 ─────────────────────────────────────────────────────────
 # 「今天是几号」会影响两类结果：报价截止日期是否过期、WCRQ 的 today_plus_days。
@@ -616,6 +622,28 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     if cpmc_zh:
         result["_cpmc_zh"] = cpmc_zh      # 下划线开头 = 内部字段，step5b 跳过、step6 落到 CPMC_ZH
 
+    # ── 3b. 产品英文名 ECPMC ──────────────────────────────────────
+    # 业务 2026-10-20 指出：CPMS 写了，`ECPMC`（产品英文名）却空着。
+    # ERP 表单里 CPMC / ECPMC 是两个独立字段：
+    #   CPMC  = 产品名称（NGV 落中文译名；igl 仍是「类别;系列名」的英文串，不动）
+    #   ECPMC = **产品英文名**（客户文件里的英文品名原文）
+    # 取值口径：照抄客户原文，**不翻译、不拼类别、不带 FSC**（那是 CPMC 的事）。
+    # 档案用 `rules.ecpmc.source_keys` 声明从哪个规范键取（按顺序取第一个非空）；
+    # 没声明 = 该客户不产出 ECPMC（保持原行为，不动 igl 基线）。
+    ecpmc_keys = profile.rule("ecpmc.source_keys", []) or []
+    ecpmc_value, ecpmc_src = "", ""
+    for key in ecpmc_keys:
+        val = str(customer_data.get(str(key)) or "").strip()
+        if val:
+            ecpmc_value, ecpmc_src = val, str(key)
+            break
+    if ecpmc_value:
+        ecpmc_idx = list(template.keys()).index("ECPMC") + 1 if "ECPMC" in template else 0
+        assign("ECPMC", ecpmc_value,
+               f"档案 rules.ecpmc（规范键 {ecpmc_src}，客户文件英文品名照抄）", ecpmc_idx)
+    elif ecpmc_keys:
+        logger.warn(f"  ECPMC（产品英文名）: 档案 rules.ecpmc 声明的规范键 {ecpmc_keys} 都没取到 → 留空")
+
     if profile.rule("cpmc.needs_agent", False) or zh_tpl:
         # 兜底：模板里凡是没被任何占位符填上的「待定」标记，都要在产物里点名，
         # 免得 agent 忘了补就直接交付（实测踩过：留了【业务员待填】却以为脚本会填）。
@@ -627,9 +655,11 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
             elif value:
                 logger.info(f"  {label}: {value}")
     if zh_tpl:
-        # 硬不变量：CPMC 只放英文，中文表达归 CPMC_ZH。
-        # 档案里把中文写进 cpmc.template 会在这里当场被抓住（不然要等 ERP 那边报错）。
-        if re.search(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]", cpmc):
+        # 硬不变量（默认）：CPMC 只放英文，中文表达归 CPMC_ZH。
+        # 业务 2026-10-19 起，NGV 的 CPMC 就是**产品名称的中文译名**
+        # （档案 `cpmc.allow_chinese: true`）→ 这种客户不再报中文告警。
+        allow_cn = bool(profile.rule("cpmc.allow_chinese", False))
+        if not allow_cn and re.search(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]", cpmc):
             logger.warn(f"  CPMC 里出现了中文/全角字符：{cpmc!r} —— 业务口径是「CPMC 存英文表达、"
                         f"中文表达落 CPMC_ZH」，请检查 customers/{profile.id}.yaml 的 cpmc.template")
     else:
@@ -819,6 +849,11 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         # 依据：CU26072302 的 145x210 + `210 mm side` → ERP Drop_SJFX=长书脊。
         skip_tops = [str(t) for t in (profile.rule("spine.skip_tops", []) or [])]
         side = _to_number(customer_data.get("binding_side") or "")
+        # 装订方向原文（`at the top` / `at the head` …）：**只进 CPMS，不参与 ERP 判定**。
+        # 业务口径（2026-10-20 二次拍板）：**识别不到装订方向 → 书脊方向 Drop_SJFX 留空（JSON null）**。
+        # 不落「长书脊」：那是猜的。「顶/底/左/右」是装订边位置，和 ERP 的长/短书脊
+        # 不是同一维度，反推不出长/短 → 认不出来就空着，交给业务在 ERP 里补。
+        direction = str(customer_data.get("binding_direction") or "").strip()
         if cplb_top and cplb_top in skip_tops:
             logger.info(f"  来源: 档案 rules.spine.skip_tops —— 产品类别顶层「{cplb_top}」"
                         f"无书脊方向，保持空值")
@@ -830,15 +865,20 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
                 result["Drop_SJFX"] = str(profile.rule("spine.short", "短书脊"))
             logger.info(f"  来源: 装订边（规范键 binding_side={_num(side)}mm）"
                         f"与较长的边 {_num(longer)}mm 比较")
+            if direction:
+                logger.info(f"  装订方向原文: {direction!r}（只写进 CPMS）")
             logger.info(f"  映射值: {result['Drop_SJFX']}")
             logger.info("  状态: 成功")
             success_count += 1
             assigned.append("Drop_SJFX")
         else:
-            fallback = str(profile.rule("spine.default", "长书脊"))
-            result["Drop_SJFX"] = fallback
-            logger.warn(f"  来源: 附件没给装订边（binding_side 为空）"
-                        f"→ 用档案默认值 {fallback}，**需人工确认**")
+            # 业务口径 2026-10-20：识别不到 → **留空（JSON null）**，不猜「长书脊」。
+            fallback = str(profile.rule("spine.default", "") or "").strip()
+            result["Drop_SJFX"] = fallback or None
+            logger.warn("  识别不到装订边/装订方向 → 书脊方向**留空**（null），"
+                        "按业务口径不猜长/短书脊，交业务在 ERP 里补")
+            if direction:
+                logger.info(f"  装订方向原文: {direction!r}（只写进 CPMS，不参与 ERP 书脊方向判定）")
             default_count += 1
     elif cd > 0 and kd > 0:
         logger.info(f"  来源: 尺寸比较（档案 rules.spine.mode={spine_mode}）")
@@ -1152,16 +1192,76 @@ def sample_run_guard(input_path: Path, args) -> Optional[str]:
     )
 
 
-def step1_input_validation(input_path: Path, logger: Logger) -> bool:
-    logger.section("步骤 1: 输入验证")
-    logger.info(f"输入文件: {input_path}")
+def _as_unit(value) -> InputUnit:
+    """兼容老调用：允许直接传 Path（= 单文件单元）。"""
+    if isinstance(value, InputUnit):
+        return value
+    return resolve_input_unit(value)
 
-    supported = (".csv", ".xlsx", ".xls", ".docx", ".txt", ".pdf")
-    if input_path.suffix.lower() not in supported:
-        logger.error(f"文件格式检查: 失败 (不支持的格式 {input_path.suffix})")
-        return False
-    logger.info(f"文件格式检查: 通过 ({input_path.suffix})")
-    logger.info(f"文件大小: {input_path.stat().st_size} 字节")
+
+def read_attachment_meta_for_unit(unit: InputUnit, logger=None) -> dict:
+    """读「单元」的邮件副档。
+
+    单文件：跟以前一样读 `<文件>.meta.json`；
+    文件夹 / 压缩包：`_email.meta.json`（ingest_email 投递多附件邮件时写的那种）。
+    """
+    if unit.is_single_file:
+        return read_attachment_meta(unit.path)
+    meta_path = find_unit_meta(unit)
+    if not meta_path:
+        return {}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        if logger is not None:
+            logger.warn(f"邮件副档读不了，忽略: {meta_path}")
+        return {}
+
+
+def convert_unit_to_csv(unit: InputUnit, customer_data: CustomerData,
+                        output_dir: Path, logger: Logger) -> Path:
+    """把「单元合并后的抽取结果」写成 CSV（长表：文件 / 规范键 / 值）。
+
+    单文件走 `convert_to_csv`（源文件快照）；单元没有单一「源表」，
+    所以 CSV 记的是**合并后的规范键 + 每条的出处文件**，方便人工核对。
+    """
+    import csv
+
+    output_path = output_dir / f"{unit.stem}.csv"
+    rows = [("来源文件", "规范键", "值")]
+    for key, value in (customer_data.values or {}).items():
+        rows.append(((customer_data.sources or {}).get(key, ""), key, str(value)))
+    for key, value in (customer_data.scanned or {}).items():
+        rows.append(("（全表扫描）", key, str(value)))
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f).writerows(rows)
+    logger.info(f"  单元合并表（{len(rows) - 1} 行，含出处列）")
+    return output_path
+
+
+def step1_input_validation(unit: InputUnit, logger: Logger) -> bool:
+    unit = _as_unit(unit)
+    logger.section("步骤 1: 输入验证")
+    # 业务口径（2026-10-20）：单文件 = 独一份报价；文件夹 / 压缩包 = 这一份报价的全部参考文件。
+    input_path = unit.path
+    logger.info(f"输入单元: {input_path}（{unit.label}）")
+    if not unit.is_single_file:
+        logger.info(f"单元成员 {len(unit.members)} 个（合并成 **一份** 报价）:")
+        for member in unit.members:
+            logger.info(f"  - {member.name}")
+        if unit.skipped:
+            logger.warn(f"已跳过 {len(unit.skipped)} 个不支持/临时文件: "
+                        f"{[Path(s).name for s in unit.skipped][:8]}")
+
+    if unit.is_single_file:
+        if input_path.suffix.lower() not in SUPPORTED_INPUT_SUFFIXES:
+            logger.error(f"文件格式检查: 失败 (不支持的格式 {input_path.suffix})")
+            return False
+        logger.info(f"文件格式检查: 通过 ({input_path.suffix})")
+        logger.info(f"文件大小: {input_path.stat().st_size} 字节")
+    else:
+        logger.info(f"单元类型: {unit.kind_cn} —— 成员文件格式均已校验")
 
     if "pending" not in input_path.parts:
         logger.warn(f"文件不在 pending 目录，可能已被处理: {input_path}")
@@ -1170,19 +1270,27 @@ def step1_input_validation(input_path: Path, logger: Logger) -> bool:
     return True
 
 
-def step2_load_customer_data(input_path: Path, profile: CustomerProfile,
+def step2_load_customer_data(unit: InputUnit, profile: CustomerProfile,
                              logger: Logger) -> CustomerData:
+    unit = _as_unit(unit)
     logger.section("步骤 2: 读取客户数据（客户档案驱动）")
     logger.info(f"客户档案: {profile.id}（{profile.name}，状态 {profile.status}）")
     logger.info(f"布局策略: {profile.rule('layout.strategies', [])}")
+    if not unit.is_single_file:
+        logger.info(f"输入单元: {unit.label} —— "
+                    f"{len(unit.members)} 个参考文件合并成一份报价")
 
-    customer_data = load_customer_data(str(input_path), profile, logger)
+    customer_data = load_customer_unit(unit, profile, logger)
     logger.info(f"布局命中: {customer_data.layout or '(无)'}")
     logger.info(f"提取规范键: {len(customer_data.values)} 个")
     for key, value in customer_data.values.items():
-        logger.info(f"  - {key}: {value}")
+        src = (customer_data.sources or {}).get(key)
+        logger.info(f"  - {key}: {value}" + (f"   [{src}]" if src else ""))
     if customer_data.quantity_tiers:
         logger.info(f"  - 数量档位: {customer_data.quantity_tiers}")
+    if customer_data.conflicts:
+        logger.warn(f"单元内有 {len(customer_data.conflicts)} 处同键不同值 —— "
+                    f"交付前必须人工核对（明细见 .extracted.json 的 conflicts）")
     if customer_data.unmatched:
         logger.warn(f"有 {len(customer_data.unmatched)} 个标签未识别: {customer_data.unmatched[:8]}")
         logger.warn(f"  → 用 calibrate_customer.py --customer {profile.id} 校准档案")
@@ -1267,12 +1375,15 @@ def step5b_validate_erp_values(result: dict, logger: Logger,
     return issues
 
 
-def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
+def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
                          logger: Logger, customer_data: CustomerData,
                          profile: CustomerProfile, issues: Optional[list] = None,
                          strip_internal: bool = False) -> dict:
+    unit = _as_unit(unit)
     logger.section("步骤 6: 输出结果")
 
+    input_path = unit.path
+    stem = unit.stem
     task_id = result.pop("_task_id", "unknown")
     # 报价截止日期提醒（get 前先弹掉，否则下面的键断言会因为多一个键而失败）
     deadline_info = result.pop("_deadline", None)
@@ -1347,8 +1458,11 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
     # 1. CSV 转换
     logger.info("")
     logger.info("[文件 1/5] CSV转换")
-    logger.info(f"  源文件: {input_path.name}")
-    csv_path = convert_to_csv(input_path, task_dir, logger)
+    logger.info(f"  源文件: {input_path.name}" + ("" if unit.is_single_file else f"（{unit.kind_cn}单元）"))
+    if unit.is_single_file:
+        csv_path = convert_to_csv(input_path, task_dir, logger)
+    else:
+        csv_path = convert_unit_to_csv(unit, customer_data, task_dir, logger)
     logger.info(f"  输出: {csv_path.name}")
     logger.info("  状态: 成功")
     output_files.append(csv_path)
@@ -1356,7 +1470,7 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
     # 2. 抽取结果落盘（审计 + 给 agent 写 CPMS 用）
     logger.info("")
     logger.info("[文件 2/5] 抽取明细（规范键 / 未识别标签）")
-    extracted_path = task_dir / f"{input_path.stem}.extracted.json"
+    extracted_path = task_dir / f"{stem}.extracted.json"
     with open(extracted_path, "w", encoding="utf-8") as f:
         f.write(customer_data.to_json())
     logger.info(f"  输出: {extracted_path.name}")
@@ -1381,7 +1495,7 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
     logger.info("")
     logger.info("[文件 4/5] ERP 取值校验报告")
     issues = issues or []
-    validation_path = task_dir / f"{input_path.stem}.validation.json"
+    validation_path = task_dir / f"{stem}.validation.json"
     report = {
         "schema": "assets/erp_form_schema.yaml",
         "schema_version": 1,
@@ -1390,6 +1504,22 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
         "errors": [i for i in issues if i["level"] == "error"],
         "warnings": [i for i in issues if i["level"] == "warn"],
         "reminders": reminders,
+        # 输入单元（一份报价由几个文件组成）+ 单元内的取值冲突，交付前必须核对
+        "unit": {
+            "kind": unit.kind,
+            "kind_cn": unit.kind_cn,
+            "label": unit.label,
+            "role": unit.role,
+            "path": str(unit.path),
+            "origin": str(unit.origin) if unit.origin else None,
+            # 压缩包拆成多份时：包只在第 1 份的任务目录里，其余份记包名 + 归属
+            "source_archive": (unit.origin.name
+                               if unit.from_archive and unit.origin else None),
+            "archive_owner": unit.archive_owner,
+            "members": [m.name for m in unit.members],
+            "skipped": [Path(s).name for s in unit.skipped],
+        },
+        "conflicts": customer_data.conflicts,
         "task_id": task_id,
         "summary": {
             "error": len([i for i in issues if i["level"] == "error"]),
@@ -1409,17 +1539,41 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
     logger.info("")
     logger.info("[文件 5/5] 原始文件归档")
     logger.info(f"  源路径: {input_path}")
-    moved_path = move_file(input_path, task_dir)
+    if unit.is_single_file:
+        moved_path = move_file(input_path, task_dir)
+    else:
+        # 文件夹 / 压缩包：整包搬进任务目录（一份报价的所有参考文件必须待在一起）
+        destination = task_dir / input_path.name
+        shutil.move(str(input_path), str(destination))
+        moved_path = destination
+        logger.info(f"  {unit.kind_cn}整包归档（{len(unit.members)} 个参考文件）")
     logger.info(f"  目标路径: {moved_path}")
     logger.info("  状态: 成功")
     output_files.append(moved_path)
 
+    # 同批拆分：原压缩包只随**第 1 份**归档（不复制 N 份）
+    if unit.from_archive and unit.origin and unit.origin.exists():
+        if unit.archive_owner:
+            zip_dest = task_dir / unit.origin.name
+            shutil.move(str(unit.origin), str(zip_dest))
+            logger.info(f"  原压缩包一并归档（本批多份报价共用这一个来源包）: {zip_dest.name}")
+            output_files.append(zip_dest)
+        else:
+            logger.info(f"  原压缩包不重复归档（同批第 1 份已归档）: {unit.origin}")
+
     # 邮件副档一起归档（保持任务自包含）
-    meta_path = input_path.with_name(input_path.name + ".meta.json")
-    if meta_path.exists():
-        moved_meta = move_file(meta_path, task_dir)
-        logger.info(f"  邮件副档一并归档: {moved_meta.name}")
-        output_files.append(moved_meta)
+    meta_path = find_unit_meta(unit)
+    if meta_path and meta_path.exists():
+        if unit.is_batch_member and meta_path.parent != unit.path:
+            # 同一批多份报价共用的副档：复制一份，原件留到批次收尾（finalize_batch）
+            copied_meta = task_dir / meta_path.name
+            shutil.copy2(meta_path, copied_meta)
+            logger.info(f"  邮件副档一并归档（本批共用，复制一份）: {copied_meta.name}")
+            output_files.append(copied_meta)
+        else:
+            moved_meta = move_file(meta_path, task_dir)
+            logger.info(f"  邮件副档一并归档: {moved_meta.name}")
+            output_files.append(moved_meta)
 
     logger.info("")
     logger.info("输出文件列表:")
@@ -1441,9 +1595,189 @@ def step6_output_results(input_path: Path, result: dict, processed_dir: Path,
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────────
+def move_unit_to_failed(unit: InputUnit, failed_dir: Optional[Path],
+                        logger: Logger) -> Optional[Path]:
+    """把这一份报价的原始输入挪进失败目录。
+
+    压缩包拆出来的子单元活在临时解压目录里（随后 cleanup 会删掉），所以复制留证。
+    """
+    if not failed_dir:
+        return None
+    src = unit.path
+    if not src.exists():
+        logger.warn(f"失败原件已不在原处（可能已被归档）: {src}")
+        return None
+    try:
+        failed_task_id = datetime.now().strftime("failed_%Y%m%d_%H%M%S")
+        failed_task_dir = create_task_directory(failed_dir, failed_task_id)
+        if unit.is_single_file:
+            moved = move_file(src, failed_task_dir)
+        elif unit.from_archive:
+            destination = failed_task_dir / src.name
+            shutil.copytree(src, destination)
+            moved = destination
+        else:
+            destination = failed_task_dir / src.name
+            shutil.move(str(src), str(destination))
+            moved = destination
+        logger.info(f"原始文件已移动到失败目录: {moved}")
+        # 邮件上下文跟着走（同批复用的副档，重跑时不用再去找邮件）
+        meta_path = find_unit_meta(unit)
+        if meta_path and meta_path.exists() and unit.path not in meta_path.parents:
+            shutil.copy2(meta_path, failed_task_dir / meta_path.name)
+            logger.info(f"邮件副档一并留证: {meta_path.name}")
+        return moved
+    except Exception as move_error:
+        logger.error(f"移动文件失败: {move_error}")
+        return None
+
+
+def process_unit(unit: InputUnit, args, processed_dir: Path,
+                 logger: Logger) -> dict:
+    """处理**一份**报价（一个输入单元）：步骤 1 → 6 + 给业务的提示。
+
+    异常直接抛给调用方：这一份进失败目录，同批其它份继续跑。
+    """
+    if not step1_input_validation(unit, logger):
+        raise ValueError("输入验证失败")
+
+    email_meta = read_attachment_meta_for_unit(unit, logger)
+    if email_meta:
+        logger.info(f"读到邮件副档: 标题={email_meta.get('subject', '')[:60]!r} "
+                    f"客户单号={email_meta.get('khdh') or '(无)'}")
+
+    # 客户识别：**先看正文，再看文件名/邮件上下文**。
+    # ⚠️ 2026-09-24 修的真 bug：只凭文件名打分曾被误判 —— NGV 的
+    #   「160x104_Colouring Cards Aldi Süd…」因为文件名含 "colour" 命中了
+    #   igl 的文件名关键词（10 分）就胜出，而正文里的 NGV 特征
+    #   （enquiry / Angebotsfrist / VK-Verpackung … 500 分）压根没被看过，
+    #   结果整单字段全错（CPLB 落到「32.00;其他」、erp_fixed 一个没上）。
+    #   现在：表格类文件一律把**正文文本**一起送进识别，文件名只当加分项。
+    probe_texts = []
+    if email_meta:
+        probe_texts = [email_meta.get("subject", ""), email_meta.get("body", "")]
+    # 单元：所有成员的正文都参与识别（一份报价里哪份文件写了客户特征都算）
+    for probe_member in unit.members:
+        if probe_member.suffix.lower() in (".xlsx", ".xls", ".csv"):
+            try:
+                from customer_profile import collect_probe_texts
+                probe_texts = probe_texts + collect_probe_texts(probe_member)
+            except Exception as probe_error:
+                logger.warn(f"读取 {probe_member.name} 正文用于客户识别失败（跳过该文件）: {probe_error}")
+        elif probe_member.suffix.lower() in (".txt", ".docx", ".pdf"):
+            try:
+                from extract_fields import read_text_document
+                probe_texts.append(read_text_document(str(probe_member))[:4000])
+            except Exception as probe_error:
+                logger.warn(f"读取 {probe_member.name} 正文用于客户识别失败（跳过该文件）: {probe_error}")
+
+    profile, source = resolve_profile(
+        args.customer, texts=probe_texts, filename=unit.stem,
+        sender=email_meta.get("sender", ""),
+        subject=email_meta.get("subject", ""), logger=logger,
+    )
+    if source != "显式指定":
+        # 自动识别先用「文件名 + 邮件上下文」做探针；识别不到时再用文件内容正式判一次，
+        # 避免因为文件名没线索而误走兜底档案。
+        from customer_profile import auto_detect
+
+        if source == "兜底" and probe_texts:
+            try:
+                candidates = auto_detect(probe_texts, filename=unit.stem)
+                if candidates:
+                    profile = candidates[0][0]
+                    source = "自动识别（文件内容）"
+                    logger.info(f"客户档案（文件内容识别）: {profile.id} 得分 {candidates[0][1]}")
+            except Exception as detect_error:
+                logger.warn(f"文件内容识别失败，沿用兜底档案: {detect_error}")
+
+    logger.info(f"选定客户档案: {profile.id}（{source}）")
+    logger.info(f"日志文件: {logger.log_file}")
+
+    customer_data = step2_load_customer_data(unit, profile, logger)
+    template = step3_load_erp_template(logger)
+    result = step5_map_fields(customer_data, template, profile, logger, email_meta)
+    issues = step5b_validate_erp_values(result, logger, profile)
+    output_info = step6_output_results(
+        unit, result, processed_dir, logger, customer_data, profile, issues,
+        strip_internal=args.strip_internal)
+
+    logger.info("")
+    logger.info("========== 任务完成 ==========")
+    logger.info(f"总耗时: {logger.elapsed_time():.1f} 秒")
+    logger.info("处理状态: 成功")
+    logger.info(f"任务ID: {output_info['task_id']}")
+    logger.info(f"客户档案: {profile.id}（{source}）")
+    logger.info(f"日志文件: {logger.log_file}")
+    logger.info("========== 任务结束 ==========")
+
+    # ★ 脚本能力边界：CPMS 必须由 agent 亲自补写
+    erp_json = output_info["erp_json"]
+    logger.info("")
+    logger.info("========== 待 agent 亲自完成 ==========")
+    logger.info(f"CPMS（产品描述）当前为空，产物: {erp_json}")
+    logger.info("请通读客户原始文件全文 → 翻译成中文 → 按类别分段优化 → 写回 CPMS 字段。")
+    logger.info(f"抽取明细（规范键+未识别标签）: {output_info['extracted_json']}")
+    logger.info("此环节无法用 Python 统一处理，脚本不生成任何 CPMS 内容。")
+    logger.info("======================================")
+    print("")
+    print("=" * 64)
+    print("!! CPMS 为空 —— 必须由 agent 亲力亲为补写 !!")
+    print(f"   产物: {erp_json}")
+    print(f"   抽取明细: {output_info['extracted_json']}")
+    print("   步骤: 通读客户原文 -> 翻译成中文 -> 按类别分段优化 -> 写回 CPMS")
+    if customer_data.extras_found:
+        print(f"   别漏这些非 ERP 字段的附加信息（{len(customer_data.extras_found)} 项）:")
+        print(f"     {', '.join(customer_data.extras_found[:10])}")
+        print(f"     （完整清单见 {output_info['extracted_json']} 的 extras_found）")
+    # 长文本素材：分区表单（NGV）没有「附加信息栏位」，要写进 CPMS 的规格细节
+    # 全在长文本规范键里（specials / notes / packaging_specials…）。没有这条提示时，
+    # extras 为空的客户会看不到「原文还有一大段要翻译」的信号。
+    long_texts = [(k, str(v)) for k, v in (customer_data.values or {}).items()
+                  if len(str(v or "")) >= 80]
+    if long_texts:
+        print(f"   别漏这些长文本规范键（{len(long_texts)} 项，原文细节都在里面）:")
+        for key, val in long_texts[:5]:
+            head = val.replace("\n", " ")[:70]
+            print(f"     - {key}: {head}…")
+        print(f"     （完整内容见 {output_info['extracted_json']} 的 values）")
+    print("=" * 64)
+
+    # ★ ERP 取值校验结果：有 error 时必须人工确认，别直接导入
+    v_errors = [i for i in (issues or []) if i["level"] == "error"]
+    v_warns = [i for i in (issues or []) if i["level"] == "warn"]
+    print("")
+    if v_errors:
+        print("=" * 64)
+        print(f"!! ERP 取值校验：{len(v_errors)} 个 error —— 导入前必须处理 !!")
+        for i in v_errors:
+            print(f"   ✗ {i['field']}: {i['message']}")
+        print(f"   明细: {output_info['validation_json']}")
+        print("=" * 64)
+    else:
+        print(f"ERP 取值校验: 通过（0 error / {len(v_warns)} warn）")
+
+    # ★ 报价截止日期提醒（业务 2026-09-24 硬要求：过期必须提醒，不许埋在日志里）
+    for r in (output_info.get("reminders") or []):
+        print("")
+        print("=" * 64)
+        print(f"!! 提醒业务：{r['message']} !!")
+        print(f"   报价截止: {r['deadline']}（已逾期 {r['days_over']} 天）")
+        print("=" * 64)
+
+    output_info["profile_id"] = profile.id
+    output_info["profile_source"] = source
+    output_info["validation_errors"] = len(v_errors)
+    output_info["validation_warnings"] = len(v_warns)
+    output_info["unit"] = unit.summary()
+    return output_info
+
+
 def main():
     parser = argparse.ArgumentParser(description="客户报价请求处理（多客户档案驱动）")
-    parser.add_argument("input_file", help="输入文件路径 (CSV, XLSX, DOCX, TXT, PDF)")
+    parser.add_argument("input_file",
+                        help="输入路径：单文件 = 独一份报价；文件夹 / .zip = 一份报价的"
+                             "全部参考文件（里面若有子目录，则子目录各算一份报价）")
     parser.add_argument("--customer", "-c", default="auto",
                         help="客户档案 id（默认 auto = 按文件内容自动识别；"
                              "可用 ./scripts/customer_profile.py --list 查看）")
@@ -1477,6 +1811,17 @@ def main():
     processed_dir = Path(args.processed_dir) if args.processed_dir else customer_files_dir / "processed"
     failed_dir = Path(args.failed_dir) if args.failed_dir else customer_files_dir / "failed"
 
+    # ── 输入单元：一份报价 = 单文件 | 文件夹 | 压缩包 ──────────────────────
+    # 业务口径（2026-10-20）：单个文件是**独一份报价**；文件夹 / 压缩包里的文件
+    # 则是**这一份报价的全部参考文件** —— 合并成一份，只出一个 ERP JSON。
+    # 补充口径（1.0.38）：文件夹 / 压缩包里**有子目录**时，子目录各算一份报价
+    # （一个文件夹里躺着两个独立单，别给合并成一份）。
+    try:
+        units = resolve_input_units(input_path)
+    except ValueError as exc:
+        print(f"!! {exc}", file=sys.stderr)
+        return 1
+
     # 语料库样本不许跑进真交付区（会把客户原文移走 + 留下未完成产物）
     guard_error = sample_run_guard(input_path, args)
     if guard_error:
@@ -1490,150 +1835,66 @@ def main():
 
     logger.info("========== 任务开始 ==========")
     logger.info(f"源文件: {input_path}")
+    if len(units) > 1:
+        logger.info(f"输入单元: 拆成 {len(units)} 份报价（有子目录 → 子目录各算一份）")
+        for number, each in enumerate(units, 1):
+            logger.info(f"  第 {number} 份: {each.stem}（{each.label}）")
+    else:
+        logger.info(f"输入单元: {units[0].label}")
     logger.info(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    succeeded: list[dict] = []
+    failures: list[tuple[InputUnit, Exception]] = []
     try:
-        if not step1_input_validation(input_path, logger):
-            raise ValueError("输入验证失败")
-
-        email_meta = read_attachment_meta(input_path)
-        if email_meta:
-            logger.info(f"读到邮件副档: 标题={email_meta.get('subject', '')[:60]!r} "
-                        f"客户单号={email_meta.get('khdh') or '(无)'}")
-
-        # 客户识别：**先看正文，再看文件名/邮件上下文**。
-        # ⚠️ 2026-09-24 修的真 bug：只凭文件名打分曾被误判 —— NGV 的
-        #   「160x104_Colouring Cards Aldi Süd…」因为文件名含 "colour" 命中了
-        #   igl 的文件名关键词（10 分）就胜出，而正文里的 NGV 特征
-        #   （enquiry / Angebotsfrist / VK-Verpackung … 500 分）压根没被看过，
-        #   结果整单字段全错（CPLB 落到「32.00;其他」、erp_fixed 一个没上）。
-        #   现在：表格类文件一律把**正文文本**一起送进识别，文件名只当加分项。
-        probe_texts = []
-        if email_meta:
-            probe_texts = [email_meta.get("subject", ""), email_meta.get("body", "")]
-        if input_path.suffix.lower() in (".xlsx", ".xls", ".csv"):
+        for number, unit in enumerate(units, 1):
+            if len(units) > 1:
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info(f"第 {number}/{len(units)} 份报价: {unit.stem}（{unit.label}）")
+                logger.info("=" * 60)
             try:
-                from customer_profile import collect_probe_texts
-                probe_texts = probe_texts + collect_probe_texts(input_path)
-            except Exception as probe_error:
-                logger.warn(f"读取文件正文用于客户识别失败（退回只看文件名）: {probe_error}")
+                succeeded.append(process_unit(unit, args, processed_dir, logger))
+            except Exception as unit_error:
+                logger.error(f"第 {number}/{len(units)} 份处理失败: {unit_error}")
+                failures.append((unit, unit_error))
+                move_unit_to_failed(unit, failed_dir, logger)
+                logger.info(f"处理状态: 失败 —— 继续处理同批剩余的 {len(units) - number} 份")
+    finally:
+        # 批次收尾：共享邮件副档清掉 + 被搬空的父目录删掉
+        # （失败那份的副档已经复制进 failed/ 留证，所以这里一律清）
+        if len(units) > 1:
+            try:
+                note = finalize_batch(units, logger)
+                if note:
+                    logger.info(note)
+            except Exception as batch_error:
+                logger.warn(f"批次收尾失败（不影响产物）: {batch_error}")
+        # zip 解压出来的临时副本用完就删（原压缩包已归档 / 已退回失败目录）
+        for each in units:
+            try:
+                each.cleanup()
+            except Exception:
+                pass
 
-        profile, source = resolve_profile(
-            args.customer, texts=probe_texts, filename=input_path.name,
-            sender=email_meta.get("sender", ""),
-            subject=email_meta.get("subject", ""), logger=logger,
-        )
-        if source != "显式指定":
-            # 自动识别先用「文件名 + 邮件上下文」做探针；识别不到时再用文件内容正式判一次，
-            # 避免因为文件名没线索而误走兜底档案。
-            from customer_profile import auto_detect
-
-            if source == "兜底" and input_path.suffix.lower() in (".xlsx", ".xls", ".csv"):
-                try:
-                    quick = load_customer_data(str(input_path), profile, logger=None)
-                    candidates = auto_detect(quick.text_blocks, filename=input_path.name)
-                    if candidates:
-                        profile = candidates[0][0]
-                        source = "自动识别（文件内容）"
-                        logger.info(f"客户档案（文件内容识别）: {profile.id} 得分 {candidates[0][1]}")
-                except Exception as detect_error:
-                    logger.warn(f"文件内容识别失败，沿用兜底档案: {detect_error}")
-
-        logger.info(f"选定客户档案: {profile.id}（{source}）")
-        logger.info(f"日志文件: {log_file}")
-
-        customer_data = step2_load_customer_data(input_path, profile, logger)
-        template = step3_load_erp_template(logger)
-        result = step5_map_fields(customer_data, template, profile, logger, email_meta)
-        issues = step5b_validate_erp_values(result, logger, profile)
-        output_info = step6_output_results(
-            input_path, result, processed_dir, logger, customer_data, profile, issues,
-            strip_internal=args.strip_internal)
-
-        logger.info("")
-        logger.info("========== 任务完成 ==========")
-        logger.info(f"总耗时: {logger.elapsed_time():.1f} 秒")
-        logger.info("处理状态: 成功")
-        logger.info(f"任务ID: {output_info['task_id']}")
-        logger.info(f"客户档案: {profile.id}（{source}）")
-        logger.info(f"日志文件: {log_file}")
-        logger.info("========== 任务结束 ==========")
-
-        # ★ 脚本能力边界：CPMS 必须由 agent 亲自补写
-        erp_json = output_info["erp_json"]
-        logger.info("")
-        logger.info("========== 待 agent 亲自完成 ==========")
-        logger.info(f"CPMS（产品描述）当前为空，产物: {erp_json}")
-        logger.info("请通读客户原始文件全文 → 翻译成中文 → 按类别分段优化 → 写回 CPMS 字段。")
-        logger.info(f"抽取明细（规范键+未识别标签）: {output_info['extracted_json']}")
-        logger.info("此环节无法用 Python 统一处理，脚本不生成任何 CPMS 内容。")
-        logger.info("======================================")
+    # ── 汇总 ──────────────────────────────────────────────────────────────
+    if len(units) > 1:
         print("")
         print("=" * 64)
-        print("!! CPMS 为空 —— 必须由 agent 亲力亲为补写 !!")
-        print(f"   产物: {erp_json}")
-        print(f"   抽取明细: {output_info['extracted_json']}")
-        print("   步骤: 通读客户原文 -> 翻译成中文 -> 按类别分段优化 -> 写回 CPMS")
-        if customer_data.extras_found:
-            print(f"   别漏这些非 ERP 字段的附加信息（{len(customer_data.extras_found)} 项）:")
-            print(f"     {', '.join(customer_data.extras_found[:10])}")
-            print(f"     （完整清单见 {output_info['extracted_json']} 的 extras_found）")
-        # 长文本素材：分区表单（NGV）没有「附加信息栏位」，要写进 CPMS 的规格细节
-        # 全在长文本规范键里（specials / notes / packaging_specials…）。没有这条提示时，
-        # extras 为空的客户会看不到「原文还有一大段要翻译」的信号。
-        long_texts = [(k, str(v)) for k, v in (customer_data.values or {}).items()
-                      if len(str(v or "")) >= 80]
-        if long_texts:
-            print(f"   别漏这些长文本规范键（{len(long_texts)} 项，原文细节都在里面）:")
-            for key, val in long_texts[:5]:
-                head = val.replace("\n", " ")[:70]
-                print(f"     - {key}: {head}…")
-            print(f"     （完整内容见 {output_info['extracted_json']} 的 values）")
+        print(f"本批共 {len(units)} 份报价：成功 {len(succeeded)}，失败 {len(failures)}")
+        for info in succeeded:
+            print(f"  ✓ {Path(info['erp_json']).name}  task={info['task_id']}")
+            print(f"     CPMS 待写 → {info['task_dir']}")
+        for unit, error in failures:
+            print(f"  ✗ {unit.stem}: {error}")
+        print("  每份都还没写 CPMS —— 逐个补写，别只写第一份。")
         print("=" * 64)
-
-        # ★ ERP 取值校验结果：有 error 时必须人工确认，别直接导入
-        v_errors = [i for i in (issues or []) if i["level"] == "error"]
-        v_warns = [i for i in (issues or []) if i["level"] == "warn"]
-        print("")
-        if v_errors:
-            print("=" * 64)
-            print(f"!! ERP 取值校验：{len(v_errors)} 个 error —— 导入前必须处理 !!")
-            for i in v_errors:
-                print(f"   ✗ {i['field']}: {i['message']}")
-            print(f"   明细: {output_info['validation_json']}")
-            print("=" * 64)
-        else:
-            print(f"ERP 取值校验: 通过（0 error / {len(v_warns)} warn）")
-
-        # ★ 报价截止日期提醒（业务 2026-09-24 硬要求：过期必须提醒，不许埋在日志里）
-        for r in (output_info.get("reminders") or []):
-            print("")
-            print("=" * 64)
-            print(f"!! 提醒业务：{r['message']} !!")
-            print(f"   报价截止: {r['deadline']}（已逾期 {r['days_over']} 天）")
-            print("=" * 64)
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"错误: {e}")
-
-        if failed_dir and input_path.exists():
-            try:
-                failed_task_id = datetime.now().strftime("failed_%Y%m%d_%H%M%S")
-                failed_task_dir = create_task_directory(failed_dir, failed_task_id)
-                moved_path = move_file(input_path, failed_task_dir)
-                logger.info(f"原始文件已移动到失败目录: {moved_path}")
-            except Exception as move_error:
-                logger.error(f"移动文件失败: {move_error}")
-
         logger.info("")
-        logger.info("========== 任务失败 ==========")
-        logger.info(f"总耗时: {logger.elapsed_time():.1f} 秒")
-        logger.info("处理状态: 失败")
-        logger.info(f"错误信息: {e}")
         logger.info("========== 任务结束 ==========")
-        return 1
+        logger.info(f"本批共 {len(units)} 份报价：成功 {len(succeeded)}，失败 {len(failures)}")
+        logger.info(f"总耗时: {logger.elapsed_time():.1f} 秒")
+        print(f"日志文件: {log_file}")
+
+    return 0 if not failures else 1
 
 
 if __name__ == "__main__":
