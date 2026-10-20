@@ -172,6 +172,32 @@ uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
 拆出来的每份在 `validation.json` 的 `unit.role = "subdir"`、`unit.origin` 指回父目录；
 压缩包拆多份时原包只随第 1 份归档（`archive_owner`），其余份记 `source_archive`（包名）。
 
+## 1.7 ★ 与业务员 ERP 记录对账：NGV 已知的三个坑（2026-10-20）
+
+业务员把同一单手填进 ERP 的记录（本次 `BJXQ260708007` / `CU26070802`）是最好的参照，
+但 NGV 这条线有三个**已经定位过**的坑，再对账时会立刻遇到，别重新推导：
+
+1. **`CPLB` 的「PAD头书」是脚本推不出来的。** `customers/ngv.yaml` 里
+   `perfect\s*binding → 23.06` 是从**单份**样本（`CU26072302`）反查来的，而那份原文
+   **没有 `PAD` 字样** → 该值属人工结构判断。于是「冲形状无线胶装」会被误判成 PAD头书。
+   树自己的 `paths:` 第 5 问写了正确优先级：**整书冲形状 → 23.03**。
+   同时 `perfect binding **at the top**` 的 `top` 是**装订边位置**，不是 PAD 的「头」——
+   术语误读。修法与连带代价见总纲
+   `references/reconcile-with-salesperson-erp-record.md`。
+2. **`CD/KD` 业务侧自己录得不一致。** 本次 `148x210 → CD=210,KD=148`（长在前），
+   历史导出 `240x300 → CD=240,KD=300`、`145x210 → CD=145,KD=210`（TPS 第一段进 CD）。
+   schema 标 `CD=长 / KD=宽`。**这是业务侧口径分歧，别自己挑一个改**——两派证据并列请森西拍板。
+3. **`CPMS` 与 ERP 字段是两套口径。** 本次业务记录 `Drop_SJFX` 是空的，CPMS 却写
+   `书籍方向：【短书脊】`。所以「`Drop_SJFX` 空 → CPMS 省略方向」是错的：
+   竖版 + 装订在顶部 ⇒ 书脊在 148mm 短边，推得出来。
+   另外装订段**不许照抄 `ZDFS` 的下拉值**（`胶装/PAD书`），要写客户原文的
+   `冲形状无线胶装书（冲鸡蛋形状）`。
+   ⚠️ 这两处 `cpms_lint` 都放过（0 error）——**lint 过 ≠ 文本对**。
+
+对账纪律：`"" ≡ null` 归一后先读 `customers/ngv.erp_diff.json` 与
+`customer-files/samples/ngv/manifest.json` 的 `known_differences`（8 项已拍板口径，
+`CPDL/BZ/PXH/YYS/SFYPJ/Remark1/Remark3/FSCMC`），**先读白名单再动嘴**，否则整份报告会被读成「31 个 bug」。
+
 ## 2. 怎么认出这是 NGV
 
 - **文件名关键词**：`ngv`

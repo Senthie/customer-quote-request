@@ -245,8 +245,11 @@ erp_fixed:
   SHFS: FOB(NGV)          # 送货方式：ERP 下拉里就有 FOB(NGV) 这一项
   BZFS: 纸箱包装
   TBLX: 不打卡板
-  # 业务员（YWY）：业务 2026-10-19 拍板 —— 业务员代号 **KM** 属于 YWY，
-  # **不是** CPMC 的前缀（此前把 KM 拼在 CPMC 最前面是错的）。
+  # 业务员（YWY）：业务 2026-10-20 明确 —— **必须填 `KM`**，
+  # 「这是我们区分谁生成的单」：KM = 脚本/agent 产出的标记（业务手写的单会带本人姓名，
+  # 如「陈纯」）。⚠️ 别当「ERP 自动带出」清空，也别换成业务员姓名（1.0.34 之所以
+  # 把 KM 落在这里，就是让它有处可去；2026-10-20 复核确认这是对的）。
+  # 同时它**不是** CPMC 的前缀（那是旧口径，已作废）。
   YWY: KM
   BZ: 美元
   PXH: ""                 # 显式留空（见上）
@@ -324,8 +327,16 @@ rules:
     max_label_len: 60       # >60 字符的单元格一律不当标签（保护 B24 的长文本）
   size:
     unit: mm
-    # TPS 是「先宽后高」：145 x 210 portrait → CD=145 KD=210（与 ERP 导出核对过）
+    # TPS 是「先宽后高」（148 x 210 portrait）。
+    # ★ 2026-10-20 业务拍板：**CD = 长（较长边）、KD = 宽（较短边）** —— 所以 148x210
+    #   落 CD=210 / KD=148（与 BJXQ260708007 的真单一致）。顺序写什么都行：
+    #   `main.parse_size` 解析完会把「长边在前」兜底交换并留日志。
+    #   ⚠️ 历史 3 份导出（240x300 / 145x210）是「TPS 第一段直接进 CD」，与 ERP 字段
+    #     定义（CD=长）矛盾，属业务录入习惯 → 已按 2026-10-20 口径统一，不再跟随。
     order: [CD, KD]
+    # ★ 落库前把「长边」放 CD（业务 2026-10-20 拍板：CD=长 / KD=宽）。
+    #   TPS 先宽后高，交换后 148x210 → CD=210 KD=148，与真单 BJXQ260708007 一致。
+    long_first: true
     # 套装（盒子）录系统尺寸一律写 0/0/0 —— 业务决定（2026-09-24）。
     # 附件的 TPS 是盒内单件的尺寸（CU26061701 是 160x104 的卡片、CU26072301 是
     # 100x155 的明信片），不采用；ERP 记录里三单套装全是 0/0/0。
@@ -389,19 +400,36 @@ rules:
     map:
       - { cplb_top: 套装, unit: 套 }
   # 产品类别 CPLB：NGV 的表单里没有类别栏，只能由装订/结构推断到树节点。
-  # 4 个节点都由真实 ERP 导出反查确认（24.03 / 23.06 / 29.04）。
+  # ★ 顺序 = 优先级，**先认装订方式，再用结构（冲形状/PAD）细分**（2026-10-20 重排）。
+  #   依据：assets/cplb_tree.yaml 的判定路径 ——
+  #     第 2 问「装订方式」→ 23 胶装 / 24 骑钉 / 26 线圈 / 22 精装 …
+  #     第 5 问「整书冲形状」→ 取同装订的「冲形状 XXX」（如 23.03）
+  #     第 6 问（胶装特例）「PAD 头」→ 23.05 / 23.06
+  #   ⚠️ 2026-10-20 修的真 bug（CU26070802 暴露）：旧规则把
+  #     `perfect\s*binding|open\s*pad|pad\s*bind` 一律映射到 23.06「PAD头书(全封面)」，
+  #     于是「perfect binding at the top」被判成 PAD 头书：
+  #       ① perfect binding 只是**装订方式**（无线胶装），不是产品形态；
+  #       ② `at the top` 的 top 被误读成 PAD 的「头」（那是装订边位置）；
+  #       ③ 整书冲形状（shape die-cutting egg form）根本没进判定 → 23.03 才是对的。
+  #     真单 BJXQ260708007（KiK Ostermalblock）的 ERP 类别就是「冲形状无线胶装书」。
+  #   PAD头书 23.05/23.06 的前提是「封面大于内文 / 露 PAD 头 / 需二次上胶装」——
+  #   这条只能人工判，客户文件里常常只写 perfect binding（CU26072302 就是），
+  #   所以脚本落到 23.01 并打 WARN 交业务改，绝不主动猜 PAD。
   cplb:
     match_keys: [binding, binding_instructions, specials, text_material, product_name]
     map:
       - { match: "safety\\s*saddle|saddle[- ]stitch", node: "24.03" }   # 贴纸骑钉书
-      - { match: "perfect\\s*binding|open\\s*pad|pad\\s*bind", node: "23.06" }  # PAD头书(全封面)
-      - { match: "ridged\\s*box|folded\\s*box|\\blose\\b", node: "29.04" }      # 其它套装
-      # ★ 2026-10-19 从真实 ERP 导出反查：`Wire-O Binding` → CPLB「普通YO书」(26.07)。
-      #   Wire-O 是**双线圈**（YO），26.01 是单线圈「普通蛇圈书」—— 之前把两者混在一个正则里、
-      #   落到 26.01，实际单据（BJXQ260704002 / PR-00091345）是 26.07。别合并回去。
-      - { match: "wire[- ]?o|wiro|YO书|双线圈", node: "26.07" }        # 普通YO书
-      - { match: "spiral|蛇圈|单线圈|线圈", node: "26.01" }                  # 普通蛇圈书
-      - { match: "case\\s*bound|hardcover|精装", node: "22.02" }
+      - { match: "wire[- ]?o|wiro|YO书|双线圈", node: "26.07" }          # 普通YO书（双线圈）
+      - { match: "spiral|蛇圈|单线圈|线圈", node: "26.01" }              # 普通蛇圈书
+      - { match: "case\\s*bound|hardcover|精装", node: "22.02" }          # 精装书
+      - { match: "ridged?\\s*box|folded\\s*box|\\blose\\b", node: "29.04" }  # 其它套装
+      # PAD 头书：**必须原文出现 PAD 字样**（open pad / pad binding / 露 PAD 头）。
+      # 有封面的 PAD 头书（二次上胶装）→ 23.06；其余 PAD → 23.05。
+      - { match: "pad\\s*(?:head|头)|露\\s*PAD|PAD\\s*头|open\\s*pad", node: "23.06" }
+      # 整书冲形状 + 胶装 → 冲形状无线胶装书（本单 KiK 蛋形冲 = 23.03）
+      - { match: "(?:shape\\s*die|die[- ]?cut|egg\\s*form|冲形状|啤\\s*形状)",
+          node: "23.03", requires: "perfect\\s*binding|softcover|open\\s*pad|无线胶装|胶装" }
+      - { match: "perfect\\s*binding|softcover|无线胶装", node: "23.01" }  # 普通无线胶装书
   product_category:
     fallback: "32.00;其他"
   # 产品名称 CPMC：NGV 的 CPMC 是人写的复合串（权威导出 4 份实测）：
@@ -497,7 +525,9 @@ rules:
     # 装订方向原文：`perfect binding at the top` / `at the head` / `at the side` …
     # **只写进 CPMS 的「装订」段**，不映射 ERP 字段（业务 2026-10-20 口径：
     # 装订边位置 ≠ ERP 的长/短书脊）。识别不到时 Drop_SJFX 走 rules.spine.default。
-    - { key: binding_direction, pattern: "(?i)(?:at|on|along)\\s+the\\s+(?:top|bottom|left|right|head|spine|short|long)\\b[\\w ]{0,12}" }
+    # ⚠️ 2026-10-20：加 `side` —— 客户写 `perfect binding at the side` 时旧正则抓不到，
+    #   书脊方向就白丢了（`at long side` 这种没 the 的写法仍抓不到，靠 binding_side 数字兜）。
+    - { key: binding_direction, pattern: "(?i)(?:at|on|along)\\s+the\\s+(?:top|bottom|left|right|head|spine|side|short|long)\\b[\\w ]{0,12}" }
     # 香港单号：附件文件名里带「香港单号 CU26072301」，表内也常有。
     # ⚠️ 落到 **KHDDH**（模板第 43 键，中文标签就是「香港单号」），不是 KHDH。
     - { key: khddh, pattern: "香港单号\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)" }

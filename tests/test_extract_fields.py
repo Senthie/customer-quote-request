@@ -132,16 +132,32 @@ def test_档位_有标签才认():
 
 
 # ── 尺寸 / 材质 / 页数 ──────────────────────────────────────────────────
+def _fields(profile, text):
+    """去掉 `_raw`（内部用：书名方向换算要客户原始两段，不进 ERP 字段）。"""
+    return {k: v for k, v in parse_size(text, profile, LOGGER).items() if not k.startswith("_")}
+
+
 def test_尺寸_两段只有长宽():
-    assert parse_size("198mm x 129mm", IGL, LOGGER) == {"CD": 198, "KD": 129}
+    assert _fields(IGL, "198mm x 129mm") == {"CD": 198, "KD": 129}
 
 
 def test_尺寸_三段含厚度():
-    assert parse_size("198mm x 129mm x 10mm", IGL, LOGGER) == {"CD": 198, "KD": 129, "GD": 10}
+    assert _fields(IGL, "198mm x 129mm x 10mm") == {"CD": 198, "KD": 129, "GD": 10}
 
 
 def test_尺寸_支持乘号与星号():
-    assert parse_size("198 mm × 129 mm", IGL, LOGGER) == {"CD": 198, "KD": 129}
+    assert _fields(IGL, "198 mm × 129 mm") == {"CD": 198, "KD": 129}
+
+
+def test_尺寸_NGV按CD为长边落库():
+    """业务 2026-10-20：CD=长 / KD=宽。NGV 的 TPS 先宽后高 → 148x210 落 CD=210 KD=148。
+
+    igl 没开 `size.long_first`（它的列本身是 H x W，口径是 CD=H），所以这里用 NGV 档案验。
+    """
+    ngv = load_profile("ngv")
+    parsed = parse_size("148 x 210 mm portrait", ngv, LOGGER)
+    assert (parsed["CD"], parsed["KD"]) == (210, 148)
+    assert parsed["_raw"] == [148, 210], "原始两段要留着 —— 书脊方向靠它算横竖版"
 
 
 def test_页数解析():

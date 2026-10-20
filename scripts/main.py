@@ -164,12 +164,19 @@ def resolve_cplb(customer_data: CustomerData, profile: CustomerProfile,
     for entry in profile.rule("cplb.map", []) or []:
         pattern = str(entry.get("match", ""))
         code = str(entry.get("node", "")).strip()
+        requires = str(entry.get("requires", "") or "")
         if not pattern or not code:
+            continue
+        # requires：同一份原文里还必须**另有**证据才认（例如「冲形状」得配合「胶装」，
+        # 否则会把冲形状的精装/线圈也吞进来）。缺 requires = 无条件命中。
+        if requires and not re.search(requires, blob, re.IGNORECASE):
             continue
         if re.search(pattern, blob, re.IGNORECASE):
             if cplb_tree.exists(code):
                 label = cplb_tree.label_of(code)
-                logger.info(f"  类别映射: 命中 /{pattern}/ → {label}")
+                logger.info(f"  类别映射: 命中 /{pattern}/"
+                            + (f"（且 /{requires}/）" if requires else "")
+                            + f" → {label}")
                 return label, f"档案 cplb.map（命中 /{pattern}/）"
             logger.warn(f"  档案 cplb.map 命中 /{pattern}/，但编号 {code} 不在产品类别树里 → 忽略")
 
@@ -419,17 +426,70 @@ def parse_size(size_str: str, profile: CustomerProfile, logger: Logger) -> dict:
     """按档案 `rules.size`（单位 + 顺序）解析尺寸串 → {CD/KD/GD: 数值}。
 
     例（igl，order=[CD,KD,GD]，unit=mm）：`198mm x 129mm x 10mm` → CD=198 KD=129 GD=10
+
+    ★ ERP 口径（业务 2026-10-20 拍板）：**CD = 长（较长边）、KD = 宽（较短边）**。
+      客户写法五花八门（NGV 的 TPS 是「先宽后高」、igl 是「H x W x D」），所以解析完
+      统一兜底：CD < KD 就交换。这样「产品规格：【长*宽*厚】」（CPMS 概要行）恒成立。
+      同时把客户原始两段保留在 `_raw` 里 —— 书脊方向要靠「装订边是哪条边」算，
+      交换后光看 CD/KD 已经分不出横竖版。
     """
     unit = str(profile.rule("size.unit", DEFAULT_UNIT))
     order = profile.rule("size.order", ["CD", "KD", "GD"]) or ["CD", "KD", "GD"]
     normalized = re.sub(re.escape(unit), " ", str(size_str), flags=re.IGNORECASE)
     chunks = [c for c in re.split(r"[x×*]", normalized) if c.strip()]
     out: dict = {}
+    raw: list = []
     for idx, chunk in enumerate(chunks[:len(order)]):
         value = _to_number(chunk)
         if value is not None:
             out[order[idx]] = _num(value)
+            raw.append(_num(value))
+    out["_raw"] = raw[:2]
+
+    # CD=长 / KD=宽（业务 2026-10-20 对 NGV 拍板）：客户给的是「先宽后高」还是「先高后宽」
+    # 都不管，落库前统一成长边在前。交换必须留痕 —— 否则有人会以为是客户写错了。
+    # ⚠️ 只对声明了 `size.long_first: true` 的客户生效：igl 的附件列本身是「H x W」，
+    #    已核对的口径是 CD=H（不是长度方向），没拿到 igl 的 ERP 反证前不动它。
+    if (profile.rule("size.long_first", False)
+            and out.get("CD") and out.get("KD") and out["CD"] < out["KD"]):
+        out["CD"], out["KD"] = out["KD"], out["CD"]
+        if logger is not None:
+            logger.info(f"  尺寸交换: 客户写 {raw[0]} x {raw[1]}，"
+                        f"按 ERP 口径（CD=长 / KD=宽）落 CD={out['CD']} KD={out['KD']}")
     return out
+
+
+def spine_from_binding_direction(direction: str, raw: list,
+                                 size_str: str) -> Optional[str]:
+    """装订边位置 + 版式 → 书脊在长边还是短边（"长书脊" / "短书脊" / None）。
+
+    「at the top / at the head / at the bottom」 = 装订在**上/下边** → 书脊沿水平边（宽）；
+    「at the side / left / right / spine」 = 书脊沿垂直边（高）。
+    再跟较长边比较：书脊长度 == 较长边 → 长书脊，否则短书脊。
+
+    业务 2026-10-20 拍板 **CD=长 / KD=宽** 之后，这一步不再是「猜方向」——
+    方向（哪条边装订）+ 版式（竖/横）就能算出书脊在长边还是短边：
+      * 真单 BJXQ260708007：148x210 portrait + `at the top` → 书脊在 148 边 → **短书脊**
+        （业务 ERP 的 CPMS 概要行写的正是【短书脊】，ERP `Drop_SJFX` 他们留空了）。
+    判不出来（没有方向词 / 没有尺寸）→ 返回 None，由调用方留空。
+    """
+    text = str(direction or "").strip().lower()
+    if not text or len(raw or []) < 2:
+        return None
+    vertical_edge = any(k in text for k in
+                        ("side", "left", "right", "spine", "侧", "左", "右", "书脊"))
+    horizontal_edge = any(k in text for k in
+                          ("top", "head", "bottom", "foot", "顶", "头", "天头", "底", "地脚"))
+    if not (vertical_edge or horizontal_edge):
+        return None
+
+    first, second = raw[0], raw[1]
+    landscape = bool(re.search(r"landscape|querformat|横版|横排|横",
+                               str(size_str or ""), re.IGNORECASE))
+    width, height = (max(first, second), min(first, second)) if landscape \
+        else (min(first, second), max(first, second))
+    spine_len = width if horizontal_edge else height
+    return "长书脊" if spine_len >= max(first, second) else "短书脊"
 
 
 def parse_extent(extent_str: str) -> tuple:
@@ -764,6 +824,7 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     # 业务依据（2026-09-24）：NGV 的套装（盒子 —— 卡盒、卡片+底座组合）不按单件尺寸录入。
     # 附件的 TPS 是盒内卡片的尺寸（160x104 / 100x155），但 ERP 记录里 CD/KD/GD 全是 0。
     zero_tops = [str(t) for t in (profile.rule("size.zero_tops", []) or [])]
+    size_info: dict = {}
     if cplb_top and cplb_top in zero_tops:
         for field in ("CD", "KD", "GD"):
             result[field] = 0
@@ -776,6 +837,7 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     elif size_str:
         logger.info(f"  来源: size（规范键）={size_str}")
         parsed = parse_size(size_str, profile, logger)
+        size_info = parsed
         for field in ("CD", "KD"):
             if field in parsed:
                 result[field] = parsed[field]
@@ -872,14 +934,29 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
             success_count += 1
             assigned.append("Drop_SJFX")
         else:
-            # 业务口径 2026-10-20：识别不到 → **留空（JSON null）**，不猜「长书脊」。
-            fallback = str(profile.rule("spine.default", "") or "").strip()
-            result["Drop_SJFX"] = fallback or None
-            logger.warn("  识别不到装订边/装订方向 → 书脊方向**留空**（null），"
-                        "按业务口径不猜长/短书脊，交业务在 ERP 里补")
-            if direction:
-                logger.info(f"  装订方向原文: {direction!r}（只写进 CPMS，不参与 ERP 书脊方向判定）")
-            default_count += 1
+            # 没有 `N mm side`：用「装订边位置 + 版式」换算书脊在长边还是短边。
+            # 业务 2026-10-20 拍板 CD=长/KD=宽 之后这一步是几何换算，不是猜
+            # （真单 BJXQ260708007：148x210 portrait + at the top → 短书脊）。
+            derived = spine_from_binding_direction(direction, size_info.get("_raw") or [],
+                                                   str(customer_data.get("size") or ""))
+            if derived:
+                result["Drop_SJFX"] = str(profile.rule(
+                    "spine.long" if derived == "长书脊" else "spine.short", derived))
+                logger.info(f"  来源: 装订方向原文 {direction!r} + 版式"
+                            f"（无 `N mm side`）→ {result['Drop_SJFX']}")
+                logger.info("  映射值: " + str(result["Drop_SJFX"]))
+                logger.info("  状态: 成功")
+                success_count += 1
+                assigned.append("Drop_SJFX")
+            else:
+                # 业务口径 2026-10-20：识别不到 → **留空（JSON null）**，不猜「长书脊」。
+                fallback = str(profile.rule("spine.default", "") or "").strip()
+                result["Drop_SJFX"] = fallback or None
+                logger.warn("  识别不到装订边/装订方向 → 书脊方向**留空**（null），"
+                            "按业务口径不猜长/短书脊，交业务在 ERP 里补")
+                if direction:
+                    logger.info(f"  装订方向原文: {direction!r}（推不出长/短 → 不落库）")
+                default_count += 1
     elif cd > 0 and kd > 0:
         logger.info(f"  来源: 尺寸比较（档案 rules.spine.mode={spine_mode}）")
         if cd > kd:

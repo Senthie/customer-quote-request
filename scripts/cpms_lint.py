@@ -145,6 +145,7 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
 
     # ── 段落：标签 / 顺序 / 空值 ──
     blocks: list[list[tuple[int, str, int]]] = [[]]          # [(行号, 规范标签, order)]
+    label_values: dict[str, tuple[int, str]] = {}            # 标签 → (行号, 值)
     seen_item = False
     for i, line in enumerate(lines, 1):
         s = line.strip()
@@ -184,12 +185,23 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
             add("CPMS020", i, f"标签「{label}」不在词表内" + (f"（候选：{hint}）" if hint else "（自定义子项请用「- 子项：值」）"))
             continue
         blocks[-1].append((i, label, spec.order[label]))
+        label_values.setdefault(label, (i, value))
         _check_value(label, value, i, spec, add)
 
     for b in blocks:
         for (l1, n1, o1), (l2, n2, o2) in zip(b, b[1:]):
             if o2 < o1:
                 add("CPMS030", l2, f"段落顺序错误：「{n2}」不应出现在「{n1}」之后（顺序：部件 → 装订 → 包装 → 装箱 → 箱唛 → 备注）")
+
+    # 装订段必须写**客户原文的装订方式**，不是 ERP「装订方式 ZDFS」的下拉值。
+    # 真 bug（2026-10-20，CU26070802）：CPMS 写成「装订：胶装/PAD书…」——那是 ZDFS 枚举
+    # （一个字面同时代表「胶装」和「PAD 书」两类），客户原文是「冲形状无线胶装书（冲鸡蛋形状）」。
+    if "装订" in label_values:
+        line_no, binding_text = label_values["装订"]
+        if re.search(r"胶装\s*/\s*PAD|PAD\s*书", binding_text):
+            add("CPMS055", line_no,
+                "装订段写的是 ERP「装订方式 ZDFS」的下拉值（胶装/PAD书）—— "
+                "要按客户原文写实际装订方式（如 冲形状无线胶装书 / 无线胶装书 / 骑马钉）")
 
     _check_required(lines, blocks, spec, record, add)
 
@@ -239,6 +251,10 @@ def _check_header(m: re.Match, record: dict, spec: Spec, line: int, add, comp_pi
             return None
 
     g = m.groupdict()
+    if not g.get("spine") and not _is_set(record):
+        add("CPMS013", line,
+            "书本类概要行缺「书籍方向：【长书脊/短书脊】」—— 装订边位置 + 版式能判就必须写"
+            "（Drop_SJFX 为空只表示 ERP 侧没落库，不代表 CPMS 可以不写方向）")
     if g.get("spine") and record.get("Drop_SJFX") and g["spine"] != record["Drop_SJFX"]:
         add("CPMS011", line, f"书籍方向={g['spine']} 与 Drop_SJFX={record['Drop_SJFX']} 不一致")
     for key, fieldname in (("cd", "CD"), ("kd", "KD"), ("gd", "GD")):
