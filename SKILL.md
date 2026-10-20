@@ -14,8 +14,11 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.40（2026-10-20 **`erp_view` → `CQR_Web` 独立项目**：展示层抽出来自带 
-> pyproject/README/tests，技能侧只留转发壳与边界测试；下一步加「上传」）
+> **版本：** 1.0.41（2026-10-20 **scripts/ 瘦身**：删掉 6 个零引用文件
+> （`customer2erp` / `xlsx2csv` / `docx2json` / `txt2json` / `pdf2json` / 空 `_init__.py`）
+> 与 1 个死函数；`extract_fields.py <文件> --json` 是唯一的抽取调试入口）
+> —— 前序 1.0.40：**`erp_view` → `CQR_Web` 独立项目**：展示层抽出来自带
+> pyproject/README/tests，技能侧只留转发壳与边界测试；下一步加「上传」
 > —— 前序 1.0.39：口径复核：`CD`=长 / `KD`=宽、`CPLB` 按类别树第 5 问判冲形状、
 > 书脊方向由装订边推出、`YWY`=生成方标记 `KM`（业务复核确认）、CPMS 装订段不许照抄 `ZDFS`）
 > —— 前序 1.0.38：批次拆分：文件夹 / 压缩包里**有子目录 → 子目录各算一份报价**；
@@ -1455,13 +1458,10 @@ customer-quote-request/
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
 │   ├── calibrate_customer.py      # ★ 新客户校准器
-│   ├── product_categories.py      # 产品类别查表（旧路径，被 cplb_map 取代中）
+│   ├── product_categories.py      # 产品类别查表（旧路径兜底，被 cplb.map 取代中）
 │   ├── select_page_thickness.py   # 纸张厚度查询
 │   ├── string2timestamp.py        # 日期 → 毫秒
-│   ├── customer2erp.py            # 客户字段映射查询
-│   ├── uuid_utils.py              # UUID4
-│   ├── xlsx2csv.py                # Excel → CSV
-│   └── pdf2json.py / docx2json.py / txt2json.py   # 文本类文件的调试前端（薄封装，统一走 extract_fields）
+│   └── uuid_utils.py              # UUID4（main.py 生成任务号用）
 ├── tests/                         # 332 项测试（uv run pytest）
 │   ├── conftest.py
 │   ├── test_customer_profile.py   # 档案层
@@ -1545,7 +1545,9 @@ uv run ./scripts/cplb_tree.py --suggest "hardcover board book"
 uv run ./scripts/product_categories.py --select "Paperback"   # 旧查表（历史路径）
 uv run ./scripts/select_page_thickness.py --pg 书纸 --faw 90      # 0.11（表里无 90g，就近取 100g）
 uv run ./scripts/string2timestamp.py May-27                        # 1809129600000
-uv run ./scripts/customer2erp.py --field "Format" --value "Paperback"
+
+# 调试抽取（任意 xlsx/csv/txt/pdf/docx —— 取代已删的 pdf2json/docx2json/txt2json）
+uv run ./scripts/extract_fields.py <客户文件> -c auto --json
 
 # 测试
 uv run pytest
@@ -1631,9 +1633,10 @@ uv run pytest tests/test_pipeline.py -v
   `Series` 不会截胡 `Series Name`。
 - **数量档位的纯数字写法**必须靠标签提示词判定，且**提示词匹配大小写不敏感**
   （`Quantity` vs `quantity`）—— 这个坑踩过一次。
-- **文本类旧解析器已统一**：`pdf2json` / `docx2json` / `txt2json` 现在只是
-  `extract_fields` 的薄封装。历史上它们各有一套「行里有 `:` 就当键值对」的弱解析，
-  同一个 PDF 两个入口两种结果 —— 不要再恢复那种写法。
+- **文本类解析入口只有 `extract_fields.py` 一个**（1.0.41 起删掉 `pdf2json` /
+  `docx2json` / `txt2json` 三个薄封装 —— 它们已被 `extract_fields.py <文件> --json` 完全覆盖）。
+  历史上那三个文件各有一套「行里有 `:` 就当键值对」的弱解析，同一个 PDF 两个入口两种结果
+  —— 不要再恢复那种写法，也不要再为某一种后缀单独加 CLI 前端。
 
 **数据**
 
@@ -1734,6 +1737,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.41** | **2026-10-20** | **`scripts/` 分类瘦身**：删掉 6 个零引用文件（`customer2erp.py` / `xlsx2csv.py` / `docx2json.py` / `txt2json.py` / `pdf2json.py` / 0 字节的 `_init__.py`）与 1 个零引用函数（`internal_fields.is_internal_field`）；抽取调试只剩 `extract_fields.py <文件> --json` 一个入口 |
 
 ### 1.0.39 详细变更 —— 拿业务真单复核（一单一账户，四类错误）
 

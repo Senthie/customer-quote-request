@@ -47,10 +47,6 @@ def internal_field_keys(path: Optional[Path] = None) -> list[str]:
     return [str(f["key"]) for f in load_internal_fields(path)]
 
 
-def is_internal_field(key: str, path: Optional[Path] = None) -> bool:
-    return str(key) in internal_field_keys(path)
-
-
 if __name__ == "__main__":
     import sys
 
