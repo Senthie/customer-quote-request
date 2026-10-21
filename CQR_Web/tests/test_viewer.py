@@ -54,6 +54,87 @@ def _make_export(root: Path, task_id: str, payload: dict, *, rel_dir: str | None
     return p
 
 
+# ── 列表显示名：用用户上传时的原始文件名（业务 2026-10-21）──────────────
+
+def test_列表用原始输入文件名而不是task_id(tmp_path):
+    """产物叫 `ERP_<hash>_<时间戳>.json`，但列表要显示用户上传的那个文件名。"""
+    _make_export(tmp_path, "aaa", {"CPMC": "甲"})
+    d = tmp_path / "aaa"
+    (d / "PUZZLE COLOUR DISNEY.xlsx").write_bytes(b"x")
+    # 副档/产物不能被当成原件
+    (d / "PUZZLE COLOUR DISNEY.extracted.json").write_text("{}", encoding="utf-8")
+    (d / "CPMS_来源对照.md").write_text("说明", encoding="utf-8")
+
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["source_name"] == "PUZZLE COLOUR DISNEY.xlsx"
+    assert item["source_name_from"] == "sibling"
+
+
+def test_多个原件显示首个加数量(tmp_path):
+    _make_export(tmp_path, "aaa", {"CPMC": "甲"})
+    d = tmp_path / "aaa"
+    (d / "a.xlsx").write_bytes(b"1")
+    (d / "b.csv").write_bytes(b"2")
+
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["source_name"] == "a.xlsx +1"
+
+
+def test_邮件上传时优先用eml的名字(tmp_path):
+    """用户传的是 .eml → 他认的是邮件名（展开出来的 .txt 是衍生物）。"""
+    _make_export(tmp_path, "aaa", {"CPMC": "甲"})
+    d = tmp_path / "aaa"
+    (d / "CU26070802 - price enquiry. Ostermalblock.eml").write_bytes(b"m")
+    (d / "CU26070802_price_enquiry.txt").write_text("body", encoding="utf-8")
+
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["source_name"] == "CU26070802 - price enquiry. Ostermalblock.eml"
+    assert item["source_name_from"] == "eml"
+
+
+def test_上传的邮件用副档里记的eml原名(tmp_path):
+    """新上传路径：原 .eml 归档在 inbox/，processed 里只有展开物 —— 名字靠副档带过来。"""
+    _make_export(tmp_path, "aaa", {"CPMC": "甲"})
+    d = tmp_path / "aaa"
+    (d / "CU26072301 price enquiry.txt").write_text("body", encoding="utf-8")
+    (d / "CU26072301 price enquiry.txt.meta.json").write_text(json.dumps({
+        "source": "email", "eml_name": "CU26072301 price enquiry.eml",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["source_name"] == "CU26072301 price enquiry.eml"
+    assert item["source_name_from"] == "meta"
+
+
+def test_没有原件时回落到运行报告里的unit路径(tmp_path):
+    """老产物 / 原件被清理 → 用当次运行报告记下的输入路径名。"""
+    _make_export(tmp_path, "aaa", {"CPMC": "甲"})
+    (tmp_path / "aaa" / "x.validation.json").write_text(json.dumps({
+        "customer": "ngv", "summary": {"error": 0, "warn": 0},
+        "unit": {"kind": "file", "path": "customer-files/pending/报价单.xlsx"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["source_name"] == "报价单.xlsx"
+    assert item["source_name_from"] == "unit"
+
+
+def test_什么都没有时source_name为空_页面回落到task_id(tmp_path):
+    _make_export(tmp_path, "aaa", {"CPMC": "甲"})
+    item = ev.scan_exports(tmp_path)[0]
+    assert item["source_name"] == ""
+
+
+def test_页面列表主标题用source_name且有折叠按钮():
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "it.source_name" in html, "列表项要用原始文件名当标题"
+    assert "按文件名 / 单号 / CPMC / 版本 过滤" in html, "搜索提示要跟着改成文件名"
+    assert 'class: "fold-btn"' in html, "产物列表要有收起按钮"
+    assert "renderListRail" in html, "收起后要留一条能点开的窄条"
+    assert "setListFolded" in html and 'writePref("listFolded"' in html, \
+        "折叠状态要记住（下次打开还是收起的）"
+
+
 def test_扫描递归找出全部产物_最新在前(tmp_path):
     _make_export(tmp_path, "aaa", {"CPMC": "甲"},   # 老产物：没有内部字段 version
                  stamp="20260101_000000", mtime=1_700_000_100)

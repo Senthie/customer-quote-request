@@ -14,7 +14,10 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.46（2026-10-21 **上传支持 `.eml`**：邮件导出的 `.eml` 直接传，
+> **版本：** 1.0.47（2026-10-21 **产物列表按原始文件名显示 + 可折叠**：主标题用用户上传
+> 时的文件名（副档 `eml_name` → `.eml` → 报告 `unit.path` → 同目录原件），`task_id` 降级成
+> 悬停提示；面板头 `⟨ 收起` 收成窄条，状态记 `localStorage`）
+> —— 前序 1.0.46：上传支持 `.eml`：邮件导出的 `.eml` 直接传，
 > 扫描器调 `ingest_email.py` 展开成「正文 .txt / 附件 / 单元目录」再抽，原邮件归档
 > `customer-files/inbox/<日期>/`；`.eml` 只许单独传，混批拒收）
 > —— 前序 1.0.44：定时任务补上 agent 环节 + 纯文本 enquiry 三处引擎缺陷：
@@ -1103,6 +1106,23 @@ CQR_Web/
 | `GET /api/schema` | ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组 |
 | `POST /api/uploads` | 上传客户文件（multipart：`files` 多个 + `group=one\|each`）→ 落 `pending/`（§4.11） |
 | `GET /api/pending` | 还在等抽取的文件（页面排队条用） |
+
+**列表怎么起名（1.0.46，业务 2026-10-21）**：产物文件名是 `ERP_<32位哈希>_<时间戳>.json`，
+业务拿着哈希没法对号入座，所以列表主标题换成**用户上传时的原始文件名**，哈希降级成悬停提示。
+取值顺序（`data.source_name()`，每档都有测试）：
+
+1. 副本副档里的 `eml_name` —— 上传的是邮件时，用户认的就是邮件名（原 `.eml` 已归档进
+   `customer-files/inbox/`，目录里没有它，只能靠副档带过来）
+2. 同目录的 `.eml` 原件（老邮件入口留下的）
+3. 当次运行报告里的 `unit.path`（`main.py` 实际读的输入）
+4. 同目录的原始文件：1 个用它的名字，多个用「第一个 +N」
+5. 都没有 → 空，页面回落到 `task_id`（手动导入 / 老产物）
+
+排除项：`ERP_*.json`、`*.extracted.json`、`*.validation.json`、`*.meta.json`、`CPMS_*.md`、
+`_email_*.json`、点开头 —— 那些是产物与副档，不是原件。
+
+**产物列表可折叠**：面板头 `⟨ 收起` → 左侧收成 46px 窄条（`▸ 产物列表 N`），点一下展开；
+状态写 `localStorage`（`cqr.listFolded`），下次打开还是收起的。
 
 > **JSON 口径**：`PrettyJSONProvider` 定死三件事 —— `ensure_ascii=False`（中文不转义，
 > `curl` 直读）、`sort_keys=False`（保持我们构造的键序）、`compact=False`（缩进 2 格）。

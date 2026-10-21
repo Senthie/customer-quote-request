@@ -160,6 +160,91 @@ def _sibling_validation(export_path: Path) -> Optional[dict[str, Any]]:
         return None
 
 
+def _is_artifact(name: str) -> bool:
+    """产物/副档 —— 不是用户上传的原始文件。"""
+    if name.startswith("_") or name.startswith("."):
+        return True                                   # `_email_*.json` / 隐藏文件
+    if name.startswith("ERP_") and name.endswith(".json"):
+        return True
+    if name.startswith("CPMS_"):
+        return True                                   # agent 写的 CPMS 对照说明
+    return name.endswith((".extracted.json", ".validation.json", ".meta.json"))
+
+
+def original_inputs(task_dir: Path) -> list[Path]:
+    """`processed/<task_id>/` 里**用户上传的原始文件**（去掉产物与副档）。
+
+    `main.py` 抽完会把输入搬进产物目录，所以这里能拿到原件的副本：
+    单文件 → 原文件名；压缩包/文件夹 → 原文件夹名（或解出来的文件）；
+    邮件 → `.eml` 原件（有的话）+ 展开出来的正文/附件。
+    """
+    try:
+        entries = sorted(p for p in task_dir.iterdir() if not _is_artifact(p.name))
+    except OSError:
+        return []
+    return entries
+
+
+def _meta_eml_name(task_dir: Path) -> str:
+    """从邮件副档里取**原始 .eml 文件名**（`ingest_email` 把它写进 `eml_name`）。
+
+    为什么需要它：用户上传的是 `CU26072301 price enquiry.eml`，抽完进 processed 的是
+    展开出来的 `.txt` / 附件，原 `.eml` 归档在 `customer-files/inbox/` —— 目录里根本
+    没有那个文件名。副档里记着，列表才能显示用户认的名字。
+    """
+    try:
+        metas = sorted(task_dir.rglob("*.meta.json"))
+    except OSError:
+        return ""
+    for meta in metas:
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 —— 副档坏了不影响列表
+            continue
+        if not isinstance(data, dict):
+            continue
+        name = str(data.get("eml_name") or "").strip()
+        if name:
+            return Path(name).name
+    return ""
+
+
+def source_name(export_path: Path, report: Optional[dict[str, Any]]) -> tuple[str, str]:
+    """列表上给这份产物起的名字 —— **用用户上传时的文件名**，方便人对号入座。
+
+    为什么不能只用 `task_id`：那是 32 位哈希（`09aab302e27742…`），业务拿着它
+    没法在邮箱/文件夹里找到原件。优先级（业务 2026-10-21 提的）：
+
+      1. 副档里的 `eml_name` —— 上传的邮件叫什么，用户就认什么
+      2. 同目录的 `.eml` 原件（老邮件入口留下的副本）
+      3. 当次运行报告里的 `unit.path`（`main.py` 实际读的输入）
+      4. 同目录的原始文件：1 个就用它的名字，多个用「第一个 +N」
+      5. 都没有（手动导入 / 老产物）→ 空字符串，页面回落到 `task_id`
+
+    返回 (显示名, 来源标记)，来源标记只用于排查（页面不显示）。
+    """
+    task_dir = export_path.parent
+    inputs = original_inputs(task_dir)
+
+    eml_name = _meta_eml_name(task_dir)
+    if eml_name:
+        return eml_name, "meta"
+
+    emls = [p for p in inputs if p.suffix.lower() == ".eml"]
+    if emls:
+        return emls[0].name, "eml"
+
+    unit_path = ((report or {}).get("unit") or {}).get("path")
+    if unit_path:
+        return Path(str(unit_path)).name, "unit"
+
+    if len(inputs) == 1:
+        return inputs[0].name, "sibling"
+    if inputs:
+        return f"{inputs[0].name} +{len(inputs) - 1}", "sibling"
+    return "", ""
+
+
 def build_validation_payload(export_path: Path, data: dict[str, Any]) -> dict[str, Any]:
     """这份产物的取值校验结果。
 
@@ -248,6 +333,9 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
 
     # 当次运行的校验报告（有就带上，列表页能一眼看出哪份有 error）
     report = _sibling_validation(path)
+    name, name_source = source_name(path, report)
+    item["source_name"] = name
+    item["source_name_from"] = name_source      # eml / unit / sibling / ""（排查用）
     if report is not None:
         summary = report.get("summary") or {}
         item["customer"] = report.get("customer")

@@ -193,6 +193,27 @@
                       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
                       overflow: hidden; }
         .item .l3 { margin-top: 4px; display: flex; gap: 5px; flex-wrap: wrap; }
+        /* 列表主标题 = 用户上传时的原始文件名（不是那一串 task_id 哈希） */
+        .item .src { color: var(--ink); font-weight: 600; font-size: .83rem; margin-top: 2px;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* ── 产物列表折叠（业务 2026-10-21：列表要能收起来，把宽度还给产物） */
+        .layout.folded { grid-template-columns: 46px minmax(0, 1fr); }
+        @media (max-width: 1080px) { .layout.folded { grid-template-columns: 1fr; } }
+        .fold-btn {
+            margin-left: auto; border: 1px solid var(--line-2); background: #f7fafe;
+            color: var(--ink-2); border-radius: 9px; padding: 2px 9px; cursor: pointer;
+            font: inherit; font-size: .76rem;
+        }
+        .fold-btn:hover { border-color: #9dbbdf; color: var(--brand); background: #eef5ff; }
+        aside.list.rail { padding: 10px 0; align-items: center; }
+        .rail-btn {
+            border: 1px solid var(--line-2); background: #f7fafe; color: var(--ink-2);
+            border-radius: 10px; padding: 12px 4px; cursor: pointer; font: inherit;
+            font-size: .78rem; writing-mode: vertical-rl; letter-spacing: 1px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .rail-btn:hover { border-color: #9dbbdf; color: var(--brand); background: #eef5ff; }
 
         main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 
@@ -364,9 +385,20 @@ const state = {
     upload: { group: "one", busy: false, msg: "", ok: null },
     fresh: new Set(),      // 本轮刷新里「新出现」的产物 relpath（列表打「新」）
     lastScanAt: "",        // 上次自动刷新的时刻
+    listFolded: false,     // 产物列表是否收起（浏览器记住选择）
 };
 
 const BASE_TITLE = "ERP · 报价需求单导出查看器";
+
+/* ── 简单的浏览器偏好读写（file:// 下 localStorage 可能不可用）────── */
+const PREF_PREFIX = "cqr.";
+function readPref(key) {
+    try { return localStorage.getItem(PREF_PREFIX + key); } catch (_) { return null; }
+}
+function writePref(key, value) {
+    try { localStorage.setItem(PREF_PREFIX + key, value); } catch (_) { /* 忽略 */ }
+}
+state.listFolded = readPref("listFolded") === "1";
 
 /* ═══════════════════════════════════════════════════════════════════════
    小工具
@@ -847,24 +879,48 @@ function renderHeader() {
 /* ═══════════════════════════════════════════════════════════════════════
    渲染：左侧产物列表
    ═══════════════════════════════════════════════════════════════════════ */
+
+/** 收起状态下的窄条（点一下展开，选择记在浏览器里） */
+function renderListRail() {
+    return el("aside", { class: "panel list rail", id: "listPanel" },
+        el("button", {
+            class: "rail-btn", type: "button", title: "展开产物列表",
+            onclick: () => setListFolded(false),
+        },
+            el("span", { text: "▸" }),
+            el("span", { text: "产物列表 " + state.exports.length }),
+        ));
+}
+
+function setListFolded(folded) {
+    state.listFolded = !!folded;
+    writePref("listFolded", state.listFolded ? "1" : "0");
+    render();                  // 整页重画：列宽 + 列表要一起变
+}
 function renderList() {
+    if (state.listFolded) return renderListRail();
+
     const q = state.filter.trim().toLowerCase();
     const items = state.exports.filter((it) => {
         if (!q) return true;
-        return [it.task_id, it.CPMC, it.CPMC_ZH, it.ID, it.relpath, it.KHDH,
-                String(it.version ?? ""), it.mtime_iso]
+        return [it.source_name, it.task_id, it.CPMC, it.CPMC_ZH, it.ID, it.relpath,
+                it.KHDH, String(it.version ?? ""), it.mtime_iso]
             .some((s) => String(s ?? "").toLowerCase().includes(q));
     });
 
     const head = el("div", { class: "panel-head" },
         el("h2", { text: "产物列表" }),
         el("span", { class: "count-badge", text: items.length + " / " + state.exports.length }),
+        el("button", {
+            class: "fold-btn", type: "button", title: "收起列表（把宽度还给产物）",
+            onclick: () => setListFolded(true),
+        }, "⟨ 收起"),
     );
 
     const search = el("div", { style: "padding:8px 10px 0" },
         el("input", {
             type: "search", id: "filterInput",
-            placeholder: "按 task_id / CPMC / 单号 / 版本 过滤…",
+            placeholder: "按文件名 / 单号 / CPMC / 版本 过滤…",
             value: state.filter, style: "width:100%",
             oninput: (e) => { state.filter = e.target.value; renderListOnly(); },
         }));
@@ -921,7 +977,13 @@ function renderList() {
                 el("span", { class: "when", text: it.mtime_iso || "" }),
                 el("div", { class: "spacer" }),
             ),
-            el("div", { class: "tid", text: it.task_id || "" }),
+            it.source_name
+                ? el("div", {
+                    class: "src", text: it.source_name,
+                    title: "原始输入：" + it.source_name + "（task_id " + (it.task_id || "") + "）",
+                  })
+                : el("div", { class: "tid", text: it.task_id || "",
+                              title: "找不到原始输入文件 → 只能显示 task_id" }),
             el("div", { class: "cpmc", text: it.CPMC_ZH || it.CPMC || "（无产品名称）" }),
             badges,
         ));
@@ -1060,6 +1122,7 @@ function renderSummary() {
     const d = structuralDiff();
     const cur = state.current || {};
     const kvs = [
+        ["原始输入", m.source_name || "（找不到原件：可能是手动导入或老产物）"],
         ["任务ID", m.task_id || "-"],
         ["配置版本", cur.version === undefined ? "缺（第 1 代产物）" : String(cur.version)],
         ["文件名", m.filename || "-"],
@@ -1231,7 +1294,7 @@ function render() {
     }
     page.replaceChildren(
         renderHeader(),
-        el("div", { class: "layout" }, renderList(), main),
+        el("div", { class: "layout" + (state.listFolded ? " folded" : "") }, renderList(), main),
     );
 
     if (focusId) {

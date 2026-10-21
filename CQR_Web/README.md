@@ -72,6 +72,10 @@ CQR_Web/
 | POST | `/api/uploads` | 上传客户文件（multipart：`files` 多个、`group=one\|each`） |
 | GET | `/api/pending` | 还在等抽取的文件（页面排队条） |
 
+`/api/exports` 的每一条都带 `source_name` —— **用户上传时的原始文件名**（列表主标题就用它，
+`task_id` 降级成悬停提示）。取值顺序：副档 `eml_name` → 同目录 `.eml` → 报告 `unit.path`
+→ 同目录原件（多个则「首个 +N」）→ 空（页面回落 `task_id`）。实现在 `data.source_name()`。
+
 `/api/uploads` 的两种口径（对应 `main.py` 的输入单元语义，别自己造）：
 
 | `group` | 落盘 | 含义 |
