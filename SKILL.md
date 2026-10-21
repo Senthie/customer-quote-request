@@ -14,7 +14,12 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.49（2026-10-21 **LG26090401 重跑**：①`ECPMC` 在**文件夹/压缩包单元**里改取
+> **版本：** 1.0.50（2026-10-21 **三条口径拍板**，全部是「我们照旧」——只固化成白名单与提示文案：
+> ①`CPSL1` 取不到数量 → 落 0 + 交人工确认，**款量表里的合计数不自动填**；
+> ②`DWMC` 书本类**一律填「本」**（真实录入留空属人为省略）；
+> ③`chkXBJF` 布尔值**照常落 `false`**（真实录入留空 = 未勾选）。
+> 三条都进 `customers/ngv.erp_diff.json`，对账不再报异常）
+> —— 前序 1.0.49（2026-10-21 **LG26090401 重跑**：①`ECPMC` 在**文件夹/压缩包单元**里改取
 > **订单标题**（邮件 subject），不再取规格样张的品名（样张 `Wimmelbuch Peppa Pig` 只是 10 款之一，
 > 本单是 `Wimmelbücher (Winter)`）；档案开关 `ecpmc.prefer_email_subject_when_unit` +
 > `subject_strip_pattern`；②`cpms_content_audit.py --source` 支持**多个文件 / 整个单元目录**当一个语料
@@ -723,7 +728,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 11 | `CPMC` | 产品名称（**英文表达**） | 档案 `cpmc.template` 拼装；中文表达见内部字段 `CPMC_ZH` | `""` | ✅ |
 | 12 | `TZS` | 共有款数 | `number_of_titles` | `0` | ✅ |
 | 13 | `YYS` | 每款语言数 | `versions` 提取；单语言留空 / 提取不到落 0（档案 `versions.*`） | `1` | ✅ |
-| 14 | `DWMC` | 单位 | 档案 `erp_fixed`（`本`，合法值见 4.6） | `""` | ✅ |
+| 14 | `DWMC` | 单位 | 档案 `erp_fixed`（`本`，合法值见 4.6）。**业务 2026-10-21：书本类一律填「本」**，真实录入留空属人为省略 | `""` | ✅ |
 | 15~24 | `CPSL1`~`CPSL10` | 产品数量 ①~⑩ | 数量档位 | `0` | ✅ |
 | 25 | `BZ` | 币种 | 档案 `erp_fixed`（业务 2026-09-24：**我们填「美元」**，导出留空由业务核对时补） | `"美元"` | 🔒 |
 | 26 | `KHMBDJ` | 客户目标价-金额 | 档案 `erp_fixed` | `0` | 🔒 |
@@ -744,7 +749,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 41 | `CPLX` | 产品类型 | 历史订单比对 | `""` | ⚠️ |
 | 42 | `WCRQ` | 预计下单日期 | 档案 `dates.WCRQ`（`today_plus_days` 或 `mode: empty`） | `""` | ✅ |
 | 43 | `KHDDH` | 香港单号 | 附件「香港单号 CU…」（规范键 `khddh`）或邮件 → 档案 `email.khddh` | `""` | ✅ |
-| 44 | `chkXBJF` | 不需报价 | 开关 | `false` | 🔒 |
+| 44 | `chkXBJF` | 不需报价 | 开关。**业务 2026-10-21：照常落 `false`**（真实录入留空 = 未勾选，语义等价） | `false` | 🔒 |
 | 45 | `ECPMC` | 产品英文名 | 档案 `rules.ecpmc.source_keys`（按顺序取第一个非空规范键）：NGV = `product_name`（客户原文 `Title:` 后面的品名，**照抄**）→ `series_name`。**不翻译、不拼类别、不带 FSC**。★**业务 2026-10-21 澄清：ECPMC 是「报价的原始产品名」，不限于英文** —— 德文 `Malbücher`、日文、法文一律照抄；`ERP` 的 label 叫「产品英文名」是历史命名。脚本取不到（纯文本邮件无 `Title:`）→ agent 从原文照抄补，`cpms_todo.py` 会列为待办。没声明 `rules.ecpmc` 的客户留空（igl 现状） | `""` | ✅ |
 | 46 | `chkZDBJF` | 有排交期 | 开关 | `false` | 🔒 |
 | 47 | `ZXLB` | 纸箱类别 | 客户要求 | `""` | ⚠️ |

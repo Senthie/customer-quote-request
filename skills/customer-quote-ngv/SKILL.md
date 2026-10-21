@@ -204,6 +204,10 @@ uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
   （不用再传 `--accepted`），并且 `--attachment` 可以是**单元目录**（一封多附件邮件 = 一份报价）。
 - 完整流程、差异归因的六个类别、改口径要一起动的六处，见总纲
   `references/erp-record-calibration-playbook.md`。
+- ★ **对账第一原则（2026-10-21 `LG26090401` 撞出来的）**：差异先归类，**别把 bug 当口径抛给业务**。
+  「客户文件里确实有这个事实吗？」→ 有：先查我们取的是不是它（多文件单元里主文件可能选错 ——
+  `ECPMC` 就取成了样张品名 `Wimmelbuch Peppa Pig`）→ 没有：才问口径。
+  问业务时给「字段 / 现值 / 客户原文 / 应然值 / 一句话理由」，不要开放式提问。
 - 2026-10-21 新增白名单条目：`ZDFS`（客户文件没提装订方式就留空；真实录入里的「快线BB书」
   属业务侧补填）。同批补的映射：`board book / Pappbilderbuch / Pappband → 27.01;普通BB书`
   （旧版落兜底 `32.00;其他`，`LG26090401` 实测）。
@@ -224,8 +228,14 @@ NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件�
 
 **1.0.48 起 `TZS` / `YYS` 由脚本从邮件正文兜底**（只看最新一封），复跑得 `10/10`。
 **`CPSL1` 仍要人工看**：款量表里有数量（本单 410,000）但表单没有 `quantity` 键 →
-脚本落 0 并 WARN「需人工确认」；数量要不要进 `CPSL1` 属业务口径，**不要手改 JSON 猜**，
+脚本落 0 并 WARN「需人工确认」；**业务 2026-10-21 拍板：取不到就交人工确认，
+款量表的合计数不自动填 `CPSL1`** —— 别手改 JSON 猜，
 按「字段 / 现值 / 原文 / 应然值」汇报（见 §9 定时任务那条）。
+
+★ **`(20 PAP, 1/0c)` 里的 `20 PAP` 是包装材料回收代码**（PAP = 纸/瓦楞），**不是「20 只/箱」** ——
+每箱数量在款量表的 `cps/carton` 列（在块级脚行里，合并格会把 `QTY total` 挤到相邻列），
+用 `QTY total ÷ 箱数` 反算校验（本单 120000 ÷ 6000 = 20）。CPMS 里「20本/箱」与「20 PAP」
+是两条不同事实、出处也不同，别把 PAP 读成箱规（本单装箱行的出处就是这么写进来源对照的）。
 
 **结构缺口与已修项（同日实单暴露）：**
 
@@ -646,7 +656,9 @@ uv run ./scripts/customer_profile.py --prefs ngv
   写回前重新 `json.load`（不要用几分钟前读进内存的对象）→ **合并**别人版本里有出处的事实
   （漏抄也是缺陷）→ `json.dumps(ensure_ascii=False, indent=2)` 保持键序 → 收尾断言
   `list(out)[:59]==模板键序` 且 `changed ⊆ {CPMS, CPMC, CPMC_ZH}`。
-  完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`。
+  完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`；
+  **同一单出现多个任务目录 / 两个实例并发时怎么判「谁是交付件」、为什么已归档的重复件不许补 CPMS**，
+  见总纲 `references/cron-concurrency-and-duplicate-tasks.md`。
 - ★ **灰板 `mm → g` 会与溯源门禁打架**（2026-10-21 实测）：客户原文写 `boards 2 mm` 时，
   换算成 `1200g` 会让 `1200` 变成「无出处」→ audit 退出码 1；**照抄 `2mm` 只吃 `CPMS054`
   一条 warn、audit 0/0**。取舍写进汇报，别为清 warn 去赌 audit。任何**派生数字**

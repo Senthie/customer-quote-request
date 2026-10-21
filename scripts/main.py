@@ -1006,7 +1006,8 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
             success_count += 1
         else:
             logger.warn(f"  来源: quantity（规范键）={qty_text!r} 取不到有效数量 "
-                        f"→ CPSL1 保持默认值 0，需人工确认")
+                        f"→ CPSL1 落 0 交人工确认（业务 2026-10-21 口径：取不到就人工确认，"
+                        f"款量表里的合计数不自动填）")
             default_count += 1
     else:
         tiers = list(customer_data.quantity_tiers or [])
@@ -1214,7 +1215,8 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         else:
             fallback_binding = str(profile.rule("binding.default", ""))
             logger.warn(f"  装订方式未命中映射表（binding={binding_text!r}）"
-                        f"，使用档案默认值 {fallback_binding!r}")
+                        f"→ `ZDFS` 留空（业务 2026-10-21 口径：客户没提到装订方式就留空；"
+                        f"档案默认值 {fallback_binding!r}）")
             result["ZDFS"] = fallback_binding
             default_count += 1
     elif binding_text:
