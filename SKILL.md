@@ -14,7 +14,15 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.51（2026-10-21 **CU26072401 真单对账**：①单号引用识别补中文/德文说法 ——
+> **版本：** 1.0.52（2026-10-21 **四条口径定案**：①`CPMC` **用我们的中文译名**（真实录入的
+> `联系人/说明 类别/原品名(FSC Mix)` 是业务侧旧写法，不改）；②精装封面面纸**信真实录入的
+> `140g光粉`** —— 客户 enquiry 写 128g 属模板复制，140g 来自 2019 旧单 PO#13826 的材质，
+> 落成 `customers/ngv.cpms_accepted.json` 口径白名单（审计 `--accepted` 放行并打印理由）；
+> ③`SFYPJ` 改**布尔**：有配件 → `true`、无 → `false`（档案 `rules.accessories` 关键词判，
+> 不看 `specials` 是否非空）；④`KHCPMC` 不加进我方字段。附带审计三处收紧：
+> 数字按**独立数字**匹配（料号 `1240700` 里的 `140` 不再冒充出处）、**邮件正文算客户原话**、
+> **我们自己的产物不许当出处**（来源对照.md / 抽取快照））
+> —— 前序 1.0.51（2026-10-21 **CU26072401 真单对账**：①单号引用识别补中文/德文说法 ——
 > `此单产品类似之前订单 KHDD19080122 PO#13826` 里的 13826 **不再**落 `KHDH`（本单没有客户单号）；
 > ②`KHDDH` 的取值出处按 target 取（此前一律显示「规则 khdh」）；③审计承认**灰板 mm→g 换算**
 > （`boards 2 mm` → `1200g灰板` 不再判「无出处」）；④白名单补 `TZS`/`ECPMC`，
@@ -744,7 +752,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 34 | `JHRQ` | 交货日期 | 档案 `dates.JHRQ`（`from: 规范键` 或 `mode: empty` 不落库） | `""` | ✅ |
 | 35 | `FSCMC` | FSC 类别 | 规范键 `fsc`（`rules.scan`，可带 `unique: true` → **不唯一就留空**，业务 2026-09-24 拍板） | `""` | ✅ |
 | 36 | `OLD_KHDDH` | 返单香港单号 | 返单时填 | `""` | ⚠️ |
-| 37 | `SFYPJ` | 是否有配件（**string**） | 推不出就留空（业务 2026-09-24 拍板；写死「否」是错的） | `""` | 🔒 |
+| 37 | `SFYPJ` | 是否有配件（**布尔**） | **业务 2026-10-21 拍板：只填布尔** —— 有配件 `true`、无配件 `false`。判定在档案 `rules.accessories`（关键词：aufsteller/stand/sequin/patch/贴片/亮石…），**不按 `specials` 非空**（那里还装圆角/光油）。旧口径「推不出就留空」作废 | `false` | 🔒 |
 | 38 | `Remark1` | 配件描述 | 随 `SFYPJ`，推不出就留空 | `""` | 🔒 |
 | 39 | `PXH` | 排序号 | 档案 `erp_fixed`（业务 2026-09-24：**留空**；NGV 用 `PXH: ""` 显式清掉模板默认 1） | `1` | 🔒 |
 | 40 | `CPSX` | 产品属性 | 年龄段 + 安全检查（档案 `rules.cpsx` 推导） | `""` | ✅ |
@@ -2762,7 +2770,7 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
 `SJFX` `KHMBJ` `GG_length` `GG_width` `GG_height` `ZDBJF` `BSYJZX` `BCMS` `CPBZ1`。
 改名：`SJFX`→`Drop_SJFX`、`GG_*`→`CD`/`KD`/`GD`、`KHMBJ`→`KHMBDJ`、`BCMS`→`BGMS`、
 `ZDBJF`→`chkZDBJF`、`BSYJZX`→`chkBSYJZX`。
-类型变更：`JHRQ`/`WCRQ` number→string；`SFYPJ` boolean→string。
+类型变更：`JHRQ`/`WCRQ` number→string；~~`SFYPJ` boolean→string~~（**2026-10-21 改回布尔**，见 1.0.52）。
 中文名纠正：`ZXLB` 纸箱类别、`ZBLX` 纸板类型、`ZXFS` 装箱方式、`DKMC` 底卡名称、`ECPMC` 产品英文名。
 
 ---
@@ -2827,11 +2835,11 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
 - [ ] **`YSLX` 运输类型** —— 业务 2026-09-24：**默认留空**，长期客户的实际口径写进档案
       「客户偏好表」（`preferences`，见 2.7）。要做到自动取还需邮件入口
       （NGV 的 `FOB(底价)` / `FOB(拼柜)` 在邮件语境里）
-- [ ] `CPMC` 的中文品名（NGV 格式是 `<业务员>/<中文品名> <类别>/<英文原文>(<FSC>)`）——
-      中文部分只能人工拟，脚本产出英文底稿 + WARN；`ngv.yaml` 已标 `cpmc.needs_agent`
+- [x] `CPMC` 的中文品名 —— **2026-10-21 定案：就用我们的中文译名**（真实录入那套
+      `联系人/说明 类别/原品名(FSC Mix)` 是业务侧旧写法，不改）；仍由 agent 拟、`cpmc.needs_agent`
 - [x] ~~`Remark3` 修改记录~~ —— 业务 2026-09-24：**留空**（我们产出的就是第一版报价）
-- [x] ~~`SFYPJ` / `Remark1` 配件判断~~ —— **业务 2026-09-24 改为「推不出就留空」**
-      （1.0.18，此前写死「否」在 CU26072301 上是错的）；真正要识别配件需来源（邮件）
+- [x] ~~`SFYPJ` / `Remark1` 配件判断~~ —— 2026-09-24 曾改「推不出就留空」；**2026-10-21 最终定案：
+      `SFYPJ` 填布尔（有配件 true / 无 false），由 `rules.accessories` 关键词推**（1.0.52）
 - [ ] `BZFS` / `TBLX` / `SHFS` 包装、台板、送货方式 —— **NGV 已按固定值落地**；其他客户待样本
 - [ ] `OLD_KHDDH` / `SHDQ` / `KHDQ`
 - [ ] `ZXLB` / `ZXFS` / `DKMC` / `BGMS`

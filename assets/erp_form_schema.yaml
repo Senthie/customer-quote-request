@@ -448,12 +448,15 @@ fields:
   SFYPJ:
     form_name: txtSFYPJ
     label: 是否有配件
-    type: select
-    store: label
-    options:
+    # 业务 2026-10-21 拍板：**只填布尔值**（true/false），不要再写「是/否」字符串。
+    #   依据：CU26072401 真实录入「是」+ CU26072301「是」，而 v1 导出里同字段是 false/true。
+    #   推导规则在客户档案 `accessories`（有配件 → true，否则 false）。
+    #   表单侧仍是 是/否 下拉，导入时 bool → 是/否 由 ERP 映射。
+    type: checkbox
+    store: bool
+    legacy_options:
       - {code: "1", label: 是}
       - {code: "0", label: 否}
-    notes: "历史单据写作布尔 false（v1 模板）→ v2 模板是字符串枚举。输出保持字符串。"
 
   Remark1:
     form_name: txtRemark1

@@ -447,14 +447,15 @@ def test_extras与纯标签分开_CPMS素材不再被标题污染():
     assert _map({})["PXH"] == "", "PXH 必须留空（显式留空，不是沿用模板默认）"
 
 
-def test_决策_配件与修改记录推不出就留空():
-    """SFYPJ / Remark1 / Remark3 一律留空 —— 不再写死「否」，也不猜（业务 2026-09-24）。
+def test_决策_配件与修改记录():
+    """SFYPJ 填布尔（业务 2026-10-21 定案）；Remark1 / Remark3 留空（业务 2026-09-24）。
 
-    CU26072301 的导出是 `是` / `自厂购`（该单确实有配件），
-    我们写死「否」是错的；Remark3 我们产出的就是第一版，不存在修改记录。
+    旧口径「SFYPJ 推不出就留空」作废：现在有配件 → true、没有 → false，只填布尔。
+    Remark1（自厂购/外购）与 Remark3（修改记录）是业务侧信息，附件里推不出 → 留空。
     """
     r = _map({})
-    assert r["SFYPJ"] == "" and r["Remark1"] == "", "配件推不出就留空"
+    assert r["SFYPJ"] is False, "无配件必须是布尔 false（不是空串、不是「否」）"
+    assert r["Remark1"] == "", "配件描述（自厂购/外购）留在业务侧"
     assert r["Remark3"] == "", "第一版报价没有修改记录"
     assert r["BZ"] == "美元" and r["CPDL"] == "书版", "这两个业务要求我们填"
 
@@ -535,7 +536,10 @@ def test_真实样本_关键字段(order):
     # 业务决定（2026-09-24 第二批）：PXH 显式留空（模板默认 1 必须清掉）；
     # SFYPJ / Remark1 推不出就留空（写死「否」是错的 —— CU26072301 有配件）。
     assert result["PXH"] == "", "排序号显式留空（模板默认 1 必须被清掉）"
-    assert result["SFYPJ"] == "" and result["Remark1"] == "", "配件推不出就留空"
+    # 配件（2026-10-21 定案）：SFYPJ 填**布尔**（有 → true / 无 → false）；
+    # Remark1（自厂购/外购）仍留空 —— 那是业务侧信息，附件推不出。
+    assert result["SFYPJ"] is (order == "CU26072301"), f"{order}: 是否有配件应为布尔"
+    assert result["Remark1"] == "", "配件描述（自厂购/外购）留在业务侧"
     assert result["Remark3"] == "", "第一版报价没有修改记录 → 留空"
     assert result["CPDL"] == "书版" and result["BZ"] == "美元", "业务 2026-09-24：我们填"
 
@@ -969,3 +973,31 @@ def test_CPLB_无线胶装但没冲形状落基础节点():
         "binding_direction": "at the top",
     })
     assert got["CPLB"] == "23.01;无线胶装书", got["CPLB"]
+
+
+def test_决策_是否有配件SFYPJ按关键词推布尔():
+    """业务 2026-10-21：SFYPJ「有配件 → true，否则 false，只填布尔值」。
+
+    不能按 `specials` 非空判：NGV 的 specials 里还装着圆角/光油等非配件说明
+    （LG26090401 就是 `rounded corners / glossy print-varnish`，那样会误判 true）。
+    """
+    template = json.loads(
+        (REPO_ROOT / "assets" / "add_customer_quote_request.json").read_text(encoding="utf-8"))
+
+    class _Quiet:
+        def info(self, *a, **k): pass
+        def warn(self, *a, **k): pass
+        def error(self, *a, **k): pass
+        def field_mapping(self, *a, **k): pass
+
+    def sfy(values):
+        return map_fields(CustomerData(values=values), template, NGV, _Quiet())["SFYPJ"]
+
+    # 有配件：亮片贴片（CU26072401）/ 立座（CU26072301）
+    assert sfy({"specials": "two-way sequins patch: sequins approx.109 x 148 mm"}) is True
+    assert sfy({"specials": "Box size suitable to card stack and stand"}) is True
+    # 无配件：只有圆角/光油（LG26090401）、只有贴纸页（CU26051601-01）
+    assert sfy({"specials": "content = glossy print-varnish \nrounded corners (cover + content)"}) is False
+    assert sfy({"specials": "extent: (36 pp = 12 pp text + 12 pp sticker)"}) is False
+    # 类型必须是布尔（不是「是/否」字符串）
+    assert sfy({}) is False

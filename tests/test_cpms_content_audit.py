@@ -112,3 +112,48 @@ def test_灰板mm换克重不算编数字():
 def test_灰板换算是双向核对的_没写厚度仍然报():
     r = A.audit("皮壳：128g光粉(FSC)+1500g灰板(FSC)", "cover: 128 gsm glossy art paper\nboards 2 mm")
     assert any(t["token"].startswith("1500") for t in r["untraced"]), r["untraced"]
+
+
+def test_数字要按独立数字匹配_料号里的子串不算出处():
+    """CU26072401：CPMS 写 `140g光粉`，料号 `1240700` 里含 `140` → 旧逻辑直接放过。
+
+    子串匹配等于让被审对象自己作证：业务口径（精装封面 140g）必须走白名单才许放行。
+    """
+    r = A.audit("封面：140g光粉(FSC)", "article no 18/20/1240700/FSM")
+    assert [t["token"] for t in r["untraced"]] == ["140g"], r["untraced"]
+
+
+def test_口径白名单要留痕_不是静默放行():
+    """业务拍板要写、客户文件里却没有的值 → 走 --accepted，报告里必须看得见理由。"""
+    accepted = {"140g": "精装封面面纸口径（2019 旧单 PO#13826 材质），业务 2026-10-21 拍板"}
+    r = A.audit("封面：140g光粉(FSC)", "cover 128 gsm glossy art paper", accepted)
+    assert r["summary"]["untraced"] == 0
+    assert r["summary"]["accepted"] == 1
+    assert "PO#13826" in r["accepted"][0]["reason"]
+
+
+def test_我们自己的产物不许当溯源出处(tmp_path):
+    """CU26072401 踩过：`CPMS_来源对照.md` 躺在产物目录里，审计拿它当客户原文 →
+    业务口径的 140g 自己给自己作证。"""
+    unit = tmp_path / "u"
+    unit.mkdir()
+    (unit / "enquiry.txt").write_text("cover 128 gsm glossy art paper", encoding="utf-8")
+    (unit / "CPMS_来源对照.md").write_text("封面：140g光粉(FSC)", encoding="utf-8")
+    (unit / "CU1.extracted.json").write_text('{"CPMS": "140g光粉"}', encoding="utf-8")
+    files = A.expand_sources([str(unit)])
+    assert [f.name for f in files] == ["enquiry.txt"], [f.name for f in files]
+
+
+def test_邮件正文算客户原话_副档里的抽取结果不算(tmp_path):
+    """邮件是客户材料（`printed in 2019` 只在邮件里）；但我们自己写进副档的
+    `numbers`（抽错的号）绝不能当出处。"""
+    unit = tmp_path / "u"
+    unit.mkdir()
+    (unit / "enquiry.txt").write_text("boards 2.0 mm", encoding="utf-8")
+    (unit / "enquiry.txt.meta.json").write_text(
+        '{"subject": "reprint", "body": "reprint of PO#13826, printed in 2019",'
+        ' "numbers": {"KHDH": "13826"}}', encoding="utf-8")
+    text = A.email_text([str(unit)]) + "\n" + "\n".join(
+        A.read_source(f) for f in A.expand_sources([str(unit)]))
+    r = A.audit("备注：2019 旧单再版；皮壳：1200g灰板", text)
+    assert r["summary"]["untraced"] == 0, r["untraced"]

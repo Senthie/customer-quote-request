@@ -1308,6 +1308,24 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
                 logger.warn("  提示: 用 ingest_email.py 投递邮件可自动带上标题/正文里的单号")
             default_count += 1
 
+    # ── 12c. 是否有配件 SFYPJ（布尔）──────────────────────────────
+    # 业务 2026-10-21：「有配件就 true，否则 false，**只填布尔值**」。
+    # 不能按 `specials` 非空判 —— 那个键里还装着圆角/光油等非配件说明
+    # （LG26090401 的 specials 就是 rounded corners + glossy print-varnish）。
+    # 关键词表在档案 `rules.accessories`（有校准依据，别在代码里加词）。
+    acc_cfg = profile.rule("accessories", {}) or {}
+    if acc_cfg.get("enabled"):
+        acc_index = list(template.keys()).index("SFYPJ") + 1 if "SFYPJ" in template else 0
+        logger.field_mapping("SFYPJ", acc_index, total_fields)
+        acc_keys = acc_cfg.get("source_keys") or ["specials"]
+        acc_text = " ".join(str(customer_data.get(str(k)) or "") for k in acc_keys).lower()
+        hits = [str(w) for w in (acc_cfg.get("keywords") or []) if str(w).lower() in acc_text]
+        result["SFYPJ"] = bool(hits)
+        if hits:
+            logger.info(f"  是否有配件: true（命中 {hits[0]!r}，来源规范键 {acc_keys}）")
+        else:
+            logger.info(f"  是否有配件: false（{acc_keys} 里没有配件关键词）")
+
     # ── 12b. 产品属性 CPSX（年龄段 + 安全检查 → ERP 中文枚举）──
     # 业务确认（2026-09-23）：这两项**要落库**，落点就是 CPSX。
     # 注意：落库**不替代** CPMS —— 产品描述里仍须写清年龄段与安全要求。

@@ -369,7 +369,22 @@ uv run ./scripts/cpms_lint.py <目录> -r             # 批量（跳过 _superse
 uv run ./scripts/cpms_lint.py <ERP.json> --fix      # 机械规范化（改前自动 .bak）
 uv run ./scripts/cpms_lint.py --text "…"            # 直接校验一段文本
 uv run ./scripts/cpms_lint.py --vocab               # 打印骨架与闭集词表
+
+# 内容溯源（严格模式）：CPMS 只许写客户文件里的事实。退出码 = 无出处条目数
+uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <单元目录> \
+    --accepted customers/<客户>.cpms_accepted.json
 ```
+
+`cpms_content_audit` 的出处口径（2026-10-21 三处收紧，都是真金白银踩出来的）：
+
+| 规则 | 为什么 |
+|---|---|
+| `--source` 可给**多个文件 / 整个单元目录** | 一份报价常是「规格表单 + Titel+Mengen」，只喂一个会把另一份的事实误报无出处 |
+| **邮件标题/正文算客户原话** | `printed in 2019`、`grey board = 2.0 mm` 只在邮件里；但副档里我们抽的 `numbers` 不算出处（抽错的号不能自己作证） |
+| **我们自己的产物排除** | `CPMS_来源对照.md` 就躺在产物目录里，含它会变成「被审对象自己作证」（140g 事件） |
+| **数字按独立数字匹配** | 料号 `1240700` 里含 `140`，子串匹配会让 `140g` 白拿通行证 |
+| **灰板 mm↔g 换算认账** | 规范要求写 `1200g灰板`（客户写 `boards 2.0 mm`），这是同一事实两种写法 |
+| **`--accepted` 口径白名单**（`{token: 理由}`） | 业务拍板要写、客户文件里却没有的值（如精装封面 140g 光粉）。**必须写理由**，报告里打印「业务口径放行」而不是静默通过；没有依据的仍判无出处 |
 
 `--fix` 做**机械修复**：CR/CRLF→LF、制表符、行尾空格、连续空行、分隔线、半角冒号、同义标签、`gsm/克→g`、`x/X/×→*`，以及**部件行整槽补印色 C**（`4/0c → 4C/0C`）。
 

@@ -1,0 +1,5 @@
+{
+  "_说明": "NGV：CPMS 业务口径白名单 —— 客户文件里**没有**、但业务已拍板要写的值。cpms_content_audit.py --accepted 用。每条必须写清「依据」，没依据的不许进这里（那是编数字）。",
+  "_用法": "uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <单元目录> --accepted customers/ngv.cpms_accepted.json",
+  "140g": "精装（锁线）封面面纸口径。★2026-10-21 业务拍板「信真实的」：CU26072401 客户 enquiry 写 128 gsm glossy art paper，真实录入 CPMS 写 140g光粉。推断链：①本单是 2019 旧单 PO#13826 / KHDD19080122 的再版（邮件原话 reprint of PO#13826，CPMS 原话「材质跟 PO#13826 相同」）→ 面纸沿用旧单；②客户 enquiry 的封面克重与内文同为 128，属表单模板复制（该表 K1 还残留旧项目代号 SSt ex Delphin）；③语料 /home/claw/train/custom_cpms_requie 18476 份实测：光粉 140g 出现 4759 次（最高频），锁线精装 1857 份里封面/皮壳用 140g 的 967 份、128g 仅 2 份 → 精装封面 140g 是业务惯例"
+}

@@ -289,7 +289,7 @@ preferences:
   - { field: BZFS,   value: "纸箱包装", reason: "4 份导出逐字相同" }
   - { field: TBLX,   value: "不打卡板", reason: "4 份导出逐字相同" }
   - { field: YSLX,   value: "",       reason: "运输类型来自邮件语境（底价/拼柜都在邮件里），附件推不出 → 留空" }
-  - { field: SFYPJ,  value: "",       reason: "是否有配件：推不出就留空（2026-09-24 拍板）；写死『否』是错的 —— CU26072301 有配件" }
+  - { field: SFYPJ,  value: "",       reason: "是否有配件：改由 rules.accessories 推导（有 → true，无 → false），档案不再写死空值" }
   - { field: Remark1, value: "",      reason: "配件描述随 SFYPJ；推不出就留空" }
   - { field: Remark3, value: "",      reason: "修改记录：我们产出的是**第一版**报价，不存在修改记录（2026-09-24 拍板）" }
   - { field: FSCMC,  value: "",       reason: "多材质混用时该填哪个推不出来 → 留空（rules.scan 的 fsc 已设 unique: true）" }
@@ -344,6 +344,33 @@ rules:
   # NGV 的数量是**单一总数**（不是 igl 那种 3k/5k/7.5k 阶梯），落 CPSL1
   quantity:
     mode: single            # single = 一个总数 | tiers = 多档位
+  # ── 是否有配件 SFYPJ（布尔，业务 2026-10-21 拍板：有 → true，无 → false）──
+  # 为什么按关键词而不是「specials 非空」：NGV 的 `specials/Sonstiges` 还装着
+  #   圆角、光油、语言分配这类**非配件**说明 —— LG26090401 的 specials 是
+  #   `rounded corners / glossy print-varnish`，按非空判会把「无配件」错判成 true。
+  # 校准依据（4 份权威导出 + 2 份真实录入）：
+  #   CU26072301（Postkarten-Box + Aufsteller）→ 是／true
+  #   CU26072401（2-way sequin patch 粘前封面）→ 是／true
+  #   CU26051601-01（内文含贴纸页）、CU26061701（卡片+盒）、CU26072302 → 否／false
+  accessories:
+    enabled: true
+    source_keys: [specials, sticker, assembling, accessories]
+    keywords:
+      - aufsteller        # 立座（CU26072301 的 stand）
+      - stand
+      - sequin            # 亮片贴片（CU26072401）
+      - patch
+      - 贴片
+      - 亮片
+      - 磁石
+      - 立牌
+      - 发声
+      - 音乐
+      - 布袋
+      - 手偶
+      - 玩具
+      - 拉链
+      - 丝带
   versions:
     title_pattern: "(\\d+)\\s*titles?"
     language_pattern: "(\\d+)\\s*languages?"

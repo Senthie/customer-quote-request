@@ -265,6 +265,25 @@ NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件�
 - ✅ **多文件单元的 `cpms_content_audit`（1.0.49）**：`--source` 现在可以给**多个文件或整个单元目录**，
   按同一份语料一起审 —— 数量只在款量表里、规格只在表单里的情况不会再被误报「无出处」。
 
+## 1.9 CU26072401 真单对账定下的四条（2026-10-21）
+
+| 字段 | 定案 | 落地 |
+|---|---|---|
+| `CPMC` | **用我们的中文译名** | 真实录入/权威导出写 `联系人/说明 类别/原品名(FSC Mix)`（`Corinna/方脊锁线精装书（有鱼鳞片+布）/…(FSC Mix)`）是业务侧**旧写法**，不改；`ngv.yaml` 仍 `needs_agent` |
+| `SFYPJ` | **只填布尔**：有配件 `true`、无 `false` | 档案 `rules.accessories` 关键词判（aufsteller/stand/sequin/patch/贴片…），**不按 specials 非空**（那里还装圆角/光油）；`Remark1`（自厂购/外购）仍留空 |
+| 精装封面面纸 | **140g光粉**（客户 enquiry 写 128g 也按 140g） | `customers/ngv.cpms_accepted.json` 口径白名单 + `cpms_content_audit --accepted`；CPMS 备注写明「客户写 128g、按旧单口径取 140g、待确认」 |
+| `KHCPMC` | **不补**进我方 59 字段 | 真实导出多这一列，业务确认不跟 |
+
+### 140g 的来源（客户 enquiry 没写，凭什么写 140g）
+
+1. **再版单**：客户原话 `reprint of PO#13826, printed in 2019`，真实 CPMS 自己写「材质跟 PO#13826 相同」。
+2. **enquiry 的 128 是模板复制**：封面 C15 与内文 C9 同为 128（硬皮书封面面纸跟内文同克重不合常理），
+   同一张表 K1 还残留 `SSt (ex Delphin)` —— 表格是从上一版复用的。
+3. **语料实证**：`/home/claw/train/custom_cpms_requie` 18476 份里 `光粉 140g` 4759 次（最高频）；
+   **锁线精装 1857 份**中封面/皮壳用光粉的 **967 份是 140g**，128g 只有 **2 份**。
+
+→ 结论写进白名单理由，交付时 CPMS 备注同时点名「待客户确认」，不许静默替换。
+
 > 本单完整复盘（两份文件的原始数据、5 个字段落错、CPMS 成品与取舍）：`references/bb书与款量附表-a00142.md`。
 > 其中的 **§7「重跑一单的正确姿势」**：把单元目录（**含 `_email.meta.json`**）拷到 `/tmp/` 再跑
 > `main.py` → 写 CPMS → 四道门 → 旧目录 `mv processed/_superseded_<日期>/`。
@@ -458,6 +477,19 @@ email:
 - ⚠️ **写单号正则要严**：`\b(?:po|order)\s*(?:no)?\s*([A-Z0-9]{5,})` 会把
   `Postkarten in Box` 的 `Po` 抓成 `stkarten` —— 必须要求出现 `no/nr/number/#` 这类编号词。
   有测试钉着（`test_客户单号正则不许被单词前缀误捕`）。
+- ★ **正文提到的「历史单 PO」不是本单单号**（2026-10-21 `CU26072401` 撞出来的）：
+  附件备注写 `此单产品类似之前订单 KHDD19080122 PO#13826`，旧引用识别只认英文
+  `same as / per PO`，中文「类似之前订单」拦不住 → `13826` 被落成 `KHDH`，
+  而本单**没有客户单号**（真实录入也空）。1.0.51 起 `_REFERENCE_WORDS` 认
+  中文（之前订单/上次/老单/旧单/返单/类似/相同）与德英（`previous / earlier / last order`、
+  `vorherige Bestellung`）说法，60 字窗口判定；但**只认这些词**，`订单号：PO#…`
+  这类正常表述照样取。看到 `KHDH` 有值先问「这是本单的还是引用别人的」。
+  同批修的还有：`KHDDH` 的出处以前恒显示「规则 khdh」（`number_sources` 有却没有按 target 取），
+  日志里出处错会误导排查。
+- ⚠️ **单附件邮件的副档丢了 → `KHDH`/`KHDDH` 静默为空**（`CU26072401` 首次产出就是这个：
+  两个字段都空，但`required_empty` 让四道门全绿）。判别：`pending/` 里还躺着
+  `<附件>.meta.json`、产物目录里没有；重跑时把 `.meta.json` 一起拷进去，或直接
+  `ingest_email.py --eml` 重新投递一遍（副档会重新生成，`numbers` 也按新规则算）。
 
 ---
 
@@ -490,6 +522,24 @@ rules:
     zh_template: "【中文品名待定】"
     needs_agent: true
 ```
+
+> 🔴 **★ 待业务确认（2026-10-21，1.0.51 对账 `CU26072401` 时发现）—— 这一节可能整节作废：**
+> 真实录入 + 4 份权威导出（`CU26051601-01` / `CU26061701` / `CU26072301` / `CU26072302`）
+> **5 份全是拼装式**，没有一份是纯中文译名：
+>
+> ```
+> 联系人/说明 类别/<项目号或尺寸> <原品名>(FSC Mix)
+> Corinna/方脊锁线精装书（有鱼鳞片+布）/240x240 Das allerschönste Osterei der Welt (SST)(FSC Mix)
+> Kathrin/Aldi 24PP内文 + 12PP贴纸 贴纸骑马钉书（有贴纸）/price enquiry. A00112 License Sticker Books 2(FSC Mix)
+> Corinna/Aldi A款 卡片套装 其他套装/Type A - A00125 Post- und Klappkarten - Postkarten-Box mit Aufsteller (4 titles)(FSC Mix)
+> ```
+>
+> 也就是说「`CPMC` = 中文译名」这条 2026-10-19 的拍板**只在新流程里出现，历史与现状都是拼装式**。
+> 现状处理：产物仍按中文译名写（业务最后一次拍板），但每次对账都会撞这条 ——
+> 已写进 `customers/ngv.erp_diff.json` 的 `CPMC` 条并标★，SKILL 总纲字段表也标了。
+> **交付前若业务在场就直接问「CPMC 用拼装式还是中文译名」**；确认后要么改
+> `rules.cpmc.template`（三槽位：`{contact}` / `{说明 类别}` / `{原品名}({FSC})`），
+> 要么把这条白名单说明改成「已作废」。别第三次自己猜。
 
 - **产品名只能译，不能编**：`Title: Ostermalblock` → `复活节彩蛋涂色本`（Ostern 复活节 + Malblock 涂色本）。
   译名不确定就写来源 + 存疑（`备注`/交付说明），不许硬凑品类词。
@@ -536,6 +586,9 @@ NGV 每单固定的第三方检测清单（378 字符，3 份导出逐字相同�
 > CPSL 空值等 8 条口径分歧的来源单据）。
 > BB 书 + 款量表（`Titel+Mengen`）单元的复盘、5 个字段落错、CPMS 成品与取舍：
 > `references/bb书与款量附表-a00142.md`（§1.8 的配套案例）。
+> ★ **CPMC 拼装式的 5 份证据 + 「真实 CPMS 有、客户文件没有」的 7 处清单**：
+> `references/erp-record-diff-cu26072401.md`（§6 那条★待业务确认的来源单据；另含
+> 历史 PO 被当本单单号、单号出处标错 target、灰板换算被误判 三个引擎缺陷的复现）。
 
 > ⚙️ **执行环境**：本 profile 的会话里终端默认 cwd 可能指向一个已不存在的目录
 > （命令会直接报 `cd: … No such file or directory`，连 `pwd` 都跑不了）。
@@ -672,14 +725,16 @@ uv run ./scripts/customer_profile.py --prefs ngv
   完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`；
   **同一单出现多个任务目录 / 两个实例并发时怎么判「谁是交付件」、为什么已归档的重复件不许补 CPMS**，
   见总纲 `references/cron-concurrency-and-duplicate-tasks.md`。
-- ★ **灰板 `mm → g` 会与溯源门禁打架**（2026-10-21 实测）：客户原文写 `boards 2 mm` 时，
-  换算成 `1200g` 会让 `1200` 变成「无出处」→ audit 退出码 1；**照抄 `2mm` 只吃 `CPMS054`
-  一条 warn、audit 0/0**。取舍写进汇报，别为清 warn 去赌 audit。任何**派生数字**
-  （自己算的日期、换算的克重）同理。
-- ★ **audit 只吃单一 source（xlsx/csv/txt/docx，不支持 `.eml`）**：规格在附件、上下文在邮件正文时，
-  邮件里的数字（`PO#13826` / `2019` / `July 31st`）**不能进 CPMS**（拿附件当 `--source` 必被报无出处）；
-  跑两遍取交集也不成立（邮件 pass 会把附件事实全判无出处）。邮件上下文进
-  `CPMS_来源对照.md` + 汇报，单据号归 `KHDH` 字段。
+- ✅ **灰板 `mm → g` 的审计冲突已修（1.0.51）**：客户原文 `boards 2 mm` → 规范要求写
+  `1200g灰板`，旧审计按子串匹配判「`1200` 无出处」→ 逼人改回 `2mm`（又吃 `CPMS054`）。
+  现在 `cpms_content_audit` 认 `GREYBOARD_G_TO_MM`（600g=1 / 900g=1.5 / 1200g=2 /
+  1500g=2.5 / 1800g=3）：**照规范写 g，别为 audit 退让**。
+  但仍只有这 5 档换算被认 —— 自己算的日期、其他派生的数字依旧会报「无出处」，那类要写进汇报而不是塞进 CPMS。
+- ✅ **audit 的 `--source` 已支持多文件 / 整个单元目录（1.0.49）**：一份报价是「规格表单 +
+  `Titel+Mengen` + 补充说明」时，**指单元目录**（或并列多个 `--source`）当一个语料审，
+  否则另一份文件独有的事实（数量、参考单号）会被误报「无出处」，逼人删真信息。
+  仍不支持 `.eml`：**邮件正文里的数字**（`PO#13826` / `2019` / `July 31st`）不能进 CPMS，
+  邮件上下文进 `CPMS_来源对照.md` + 汇报，单据号归 `KHDH` 字段。
 - ★ **单附件邮件在 cron/Web 路径上会丢副档 → `KHDH`/`KHDDH` 静默为空**：`scan_pending.py` 认领时
   只搬文件、不搬 `<附件>.meta.json`，而这两个字段在 `required_empty` 里 → **四道门全绿也看不出来**。
   判别：`pending/` 里还躺着 `<附件>.meta.json`、任务目录里没有。**不要自己改这两个键**，

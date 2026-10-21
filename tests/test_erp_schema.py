@@ -77,10 +77,17 @@ def test_产品属性含年龄段选项():
 
 # ── 业务决策钉死（2026-09-23 森西确认）────────────────────────────────────
 def test_决策_所有下拉统一存中文_label():
-    """③ 统一使用中文：字典里不许再出现 store: code（否则等于埋回代码值口径）。"""
+    """③ 统一使用中文：字典里不许再出现 store: code（否则等于埋回代码值口径）。
+
+    例外：`checkbox` 存布尔（`store: bool`）—— 业务 2026-10-21 拍板 `SFYPJ` 就填布尔。
+    """
     offenders = [f for f, spec in load_schema()["fields"].items()
-                 if spec.get("store") not in (None, "label")]
+                 if spec.get("store") not in (None, "label", "bool")]
     assert offenders == [], f"这些字段仍声明非 label 存储：{offenders}"
+    # store: bool 只许出现在 checkbox 上
+    bad_bool = [f for f, spec in load_schema()["fields"].items()
+                if spec.get("store") == "bool" and spec.get("type") != "checkbox"]
+    assert bad_bool == [], f"这些字段 store: bool 但 type 不是 checkbox：{bad_bool}"
 
 
 def test_决策_客户单号用_KHDH_且不得出现_KHCPMC():
@@ -111,7 +118,6 @@ def test_决策_客户单号用_KHDH_且不得出现_KHCPMC():
     ("BZ", "02", "美元"),                   # code → label
     ("DWMC", "册", "本"),
     ("CPSX", "CPSX001", "三岁以上"),
-    ("SFYPJ", "1", "是"),
     ("P", "", ""),                          # 空值不动
 ])
 def test_归一化把客户写法对齐到_ERP_合法值(field, raw, expected):
@@ -204,11 +210,13 @@ def test_历史单据的三个真错误能被抓出来():
 
     1. ZDFS「无线胶装」不是 ERP 合法值（合法是「胶装/PAD书」）
     2. JHRQ/WCRQ 存的是毫秒时间戳，业务口径是 YYYY-MM-DD
-    3. SFYPJ 存了布尔 false，ERP 是字符串枚举「是/否」
+    3. ~~SFYPJ 存了布尔 false~~ —— **2026-10-21 业务改口径：SFYPJ 就填布尔**，
+       这条不再是错误（当年按字符串枚举判，现已改字典）。
     """
     data = json.loads(HISTORICAL.read_text(encoding="utf-8"))
     errors = {i["field"] for i in validate_result(data) if i["level"] == "error"}
-    assert {"ZDFS", "JHRQ", "WCRQ", "SFYPJ"} <= errors
+    assert {"ZDFS", "JHRQ", "WCRQ"} <= errors
+    assert "SFYPJ" not in errors, "SFYPJ 现在就是布尔（2026-10-21 改口径）"
 
 
 @pytest.mark.skipif(not HISTORICAL.exists(), reason="历史单据不在仓库里")
