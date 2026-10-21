@@ -14,7 +14,12 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.48（2026-10-21 **LG26090401 真单校准**：①尺寸口径改为「默认顺序 = 长x宽x高，
+> **版本：** 1.0.49（2026-10-21 **LG26090401 重跑**：①`ECPMC` 在**文件夹/压缩包单元**里改取
+> **订单标题**（邮件 subject），不再取规格样张的品名（样张 `Wimmelbuch Peppa Pig` 只是 10 款之一，
+> 本单是 `Wimmelbücher (Winter)`）；档案开关 `ecpmc.prefer_email_subject_when_unit` +
+> `subject_strip_pattern`；②`cpms_content_audit.py --source` 支持**多个文件 / 整个单元目录**当一个语料
+> （此前只喂一个文件会把另一文件里的事实误报「无出处」））
+> —— 前序 1.0.48（2026-10-21 **LG26090401 真单校准**：①尺寸口径改为「默认顺序 = 长x宽x高，
 > 按书写顺序落 CD/KD/GD，**不比较长短边**」（240x330 → CD=240/KD=330），删掉 `size.long_first`；
 > ②`CPLB` 补 `board book` / `Pappbilderbuch` → `27.01;普通BB书`（旧版落兜底 `32.00;其他`）；
 > ③款数/语言数支持**邮件正文兜底**，且只认最新一封（引用旧邮件里的 `6 titles 4 languages`、
@@ -2079,6 +2084,14 @@ ERP 表单里 `txtCPMC`（产品名称）与 `txtECPMC`（产品英文名）是*
 
 - 档案写法：`rules.ecpmc.source_keys: [product_name, series_name]`（按顺序取第一个非空）。
 - **没声明 `rules.ecpmc` 的客户不产出该字段** —— igl 的 CPMC 里已经含英文系列名，业务说「不需要更改」，所以 igl 维持空值。
+- **★ 1.0.49 补丁：文件夹/压缩包单元取订单标题，不取样张品名。**
+  一份报价的单元里常带「规格样张」（只覆盖其中一款）—— LG26090401 的
+  `240x330_Wimmelbuch Peppa Pig_…xlsx` 就是 10 款里的 1 款，`product_name` 抽出来是
+  `Wimmelbuch Peppa Pig`，写进 ECPMC 就是**错的品名**。单元成员 ≥2 个时改为取**邮件标题**
+  （`A00142 Wimmelbücher (Winter)` → 去掉项目号 → `Wimmelbücher (Winter)`），
+  不一致时打 WARN 留痕。档案两项：`ecpmc.prefer_email_subject_when_unit: true` /
+  `ecpmc.subject_strip_pattern: "^[A-Za-z]{1,3}\d{3,6}[\s._-]+"`。
+  单文件单元不受影响（那份文件就是本单本身）。
 - 测试：`test_决策_产品英文名落ECPMC`（含「未声明就留空」的反例）。
 
 ### 1.0.35 详细变更 —— 装订方向与书脊方向分家

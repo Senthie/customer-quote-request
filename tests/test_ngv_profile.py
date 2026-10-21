@@ -24,7 +24,7 @@ import pytest
 
 from customer_profile import load_profile
 from extract_fields import CustomerData, extract_from_workbook, scan_values
-from main import map_fields, parse_single_quantity, _de_number
+from main import map_fields, parse_single_quantity, _de_number, product_name_from_subject
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLES = REPO_ROOT / "customer-files" / "samples" / "ngv"
@@ -326,6 +326,44 @@ def _map(values: dict, profile=None):
         def field_mapping(self, *a, **k): pass
 
     return map_fields(CustomerData(values=values), template, profile or NGV, _Quiet())
+
+
+def test_决策_单元里的样张品名不算本单品名_改取邮件标题():
+    """1.0.49（LG26090401 重跑）：文件夹单元里的「规格样张」只覆盖**其中一款**。
+
+    实测：`240x330_Wimmelbuch Peppa Pig_PR-00092497_…xlsx` 是 10 款里的 1 款样张，
+    `product_name` 抽出来是 `Wimmelbuch Peppa Pig`；本单是 `A00142 Wimmelbücher (Winter)`。
+    单元成员 ≥2 个 → ECPMC 取**邮件标题**（去掉项目号）；单文件单元照旧取规范键。
+    """
+    template = json.loads(
+        (REPO_ROOT / "assets" / "add_customer_quote_request.json").read_text(encoding="utf-8"))
+
+    class _Quiet:
+        def info(self, *a, **k): pass
+        def warn(self, *a, **k): pass
+        def error(self, *a, **k): pass
+        def field_mapping(self, *a, **k): pass
+
+    unit = CustomerData(values={"product_name": "Wimmelbuch Peppa Pig"},
+                        unit_kind="folder",
+                        members=["240x330_Wimmelbuch Peppa Pig_PR-00092497.xlsx",
+                                 "Titel+Mengen_A00142 Wimmelbücher (Winter).xlsx"])
+    r = map_fields(unit, template, NGV, _Quiet(),
+                   email_meta={"subject": "A00142 Wimmelbücher (Winter)"})
+    assert r["ECPMC"] == "Wimmelbücher (Winter)", r["ECPMC"]
+
+    # 单文件单元（这份文件就是本单）不受影响
+    single = CustomerData(values={"product_name": "Ostermalblock"})
+    assert map_fields(single, template, NGV, _Quiet(),
+                      email_meta={"subject": "A00142 Wimmelbücher"})["ECPMC"] == "Ostermalblock"
+
+    # 标题清洗：RE:/FW: 前缀去掉、项目号去掉（pattern 来自档案）、多余空白收掉
+    strip = NGV.rule("ecpmc.subject_strip_pattern")
+    assert strip, "NGV 档案应声明 ecpmc.subject_strip_pattern"
+    assert product_name_from_subject("RE: FW: A00142  Wimmelbücher (Winter)", strip) \
+        == "Wimmelbücher (Winter)"
+    assert product_name_from_subject("Malbücher Set 3x", strip) == "Malbücher Set 3x"
+    assert product_name_from_subject("", strip) == ""
 
 
 def test_款数语言数只看邮件最新一封():

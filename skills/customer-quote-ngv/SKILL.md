@@ -200,6 +200,14 @@ uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
 `customer-files/samples/ngv/manifest.json` 的 `known_differences`（8 项已拍板口径，
 `CPDL/BZ/PXH/YYS/SFYPJ/Remark1/Remark3/FSCMC`），**先读白名单再动嘴**，否则整份报告会被读成「31 个 bug」。
 
+- `scripts/compare_with_erp.py` 自 1.0.48 起**自动加载** `customers/ngv.erp_diff.json`
+  （不用再传 `--accepted`），并且 `--attachment` 可以是**单元目录**（一封多附件邮件 = 一份报价）。
+- 完整流程、差异归因的六个类别、改口径要一起动的六处，见总纲
+  `references/erp-record-calibration-playbook.md`。
+- 2026-10-21 新增白名单条目：`ZDFS`（客户文件没提装订方式就留空；真实录入里的「快线BB书」
+  属业务侧补填）。同批补的映射：`board book / Pappbilderbuch / Pappband → 27.01;普通BB书`
+  （旧版落兜底 `32.00;其他`，`LG26090401` 实测）。
+
 ## 1.8 ★ 第三种形态：BB 书 + 「Titel+Mengen」款量附表（2026-10-21 实单 `LG26090401` / A00142）
 
 NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件承担的事完全不同：
@@ -214,27 +222,27 @@ NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件�
 `10 titles in 10 languages`、款量表 `U227=410,000`（10 款 × 41,000）。
 四道门**全绿** —— 因为这三个字段「有值」，只是值是默认值。
 
-**开工必做**：单元里出现 `Titel+Mengen` / `Mengen` / 带 `Titel 1..10` 行的表 →
-手算一遍 `TZS` / `YYS` / `CPSL1`（款数 × 每款 = 总数；德式点千分位 `410.000`），
-与产物对不上按「字段 / 现值 / 原文 / 应然值」汇报，**不手改 JSON**（见 §9 定时任务那条）。
+**1.0.48 起 `TZS` / `YYS` 由脚本从邮件正文兜底**（只看最新一封），复跑得 `10/10`。
+**`CPSL1` 仍要人工看**：款量表里有数量（本单 410,000）但表单没有 `quantity` 键 →
+脚本落 0 并 WARN「需人工确认」；数量要不要进 `CPSL1` 属业务口径，**不要手改 JSON 猜**，
+按「字段 / 现值 / 原文 / 应然值」汇报（见 §9 定时任务那条）。
 
-**顺带两个 NGV 结构缺口**（同日实单暴露，档案侧待补）：
+**结构缺口与已修项（同日实单暴露）：**
 
-- ★ **`board book` 没有映射**：`customers/ngv.yaml` 的 `cplb.map` 与 `binding.map`
-  都不认 `board book` / `board book binding` → `CPLB=32.00;其他`、`ZDFS=""`，
-  而 `erp_schema --check` 只报 2 条 **warn**（顶层过粗 / 装订空），不报 error。
-  应然值：**`CPLB=27.01;普通BB书`、`ZDFS=普通BB书`**（`普通BB书` 在 ERP 装订枚举里）。
-- ★ **表单模板会被跨项目沿用，B1 标题可能是上一个项目的**：
-  A00142 的 B1 写 `Wimmelbuch Peppa Pig`（那是 PR-00092497 的旧模板），实际项目是
-  `A00142 Wimmelbücher (Winter)`；B30 的 `A+B assorted` 与邮件「only spec A」冲突；
-  G4 `ETD = 25 Dec 2027` 与邮件 `13 Aug 2027` 冲突。
-  判据：**B1 标题 vs 邮件主题 / 款量表项目名**。处理：`CPMC`/`ECPMC` 取邮件 + 款量表的
-  项目名（`Wimmelbücher (Winter)`，照抄不翻译）；这些残留**一律不写进 CPMS**，
-  在 `CPMS_来源对照.md` 的「已删除/未写」表和汇报里点名。
-- **多文件单元的 `cpms_content_audit`**：`--source` 只能指一份 → 用**承载规格的主表单**
-  做门禁；另一份文件独有的事实（款量表的 PR 号 / 日期）会被判无出处，那是**预期**，
-  写进来源对照即可。邮件独有的事实同理：初稿把 `CRD 06 Aug 2027、ETD 13 Aug 2027`
-  写进备注，被 audit 判 `06`/`13` 无出处 → 删掉，日期留给业务/ERP 侧。
+- ✅ **`board book` 映射已补（1.0.48）**：`customers/ngv.yaml` 的 `cplb.map` 现在认
+  `board book / Pappbilderbuch / Pappband / 纸板书 → 27.01;普通BB书`，`LG26090401` 复跑得
+  `CPLB=27.01;普通BB书`（旧版落兜底 `32.00;其他`）。
+  **`ZDFS` 仍留空** —— 业务 2026-10-21 口径：「客户没提装订方式就默认留空」，
+  本单真实录入也是空（`普通BB书` 只进 `CPLB`，不复制到 `ZDFS`）。
+- ✅ **样张品名不再冒充本单品名（1.0.49）**：表单模板会被跨项目沿用，B1 标题常是上一个项目的
+  （A00142 的 B1 写 `Wimmelbuch Peppa Pig`，那是 PR-00092497 的旧模板，实际项目是
+  `A00142 Wimmelbücher (Winter)`）。现在**单元成员 ≥2 个时 `ECPMC` 自动取邮件标题**
+  （`ecpmc.prefer_email_subject_when_unit` + `subject_strip_pattern` 去掉 `A00142` 这种项目号），
+  与样张品名不一致会打 WARN 留痕 —— 不用再手动改 JSON。
+  B30 的 `A+B assorted` 与邮件「only spec A」冲突、G4 `ETD = 25 Dec 2027` 与邮件
+  `13 Aug 2027` 冲突 —— 这些残留**一律不写进 CPMS**，在 `CPMS_来源对照.md` 里点名。
+- ✅ **多文件单元的 `cpms_content_audit`（1.0.49）**：`--source` 现在可以给**多个文件或整个单元目录**，
+  按同一份语料一起审 —— 数量只在款量表里、规格只在表单里的情况不会再被误报「无出处」。
 
 > 本单完整复盘（两份文件的原始数据、5 个字段落错、CPMS 成品与取舍）：
 > `references/bb书与款量附表-a00142.md`。

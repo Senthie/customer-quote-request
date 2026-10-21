@@ -71,3 +71,30 @@ def test_返回值可直接当退出码():
 def test_构成与装箱数量(cpms, source, ok):
     r = A.audit(cpms, source)
     assert (r["summary"]["untraced"] == 0) is ok, r
+
+
+# ── 1.0.49：一份报价 = 多个文件（单元目录）时，语料要合起来审 ──────────────
+def test_单元目录里的多个文件当一个语料(tmp_path):
+    """LG26090401 实测：数量只在 `Titel+Mengen` 里、规格只在 enquiry 表单里。
+
+    只喂其中一个文件 → 另一个文件的事实被误报「无出处」，逼人删掉真信息。
+    """
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    (unit / "spec.txt").write_text("cover 310 gsm art card C1S\nrounded corners", encoding="utf-8")
+    (unit / "titel.txt").write_text("QTY per title 410000\ncps/carton 20", encoding="utf-8")
+    (unit / "spec.txt.meta.json").write_text("{}", encoding="utf-8")   # 副档不参与
+
+    files = A.expand_sources([str(unit)])
+    assert [f.name for f in files] == ["spec.txt", "titel.txt"], files
+
+    source_text = "\n".join(A.read_source(f) for f in files)
+    r = A.audit("内文：310g单粉，410000 本，20本/箱，圆角", source_text)
+    assert r["summary"]["untraced"] == 0, r["untraced"]
+
+
+def test_多个source可并列传(tmp_path):
+    a = tmp_path / "a.txt"; a.write_text("410000", encoding="utf-8")
+    b = tmp_path / "b.txt"; b.write_text("310 gsm", encoding="utf-8")
+    files = A.expand_sources([str(a), str(b)])
+    assert [f.name for f in files] == ["a.txt", "b.txt"]

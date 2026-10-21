@@ -716,6 +716,22 @@ def versions_from_email(profile: CustomerProfile, email_meta: Optional[dict],
     return titles, langs
 
 
+def product_name_from_subject(subject: str, strip_pattern: Optional[str] = None) -> str:
+    """邮件标题里的品名：去掉 `RE:` 前缀与开头的项目号（`A00142`）。
+
+    实测（LG26090401，2026-10-21）：文件夹单元里那张 `240x330_Wimmelbuch
+    Peppa Pig` 是**规格样张**（10 款里的 1 款），品名写成它是错的 ——
+    这份报价的品名是订单标题 `A00142 Wimmelbücher (Winter)` → `Wimmelbücher (Winter)`。
+    """
+    text = " ".join(str(subject or "").split())
+    if not text:
+        return ""
+    text = re.sub(r"^(?:(?:RE|FW|AW|WG|WG:|FWD)\s*:\s*)+", "", text, flags=re.IGNORECASE)
+    if strip_pattern:
+        text = re.sub(str(strip_pattern), "", text, count=1)
+    return text.strip(" -_/")
+
+
 # ── 字段映射 ─────────────────────────────────────────────────────────────
 def map_fields(customer_data: CustomerData, template: dict, profile: CustomerProfile,
                logger: Logger, email_meta: Optional[dict] = None) -> dict:
@@ -864,10 +880,26 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         if val:
             ecpmc_value, ecpmc_src = val, str(key)
             break
+    # ★ 文件夹/压缩包单元：里面的「规格样张」只覆盖其中一款，它的品名不是这份报价
+    #   的品名（实测 LG26090401：样张 `Wimmelbuch Peppa Pig`，本单是 10 款的
+    #   `Wimmelbücher (Winter)`）→ 订单标题（邮件 subject）才是。
+    #   单文件单元不适用（那份文件就是本单本身），照旧取规范键。
+    unit_members = list(getattr(customer_data, "members", []) or [])
+    unit_kind = str(getattr(customer_data, "unit_kind", "file") or "file")
+    if profile.rule("ecpmc.prefer_email_subject_when_unit", False) \
+            and unit_kind != "file" and len(unit_members) > 1:
+        subject_name = product_name_from_subject(
+            (email_meta or {}).get("subject", ""),
+            profile.rule("ecpmc.subject_strip_pattern"))
+        if subject_name:
+            if ecpmc_value and ecpmc_value.strip().lower() != subject_name.strip().lower():
+                logger.warn(f"  ECPMC: 单元内样张品名 {ecpmc_value!r} 与本单标题 "
+                            f"{subject_name!r} 不一致 → 取标题（样张只是其中一款）")
+            ecpmc_value, ecpmc_src = subject_name, "邮件标题"
     if ecpmc_value:
         ecpmc_idx = list(template.keys()).index("ECPMC") + 1 if "ECPMC" in template else 0
         assign("ECPMC", ecpmc_value,
-               f"档案 rules.ecpmc（规范键 {ecpmc_src}，客户文件英文品名照抄）", ecpmc_idx)
+               f"档案 rules.ecpmc（来源 {ecpmc_src}，客户原文品名照抄）", ecpmc_idx)
     elif ecpmc_keys:
         logger.warn(f"  ECPMC（产品英文名）: 档案 rules.ecpmc 声明的规范键 {ecpmc_keys} 都没取到 → 留空")
 

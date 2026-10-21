@@ -162,10 +162,34 @@ def read_source(path: Path) -> str:
     raise SystemExit(f"不支持的文件类型：{suffix}（支持 xlsx/csv/txt/docx）")
 
 
+def expand_sources(paths: list[str]) -> list[Path]:
+    """把 `--source` 展开成真正要读的文件列表：目录 → 目录里所有可读文件。
+
+    业务口径（2026-10-20 起）：一份报价可以是**文件夹 / 压缩包**（规格表单 +
+    Titel+Mengen + 补充说明）。溯源审计必须把这些文件当**同一份语料**看，
+    否则只喂其中一个文件就会把另一个文件里的事实误报成「无出处」。
+    """
+    out: list[Path] = []
+    for raw in paths:
+        p = Path(raw)
+        if p.is_dir():
+            out.extend(sorted(
+                f for f in p.rglob("*")
+                if f.is_file() and f.suffix.lower() in {".xlsx", ".xlsm", ".csv", ".txt", ".md", ".docx"}
+                and not f.name.endswith(".meta.json")
+            ))
+        else:
+            out.append(p)
+    if not out:
+        raise SystemExit("--source 展开后没有可读文件")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="CPMS 内容溯源审计（严格模式）")
     ap.add_argument("--cpms", required=True, help="含 CPMS 的 ERP JSON")
-    ap.add_argument("--source", required=True, help="客户原始文件（xlsx/csv/txt/docx）")
+    ap.add_argument("--source", required=True, nargs="+",
+                    help="客户原始文件（xlsx/csv/txt/docx）或整个单元目录；可给多个")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     args = ap.parse_args(argv)
 
@@ -179,9 +203,11 @@ def main(argv: list[str] | None = None) -> int:
         print("CPMS 为空 —— 没有可审计的内容", file=sys.stderr)
         return 1
     try:
-        source_text = read_source(Path(args.source))
+        # 一份报价常由「规格表单 + Titel+Mengen」等多个文件组成 → 语料要合起来审，
+        # 否则「数量只在 Titel+Mengen 里」会被误报成无出处（LG26090401 实测）。
+        source_text = "\n".join(read_source(Path(p)) for p in expand_sources(args.source))
     except OSError as exc:
-        print(f"读不了客户原始文件：{args.source}（{exc}）", file=sys.stderr)
+        print(f"读不了客户原始文件：{exc}", file=sys.stderr)
         return 1
     result = audit(cpms, source_text)
 
