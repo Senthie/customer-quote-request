@@ -44,6 +44,13 @@ CPMC_PLACEHOLDER = "【中文品名待定】"
 #    这样 igl 那种由脚本拼好的英文/中文串不会被误报。
 AGENT_FIELDS = ("CPMS", "CPMC", "CPMC_ZH")
 
+# ECPMC（原始产品名）单独判：只有**客户档案声明了 rules.ecpmc.source_keys** 的客户才要求它。
+#   NGV 声明了（取原文 product_name / series_name）→ 空着就是缺陷；
+#   igl 没声明（业务 2026-09-24：「先不做」）→ 空着是正确的，不能报警。
+# 业务 2026-10-21 澄清：ECPMC 是**报价的原始产品名**，不限于英文 ——
+#   德文 `Malbücher`、日文、法文一律照抄，不许因为「不是英文」就留空。
+ECPMC_FIELD = "ECPMC"
+
 
 def _is_blank(value: Any) -> bool:
     if value is None:
@@ -71,6 +78,44 @@ def _source_label(task_dir: Path) -> str:
     return ""
 
 
+def _profile_id(task_dir: Path) -> str:
+    """产物目录里 `.extracted.json` 记着这次用的客户档案 id（没有就空）。"""
+    for p in sorted(task_dir.glob("*.extracted.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        pid = str(data.get("profile_id") or "").strip()
+        if pid:
+            return pid
+    return ""
+
+
+_PROFILE_CACHE: dict[str, Any] = {}
+
+
+def _requires_ecpmc(profile_id: str) -> bool:
+    """该客户档案是否要求 ECPMC（原始产品名）。
+
+    只有档案里声明了 `rules.ecpmc.source_keys` 的客户才要求 —— igl 明确不产出
+    （业务 2026-09-24「先不做」），空着是对的；不按档案判会天天误报。
+    判不出来（没档案 / 读不动）一律当作**不要求**，宁可漏报也不制造噪音。
+    """
+    if not profile_id:
+        return False
+    if profile_id in _PROFILE_CACHE:
+        return bool(_PROFILE_CACHE[profile_id])
+    try:
+        from customer_profile import load_profile  # 同目录，脚本运行时在 sys.path 里
+
+        keys = load_profile(profile_id).rule("ecpmc.source_keys", []) or []
+        needed = bool(keys)
+    except Exception:  # noqa: BLE001 —— 读档案失败不该让整轮清单挂掉
+        needed = False
+    _PROFILE_CACHE[profile_id] = needed
+    return needed
+
+
 def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
     """扫产物目录，返回还欠 agent 手写字段的任务清单（按修改时间倒序）。"""
     if not processed_dir.is_dir():
@@ -91,6 +136,9 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
             continue
 
         missing = [f for f in AGENT_FIELDS if _is_blank(data.get(f))]
+        # ECPMC 只对「档案声明了」的客户查（NGV 要求、igl 不产出）
+        if _is_blank(data.get(ECPMC_FIELD)) and _requires_ecpmc(_profile_id(task_dir)):
+            missing.append(ECPMC_FIELD)
         if not missing:
             continue
         out.append({

@@ -729,7 +729,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | 42 | `WCRQ` | 预计下单日期 | 档案 `dates.WCRQ`（`today_plus_days` 或 `mode: empty`） | `""` | ✅ |
 | 43 | `KHDDH` | 香港单号 | 附件「香港单号 CU…」（规范键 `khddh`）或邮件 → 档案 `email.khddh` | `""` | ✅ |
 | 44 | `chkXBJF` | 不需报价 | 开关 | `false` | 🔒 |
-| 45 | `ECPMC` | 产品英文名 | 档案 `rules.ecpmc.source_keys`（按顺序取第一个非空规范键）：NGV = `product_name`（客户原文 `Title:` 后面的英文品名，**照抄**）→ `series_name`。**不翻译、不拼类别、不带 FSC**。没声明 `rules.ecpmc` 的客户留空（igl 现状） | `""` | ✅ |
+| 45 | `ECPMC` | 产品英文名 | 档案 `rules.ecpmc.source_keys`（按顺序取第一个非空规范键）：NGV = `product_name`（客户原文 `Title:` 后面的品名，**照抄**）→ `series_name`。**不翻译、不拼类别、不带 FSC**。★**业务 2026-10-21 澄清：ECPMC 是「报价的原始产品名」，不限于英文** —— 德文 `Malbücher`、日文、法文一律照抄；`ERP` 的 label 叫「产品英文名」是历史命名。脚本取不到（纯文本邮件无 `Title:`）→ agent 从原文照抄补，`cpms_todo.py` 会列为待办。没声明 `rules.ecpmc` 的客户留空（igl 现状） | `""` | ✅ |
 | 46 | `chkZDBJF` | 有排交期 | 开关 | `false` | 🔒 |
 | 47 | `ZXLB` | 纸箱类别 | 客户要求 | `""` | ⚠️ |
 | 48 | `ZBLX` | 纸板类型 | 客户要求（业务 2026-09-24 定：**NGV 留空**；同日给出完整下拉枚举，导出里的 `B3B普通芯` 不在枚举内） | `""` | ⚠️ |

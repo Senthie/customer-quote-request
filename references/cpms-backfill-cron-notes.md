@@ -19,7 +19,11 @@ pending/ ──scan_pending.py──► processed/<task_id>/ERP_*.json（CPMS �
 ```
 
 写 **4 个字段**：`CPMS`（产品描述）、`CPMC`（产品名称）、`CPMC_ZH`（同 CPMC）、
-`ECPMC`（英文品名，客户档案声明了 `rules.ecpmc.source_keys` 才需要）。
+`ECPMC`（**原始产品名，不限语言** —— 德文 `Malbücher`、日文、法文一律照抄；
+只有客户档案声明了 `rules.ecpmc.source_keys` 才需要，igl 不产出）。
+
+> `cpms_todo.py` 的判据：`CPMS` 空 / `CPMC` 或 `CPMC_ZH` 是占位符 / 档案要求 ECPMC 但空着。
+> 它读 `.extracted.json` 的 `profile_id` 来判「这家客户要不要 ECPMC」，判不出不报（宁漏不吵）。
 
 ## 1. 交付前四道门（顺序执行）
 

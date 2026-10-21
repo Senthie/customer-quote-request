@@ -816,12 +816,17 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
 
     # ── 3b. 产品英文名 ECPMC ──────────────────────────────────────
     # 业务 2026-10-20 指出：CPMS 写了，`ECPMC`（产品英文名）却空着。
+    # 业务 2026-10-21 澄清：ECPMC 是**报价的原始产品名**，不限于英文 ——
+    #   德文 `Malbücher`、日文、法文一律照抄，不许因为「不是英文」就留空。
+    #   （ERP 字段 label 叫「产品英文名」是历史命名，口径以业务这句为准。）
     # ERP 表单里 CPMC / ECPMC 是两个独立字段：
     #   CPMC  = 产品名称（NGV 落中文译名；igl 仍是「类别;系列名」的英文串，不动）
-    #   ECPMC = **产品英文名**（客户文件里的英文品名原文）
+    #   ECPMC = **原始产品名**（客户文件里的品名原文）
     # 取值口径：照抄客户原文，**不翻译、不拼类别、不带 FSC**（那是 CPMC 的事）。
     # 档案用 `rules.ecpmc.source_keys` 声明从哪个规范键取（按顺序取第一个非空）；
     # 没声明 = 该客户不产出 ECPMC（保持原行为，不动 igl 基线）。
+    # ⚠️ 取不到（纯文本邮件没有 `Title:` 标签）时脚本留空并 WARN —— 这时**必须由
+    #    agent 从客户原文照抄补上**，`cpms_todo.py` 会把这种「档案要求但字段空着」列为待办。
     ecpmc_keys = profile.rule("ecpmc.source_keys", []) or []
     ecpmc_value, ecpmc_src = "", ""
     for key in ecpmc_keys:

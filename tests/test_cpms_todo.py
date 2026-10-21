@@ -77,6 +77,43 @@ def test_CPMC占位符也算欠账():
         assert items[0]["missing"] == ["CPMC"]
 
 
+def _with_profile(root: Path, task_id: str, profile_id: str) -> None:
+    """给任务目录的 extracted.json 写上客户档案 id（cpms_todo 靠它判 ECPMC 要不要查）。"""
+    p = next((root / task_id).glob("*.extracted.json"))
+    p.write_text(json.dumps({"profile_id": profile_id}), encoding="utf-8")
+
+
+def test_NGV的ECPMC空着算欠账(processed: Path):
+    """NGV 档案声明了 rules.ecpmc.source_keys → ECPMC 空着就是缺陷（业务 2026-10-20 指出过）。"""
+    _task(processed, "ngv1", cpms="完整描述", cpmc="儿童涂色书")
+    _with_profile(processed, "ngv1", "ngv")
+    items = cpms_todo.iter_incomplete(processed)
+    assert items and items[0]["missing"] == ["ECPMC"]
+
+
+def test_igl的ECPMC空着不算欠账(processed: Path):
+    """igl 业务明确「先不做」（2026-09-24），档案没声明 ecpmc → 空着是正确的，不能报警。"""
+    _task(processed, "igl1", cpms="完整描述", cpmc="23.01;无线胶装书-系列")
+    _with_profile(processed, "igl1", "igl")
+    assert cpms_todo.iter_incomplete(processed) == []
+
+
+def test_没有档案信息时不猜ECPMC要不要(processed: Path):
+    """extracted.json 缺失/没 profile_id → 判不出就不报（宁可漏，不制造噪音）。"""
+    _task(processed, "noprof", cpms="完整描述", cpmc="某品名")
+    assert cpms_todo.iter_incomplete(processed) == []
+
+
+def test_ECPMC一填上就消失(processed: Path):
+    d = _task(processed, "ngv2", cpms="完整描述", cpmc="儿童涂色书")
+    _with_profile(processed, "ngv2", "ngv")
+    erp = next(d.glob("ERP_*.json"))
+    payload = json.loads(erp.read_text(encoding="utf-8"))
+    payload["ECPMC"] = "Malbücher"      # 原始产品名，德文照抄
+    erp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    assert cpms_todo.iter_incomplete(processed) == []
+
+
 def test_两项都缺时都列出来(processed: Path):
     _task(processed, "ccc", cpms="  ", cpmc="")
     assert cpms_todo.iter_incomplete(processed)[0]["missing"] == ["CPMS", "CPMC_ZH"]

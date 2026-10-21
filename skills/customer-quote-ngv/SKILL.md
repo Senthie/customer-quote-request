@@ -623,12 +623,13 @@ uv run ./scripts/customer_profile.py --prefs ngv
 - [ ] 套装单尺寸是 `0/0/0`，`Drop_SJFX` 空；非套装单：有 `N mm side` 才判长/短，**识别不到就是 `null`（空着算正常，不是缺陷）**
 - [ ] ★ **品名三件套**（2026-10-20 起，替代旧的 `KM/Aldi …` 写法 —— 旧检查项已作废）：
       `CPMC` = **中文产品名**（agent 从 `Title:` 译，无占位符、无业务员/品牌/类别/FSC）；
-      `ECPMC` = **英文产品名**（客户原文照抄，不许空 —— 空着多半是档案没声明 `rules.ecpmc.source_keys`）；
+      `ECPMC` = **原始产品名**（客户原文照抄，**不限语言** —— 德文 `Malbücher`、日文、法文一律照抄；
+      业务 2026-10-21 澄清：ERP 字段 label 写「产品英文名」是历史命名，口径以这句为准）；
       `CPMC_ZH` = 与 `CPMC` 同值
-- [ ] ⚠️ **别只信 `cpms_todo` 的两格**：`cpms_todo.AGENT_FIELDS` 与交付闸门都只查 `CPMS` / `CPMC_ZH`，
-      所以 `CPMC` 还挂着 `【中文品名待定】`、`ECPMC` 空着，清单照样显示 `CPMS_TODO: 0`。
-      补 `CPMC_ZH` 时**把同值写进 `CPMC`**；`ECPMC` 空要单独查档案有没有声明 `rules.ecpmc.source_keys`
-      （实测 2026-10-21 的 `CU26070901` 邮件没有 `Title:` 标签 → `ECPMC` 为空，属抽取缺陷，汇报里点名）。
+- [ ] `cpms_todo.py` 现在**四个字段都查**（2026-10-21 补）：`CPMS` 空 / `CPMC`·`CPMC_ZH` 是占位符 /
+      档案声明了 `rules.ecpmc.source_keys` 但 `ECPMC` 空 —— `CPMS_TODO: 0` 才是真的写完。
+      实测 `CU26070901` 邮件没有 `Title:` 标签 → 脚本取不到 ECPMC（WARN 留空）→ agent 从原文
+      照抄 `Malbücher` 补上；igl 没声明 `rules.ecpmc`，空着是对的，清单不会误报。
 - [ ] `YWY` = `KM`（业务员在 `YWY`，**不在** `CPMC` 前缀里）
 - [ ] `KHDDH` = 香港单号（扫不到就空 = 正常）；`KHDH` 只在邮件里有时才填（**不许拿 our_ref 冒充**）
 - [ ] 数量核对：带 `= 总数` 的写法以总数为准，且 CPSL1 是「款数 × 每款数」的结果

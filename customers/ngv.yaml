@@ -462,9 +462,14 @@ rules:
     needs_agent: true
   # 产品英文名 ECPMC（ERP 独立字段 `txtECPMC`，label「产品英文名」）：
   # ★ 业务 2026-10-20 指出：CPMS 有了、ECPMC 却空着 —— 它是**必看的品名字段**。
-  #   取值 = 客户文件里的英文品名原文（`Title: Ostermalblock` → `Ostermalblock`），
+  # ★★ 业务 2026-10-21 澄清口径：ECPMC = **报价的原始产品名**，不限于英文 ——
+  #    德文 `Malbücher`、日文、法文一律**照抄原文**，不许因为「不是英文」就留空
+  #    （ERP 字段名叫「产品英文名」是历史命名，口径以业务这句为准）。
+  #    取值 = 客户文件里的产品名原文（`Title: Ostermalblock` → `Ostermalblock`），
   #   **照抄，不翻译、不拼类别、不带 FSC**（那些是 CPMC 的事）。
-  #   NGV 的英文品名在规范键 product_name；取不到再退回 series_name。
+  #   脚本取不到时（纯文本邮件没有 `Title:` 标签）→ **由 agent 从原文照抄补上**，
+  #   `cpms_todo.py` 会把「档案声明了 ecpmc 但字段空着」列为待办。
+  #   NGV 的品名在规范键 product_name；取不到再退回 series_name。
   ecpmc:
     source_keys: [product_name, series_name]
   # 产品属性 CPSX：NGV 的表单里**没有**年龄段/安全检查栏 → 推不出来时的口径由业务定：
