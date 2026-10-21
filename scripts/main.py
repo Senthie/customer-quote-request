@@ -507,6 +507,17 @@ def parse_single_quantity(text: str, logger: Optional[Logger] = None) -> Optiona
     if m_total:
         total = _de_number(m_total.group(1))
 
+    # ①b 显式总数（数字在前）：`QTY: 60.000 St. in total (20.000 cps/title)`
+    # 客户常把「总数」写在数字**后面**，前面那个才是真正的总数 —— 后面括号里的
+    # 是「每款多少」。实测 CU26070901：这一行不认就会退回 ③ 兜底并把 60.000 丢掉。
+    if total is None:
+        m_total_post = re.search(
+            r"(\d[\d.,]*)\s*(?:st\.?|stk\.?|cps\.?|pcs\.?|copies|ex\.?)?\s*"
+            r"(?:in\s+total|insgesamt)\b",
+            s, re.IGNORECASE)
+        if m_total_post:
+            total = _de_number(m_total_post.group(1))
+
     # ② `N x M` 乘法（允许后面还有其他文字）
     product = None
     mul_desc = ""

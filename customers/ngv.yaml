@@ -70,7 +70,7 @@ detect:
 #   * 万一 NGV 换了平铺写法，auto_pairs 还能兜住。
 fields:
   product_name:         ["enquiry", "Anfrage", "title", "Titel"]
-  quantity:             ["quantity", "Auflage"]
+  quantity:             ["quantity", "Auflage", "QTY", "Qty"]
   versions:             ["versions", "Versionen"]
   offer_deadline:       ["offer deadline", "Angebotsfrist"]
   files_to_printer:     ["files to printer", "Inhalt an Drucker"]
@@ -528,6 +528,11 @@ rules:
     # ⚠️ 2026-10-20：加 `side` —— 客户写 `perfect binding at the side` 时旧正则抓不到，
     #   书脊方向就白丢了（`at long side` 这种没 the 的写法仍抓不到，靠 binding_side 数字兜）。
     - { key: binding_direction, pattern: "(?i)(?:at|on|along)\\s+the\\s+(?:top|bottom|left|right|head|spine|side|short|long)\\b[\\w ]{0,12}" }
+    # 款数：纯文本 enquiry 里写成 `3 titles (all in one language):`（没有 `versions:` 标签）。
+    # ⚠️ 必须锚在**行首且紧跟括号**，否则会抓到邮件串里客户自己的疑问句
+    #    `it should be 60,000cps/15,000cps = 4 titles instead of 3 titles`
+    #    （CU26070901 实单实测：不加锚点会落 TZS=4，那是客户的假设不是订单事实）。
+    - { key: number_of_titles, pattern: "(?m)^(\\d+)\\s+titles?\\s*\\(" }
     # 香港单号：附件文件名里带「香港单号 CU26072301」，表内也常有。
     # ⚠️ 落到 **KHDDH**（模板第 43 键，中文标签就是「香港单号」），不是 KHDH。
     - { key: khddh, pattern: "香港单号\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)" }

@@ -14,9 +14,12 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.43（2026-10-20 **CQR_Web 上传 → 定时抽取 → 自动刷出产物**：
+> **版本：** 1.0.44（2026-10-21 **定时任务补上 agent 环节 + 纯文本 enquiry 三处引擎缺陷**：
+> `cpms_todo.py` 当交接棒、cron 改 agent 模式（§4.12）；`QTY: 60.000 St. in total` /
+> `3 titles (…)` / `FSC-Mix` 三处让 CU26070901 落错值的缺陷已修）
+> —— 前序 1.0.43：**CQR_Web 上传 → 定时抽取 → 自动刷出产物**：
 > 页面收上传落 `pending/`、每 10 秒刷新；Hermes 定时任务每 5 分钟跑
-> `scripts/scan_pending.py` 逐份抽（Web 不碰进程/队列）；局域网共享、不做认证）
+> `scripts/scan_pending.py` 逐份抽（Web 不碰进程/队列）；局域网共享、不做认证
 > —— 前序 1.0.42：查表去子进程（4 个脚本内联进 `main.py`，`--lookup` 单点查询）
 > —— 前序 1.0.41：`scripts/` 瘦身（删 6 个零引用文件 + 1 个死函数）
 > —— 前序 1.0.40：**`erp_view` → `CQR_Web` 独立项目**：展示层抽出来自带
@@ -1152,6 +1155,11 @@ CQR_Web/
 |---|---|---|
 | `CQR_Web`（Flask） | 收上传 → 落 `pending/`；只读展示 `processed/` | **不起进程、不管队列、不记任务状态** |
 | Hermes 定时任务（`scripts/scan_pending.py`，每 5 分钟） | 扫 `pending/` → 逐份跑 `main.py` | 不服务页面 |
+| 同一任务的下半场（`scripts/cpms_todo.py` + agent） | 列还欠字段的产物 → agent 写 CPMS / CPMC_ZH → lint | 不重跑抽取、不改其他键 |
+
+⚠️ **1.0.44 修正**：该 cron 最初是 `no_agent`（纯脚本），所以只做抽取 —— 而 CPMS 天生
+由 agent 手写，脚本不生成，于是产物永远停在「未完成」。现在改成 **agent 模式**，
+脚本只当「待办清单生成器」，写 CPMS 的活交给 agent。详见 §4.12。
 
 四件已定的口径：
 
@@ -1197,6 +1205,50 @@ Hermes 已经跑着的 cron（gateway 常驻），Web 只做它擅长的两件�
 点开头去掉（否则 `input_unit` 当隐藏文件静默跳过）、主名截 80 字；后缀白名单
 `xlsx/xls/csv/pdf/docx/txt/zip`；同名加 `(2)` 不覆盖；请求体上限 64 MB（超了返回中文 413）。
 `.eml` **明确拒收**并给出指引 —— 它得先过 `ingest_email.py`，直接喂 `main.py` 会报「不支持的文件格式」。
+
+### 4.12 定时任务为什么必须带 agent（1.0.44 修正）
+
+**业务 2026-10-21 的原话**：「为什么自动任务不会触发 CPMS？」
+
+答案是设计上的一个断点，不是 bug —— 但确实是我漏掉的一环：
+
+| 环节 | 能力 | 后果 |
+|---|---|---|
+| `main.py` | **永远不生成** CPMS / CPMC_ZH（规范 v2 明确要求 agent 手写） | 抽取产物天生「未完成」 |
+| 原来的 cron | `no_agent: true` —— 纯脚本，**根本没有 agent 参与** | 没有「人」来接手，产物一直空着 |
+
+于是「抽取完成」被误当成「流水线完成」。证据：`processed/5f1cada…`（2026-10-21 01:00
+由 cron 自动抽出）CPMS 长度为 0。
+
+**改法：cron 从 `no_agent` 改为 agent 模式，脚本降级为「待办清单生成器」。**
+
+```
+cqr_scan_and_cpms.sh            （profile 壳，逻辑都在仓库）
+  ├─ scripts/scan_pending.sh    → 抽取，成功即把输入搬进 processed/
+  └─ scripts/cpms_todo.py       → 列出「抽完了但还欠 CPMS / CPMC_ZH」的产物
+        │  两件都没有 → stdout 空 → agent 按 prompt 回 [SILENT]（不打扰人）
+        ▼
+  agent（加载本技能）
+        读 *.txt 原文 → 写 CPMS（规范 v2）→ 写 CPMC_ZH
+        → 写回 ERP_*.json（只改这两个键）→ cpms_lint.py 退出码 0
+        → cpms_content_audit.py 扫硬伤 → 发一条汇总
+```
+
+**`cpms_todo.py` 的判据**（`tests/test_cpms_todo.py` 13 项钉住）：
+
+- 欠账 = `CPMS` 为空白 **或** `CPMC_ZH` 等于占位符 `【中文品名待定】`
+- 一个任务目录有多份 `ERP_*.json`（重跑过）只看**最新**那份
+- 坏 JSON 跳过，不让整轮挂掉；`.` / `_` 开头的目录不算产物
+- 输出契约首行固定 `CPMS_TODO: <N>`，无欠账时是 `CPMS_TODO: 0` —— shell 壳靠这行决定不出声
+- **写完就自动消失**：不需要额外的「已处理」状态文件，产物本身就是状态
+
+**为什么这样比「让脚本硬生成 CPMS」对**：CPMS 要看原文的语气、用途、年龄段、
+安全提示，脚本抄出来的必是关键词堆砌（1.0.11 已经删过一次 `build_cpms_draft()`）。
+agent 成本低、可 lint 兜底、写不出来会如实报告 —— 比假装完成强。
+
+**代价**：每一轮（含空跑）都要一次 LLM 调用 + 加载本技能（约 10 万 token 前缀，
+deepseek 前缀缓存后基本只算增量）。嫌贵就把空跑频率降下来，别把 agent 去掉 ——
+去掉就退回「永远不会写 CPMS」的老问题。
 
 **几处刻意的设计（改动前先读）**
 
@@ -1805,6 +1857,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.44** | **2026-10-21** | **定时任务补上 agent 环节**：cron 从 `no_agent` 改 agent 模式，`scripts/cpms_todo.py` 当交接棒（列出 CPMS/CPMC_ZH 仍空着的产物，写完自动消失，`CPMS_TODO: N` 输出契约），空跑静默；**纯文本 enquiry 三处引擎缺陷**（CU26070901 实单）：① `QTY: 60.000 St. in total (20.000 cps/title)` —— `parse_single_quantity` 新增「数字在前 + in total」形态（旧正则只认 `total <数字>`，整条丢成 `CPSL1=0`）② 款数扫描新增 `^(N) titles (` 锚行首规则（不锚会抓到客户疑问句里的 `4 titles`）③ `FSC-Mix` → `FSC Mix` 枚举别名（不归一化报 error）；新增 `tests/test_ngv_text_enquiry.py` 13 项 |
 | **1.0.43** | **2026-10-20** | **上传 → 定时抽取 → 自动刷出产物**：`CQR_Web` 新增 `POST /api/uploads`（落 `customer-files/pending/`，`upload.py` 纯逻辑）与 `GET /api/pending`（排队条）；页面每 **10 秒**静默刷新、新产物自动选中并打「新」徽章；抽取改由 **Hermes 定时任务**（`scripts/scan_pending.py` + `scripts/scan_pending.sh`，每 5 分钟）执行 —— 原子认领 / 失败 3 次进 `failed/_stuck_*` / `flock` 防叠加 / **空 pending 静默**；`--lan` 局域网开放（无认证，业务明确） |
 | **1.0.42** | **2026-10-20** | **查表去子进程**：`select_page_thickness.py` / `product_categories.py` / `string2timestamp.py` / `uuid_utils.py` 内联进 `main.py`（`get_page_thickness` / `parse_product_categories` / `_parse_date_value` / `uuid4`）；新增 `--lookup thickness/category/date` 单点查询；`tests/test_lookup_tables.py` 对着真实表逐行钉住等价（厚度 72 行 / 类别表 / 9 种日期写法），6 份真实产物重构前后**逐字段 0 差异** |
 | **1.0.41** | **2026-10-20** | **`scripts/` 分类瘦身**：删掉 6 个零引用文件（`customer2erp.py` / `xlsx2csv.py` / `docx2json.py` / `txt2json.py` / `pdf2json.py` / 0 字节的 `_init__.py`）与 1 个零引用函数（`internal_fields.is_internal_field`）；抽取调试只剩 `extract_fields.py <文件> --json` 一个入口 |

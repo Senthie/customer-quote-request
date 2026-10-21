@@ -458,6 +458,8 @@ NGV 每单固定的第三方检测清单（378 字符，3 份导出逐字相同�
 >
 > CPMS 写法样例：`references/cpms-线圈书水钻贴纸.md`（线圈书 + 水钻贴纸 + 多材料内文，
 > v2 规范 0 error/0 warn，含逐条写法决策表）。
+> 定时任务补写的门禁坑（德式千分位 `60.000` / 料号撞「印色」正则 / 并发写回纪律）：
+> `references/cpms-backfill-gotchas.md`。
 > 真实 ERP 逐字段差异表：`references/real-erp-diff-BJXQ260704002.md`（Wire-O 类别、CPMC 业务员、
 > CPSL 空值等 8 条口径分歧的来源单据）。
 
@@ -564,6 +566,29 @@ uv run ./scripts/customer_profile.py --prefs ngv
   现在 `[\s-]*` + `unique_ignore_separators: true`：`FSC Mix` / `FSC mix` / `FSC-Mix` 算同一个值，
   `FSC-Mix` vs `FSC Recycled` 才算混用。**两条都栽过**（一次误留空、一次误填值），
   改这条正则必须同时跑 `test_扫描_连字符FSC写法要分开判真混用与同值`。
+- ★ **定时任务补 CPMS 时的「抽错字段」处置**（2026-10-21 实单 `CU26070901`）：客户写 `3 titles`、
+  `QTY: 60.000 St. in total (20.000 cps/title)`，但 `TZS` 落 1、`CPSL1` 落 0、`FSCMC` 落
+  `FSC-Mix`（ERP 合法值是 `FSC Mix`）。`cpms_lint` 的 `CPMS011` 要求概要行**等于**字段，
+  所以在概要行里写「共【3】款」会当场报 error，而手改 `TZS`/`CPSL1` 又会在引擎重跑时丢。
+  正确动作：**概要行按字段写、客户事实写进 `备注`（带原文），汇报里逐条点名「字段/现值/原文/应然值」**，
+  由引擎侧修完重跑。另两条同批教训：正方形成品（`CD=KD`，如 210×210）判不出长/短书脊 →
+  不写方向词，`CPMS013` 那 1 条 warn 是**已知例外**（不许为清零编「长书脊」）；
+  `cpms_content_audit --source` **要指具体客户文件，指目录不报错但等于没审**。
+  全套命令/样例/v1 遗留产物（41 键那代只补内部字段、别拿 v2 lint 去「修」）见总纲
+  `customer-quote-request/references/cpms-backfill-cron-notes.md`。
+- ★ **德式千分位在 CPMS 里必须照抄，写 `60000` 会被门禁判成编造**（2026-10-21 实单）：
+  `cpms_content_audit` 的溯源是**子串匹配**、不归一 `60.000`。写 `数量共60.000本（每款20.000本）`
+  → 0 无出处；写 `60000本` → 退出码 3（`60000/20000/15000` 全报无出处）。NGV 的
+  `60.000 / 17.500 / 30.100` 都是点作千分位，**别翻译成中文习惯的数字形态**。
+- ★ **料号 `5/20/8478438/FSM` 会撞「印色」正则**：`cpms_lint` 把 `5/20` 当成 `4/0C` 那类印色
+  → `CPMS052`。别改数字、也别删料号（转录九问要求料号抄全）—— 把它放到 `- ` 开头的三级子项行，
+  lint 在解析标签前就跳过这类行：`- 料号：5/20/… Hubschrauber、…`。
+- ★ **写回 `ERP_*.json` 前一定要重读 + 先备份**：定时任务可能与上一轮/人工同时写同一份产物
+  （实测第一眼读到 `CPMS` 为空，几分钟后快照里已有别人写的 313 字）。纪律：`cp` 到 `/tmp/` 留原值 →
+  写回前重新 `json.load`（不要用几分钟前读进内存的对象）→ **合并**别人版本里有出处的事实
+  （漏抄也是缺陷）→ `json.dumps(ensure_ascii=False, indent=2)` 保持键序 → 收尾断言
+  `list(out)[:59]==模板键序` 且 `changed ⊆ {CPMS, CPMC, CPMC_ZH}`。
+  完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`。
 
 ---
 
@@ -600,6 +625,10 @@ uv run ./scripts/customer_profile.py --prefs ngv
       `CPMC` = **中文产品名**（agent 从 `Title:` 译，无占位符、无业务员/品牌/类别/FSC）；
       `ECPMC` = **英文产品名**（客户原文照抄，不许空 —— 空着多半是档案没声明 `rules.ecpmc.source_keys`）；
       `CPMC_ZH` = 与 `CPMC` 同值
+- [ ] ⚠️ **别只信 `cpms_todo` 的两格**：`cpms_todo.AGENT_FIELDS` 与交付闸门都只查 `CPMS` / `CPMC_ZH`，
+      所以 `CPMC` 还挂着 `【中文品名待定】`、`ECPMC` 空着，清单照样显示 `CPMS_TODO: 0`。
+      补 `CPMC_ZH` 时**把同值写进 `CPMC`**；`ECPMC` 空要单独查档案有没有声明 `rules.ecpmc.source_keys`
+      （实测 2026-10-21 的 `CU26070901` 邮件没有 `Title:` 标签 → `ECPMC` 为空，属抽取缺陷，汇报里点名）。
 - [ ] `YWY` = `KM`（业务员在 `YWY`，**不在** `CPMC` 前缀里）
 - [ ] `KHDDH` = 香港单号（扫不到就空 = 正常）；`KHDH` 只在邮件里有时才填（**不许拿 our_ref 冒充**）
 - [ ] 数量核对：带 `= 总数` 的写法以总数为准，且 CPSL1 是「款数 × 每款数」的结果

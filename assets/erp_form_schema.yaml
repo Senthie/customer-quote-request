@@ -437,6 +437,12 @@ fields:
       - FSC
       - FSC Recycled          # 表单原值带尾随空格
       - FSC Mix 70%
+    aliases:
+      # 客户常写连字符形态 `FSC-Mix`（KiK / Tedi 的英文 enquiry 都这么写），
+      # ERP 枚举只有空格形态。2026-10-21 CU26070901 实测：不归一化会报 1 个 error。
+      "FSC-Mix": FSC Mix
+      "FSC-Mix Credit": FSC Mix Credit
+      "FSC-mix": FSC Mix
 
   # ── 9. 产品属性 / 类型 / 开关 ──────────────────────────────────────────
   SFYPJ:
