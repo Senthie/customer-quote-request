@@ -14,6 +14,7 @@ from ingest_email import (
     ingest,
     normalize_khdh,
     parse_eml,
+    newest_message,
     read_attachment_meta,
 )
 
@@ -112,6 +113,39 @@ def _build_eml(path, subject, body, attachment_name=None, payload=b"fake-xlsx"):
                            subtype="octet-stream", filename=attachment_name)
     path.write_bytes(bytes(msg))
     return path
+
+
+# ── 引用旧邮件：别把上一单的号/款数当本单事实 ──────────────────────────
+
+def test_newest_message_切掉引用的旧邮件():
+    body = ("Dear Alex,\nThere are 10 titles in 10 languages.\n\n"
+            "From: kevinlai <k@example.com>\n"
+            "Sent: Tuesday\n"
+            "6 titles 4 languages\n")
+    out = newest_message(body)
+    assert "10 titles" in out
+    assert "6 titles" not in out
+
+
+def test_newest_message_认得中文与德文引用头():
+    assert "旧" not in newest_message("新的内容\n发件人： 张三 [mailto:a@b]\n旧的内容")
+    assert "alt" not in newest_message("neuer text\nAm 28.07.2026 um 17:02 schrieb X:\nalt")
+
+
+def test_参考旧单的PO号不算客户单号():
+    """LG26090401 实测：正文里 `spec same as PO#15900` 指的是上一个项目。"""
+    ngv = load_profile("ngv")
+    numbers, sources = extract_numbers(
+        ngv, "A00142 Wimmelbücher (Winter)",
+        "Type B. Bildwörterbücher (4 titles) spec same as PO#15900, type C", LOGGER)
+    assert "KHDH" not in numbers, f"参考旧单的号不该落 KHDH：{numbers}"
+    assert sources == {}
+
+
+def test_本单陈述句里的PO号照样取():
+    ngv = load_profile("ngv")
+    numbers, _ = extract_numbers(ngv, "enquiry", "PO#A123456\nPlease quote.", LOGGER)
+    assert numbers.get("KHDH") == "A123456"
 
 
 def test_解析_eml_标题正文附件(tmp_path):

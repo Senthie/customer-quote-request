@@ -148,8 +148,55 @@ def normalize_khdh(value: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# 引用/转发旧邮件的分界线：从第一个命中处往后都是**上一封**的内容。
+#   Outlook 中文「发件人：」/ 英文「From:」、Gmail「-----Original Message-----」、
+#   德文「Am 28.07.2026 um 17:02 schrieb …」、Outlook 的分隔横线。
+_QUOTE_MARKERS = (
+    r"(?mi)^\s*-{2,}\s*original message\s*-{2,}",
+    r"(?mi)^\s*from:\s*.+$",
+    r"(?mi)^\s*发件人\s*[:：]",
+    r"(?mi)^\s*寄件者\s*[:：]",
+    r"(?mi)^\s*am\s.+\sschrieb\s.+$",
+    r"(?mi)^_{10,}\s*$",
+)
+
+
+# 「参考/同上」的上下文：出现在单号前 40 字里 → 那个号是**引用旧单**，不是本单。
+#   实测原话：`Type B … spec same as PO#15900, type C`（LG26090401 的往来邮件里，
+#   15900 是上一个项目的 PO）。取成本单 KHDH 就是错的。
+_REFERENCE_BEFORE = re.compile(
+    r"(?i)(?:same\s+as|as\s+(?:in|per)|refer(?:ence|ring)?\s+to|参考|參照|参见|参照|"
+    r"wie\s+(?:in|bei)|siehe|laut|per\s+PO|according\s+to)\s*[:#]?\s*$")
+
+
+def _is_reference(text: str, start: int) -> bool:
+    """这个匹配前面是不是「参考/同上 …」的语气（是 → 引用旧单，别当本单事实）。"""
+    return bool(_REFERENCE_BEFORE.search(text[max(0, start - 40):start]))
+
+
+def newest_message(body: str) -> str:
+    """只留**最新一封**邮件（切掉引用的旧邮件）。
+
+    为什么必须切（2026-10-21 LG26090401 实测踩到）：业务给的 .eml 里带着整串往来，
+    旧邮件写着上一个项目的 `6 titles 4 languages` 和 `spec same as PO#15900`。
+    全文搜「单号 / 款数」就会把 **旧单的 PO 号** 落成 KHDH（15900），
+    把本单的 10 款 10 语言盖掉。旧邮件不是本单事实。
+    """
+    text = body or ""
+    cut = len(text)
+    for pattern in _QUOTE_MARKERS:
+        for m in re.finditer(pattern, text):
+            if m.start() < cut:
+                cut = m.start()
+            break
+    return text[:cut]
+
+
 def extract_numbers(profile, subject: str, body: str, logger=None, extra_texts=None) -> tuple:
     """按档案 email 段声明的**每一组**单号规则，从标题/正文取号。
+
+    只看**最新一封**正文（`newest_message`）：引用的旧邮件里常带着上一个项目的
+    单号，拿它当本单事实是错的（LG26090401 实测把旧 PO#15900 落成了 KHDH）。
 
     返回 (numbers, sources)：
         numbers = {目标 ERP 字段: 值}   例 {'KHDDH': 'CU26072301'}
@@ -164,7 +211,7 @@ def extract_numbers(profile, subject: str, body: str, logger=None, extra_texts=N
     for rule_key, cfg, target in profile.number_rules():
         candidates = [
             ("subject_patterns", "邮件标题", subject),
-            ("body_patterns", "邮件正文", body),
+            ("body_patterns", "邮件正文", newest_message(body)),
         ]
         # 额外文本（.eml 文件名、附件名）用同一套规则再扫一遍 ——
         # 实测 NGV 的香港单号常只出现在邮件文件名里（`CU26070802 - price enquiry….eml`）
@@ -174,10 +221,12 @@ def extract_numbers(profile, subject: str, body: str, logger=None, extra_texts=N
                 continue
             for pattern in cfg.get(section) or []:
                 try:
-                    match = re.search(pattern, text)
+                    matches = list(re.finditer(pattern, text))
                 except re.error:
                     continue
-                if match:
+                for match in matches:
+                    if _is_reference(text, match.start()):
+                        continue        # 「参考 PO#…」不是本单单号
                     value = normalize_khdh(match.group(1))
                     if value:
                         numbers[target] = value
@@ -185,6 +234,8 @@ def extract_numbers(profile, subject: str, body: str, logger=None, extra_texts=N
                         if logger:
                             logger.info(f"{target} 来源: {label}（{profile.id} 规则 {rule_key}）")
                         break
+                if target in numbers:
+                    break
             if target in numbers:
                 break
     return numbers, sources

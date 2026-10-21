@@ -96,3 +96,26 @@ uv run ./scripts/main.py "<产物目录里的原文件副本>" --customer auto  
 | `CPSL1=0` | `QTY: 60.000 St. in total (20.000 cps/title)` —— 总数写在数字**后面** | `parse_single_quantity()` 增加「数字在前 + `in total`」形态 |
 | `TZS=1` | 纯文本 enquiry 没有 `versions:` 标签 | `rules.scan` 加 `^(N) titles (` 行首锚点（不锚会抓到客户疑问句里的 `4 titles`） |
 | `FSCMC` 报 error | 客户写 `FSC-Mix` | `erp_form_schema.yaml` 的 `FSCMC.aliases` 归一化到 `FSC Mix` |
+
+## 8. ★ 邮件副档（sidecar）在 cron 路径上会丢 → `KHDH`/`KHDDH` 全空
+
+2026-10-21 实单 `CU26072401`（NGV，`adb1b903…`）暴露，**所有走 cron/Web 上传的单附件邮件单都中招**：
+
+- `ingest_email.py` 把附件落到 `pending/<附件>` 并在**旁边**写 `<附件>.meta.json`
+  （里面 `numbers: {KHDH: 13826, KHDDH: CU26072401}`）。
+- `scripts/scan_pending.py` 认领时只 `os.replace(item, pending/_claimed/<name>)`，
+  **没搬 `<name>.meta.json`**。
+- `input_unit.find_unit_meta()` 对 `kind == "file"` 只找 `unit.path + ".meta.json"`
+  —— 文件已在 `_claimed/`，副档还在 `pending/` → 返回 `None`。
+- 结果：`KHDH` / `KHDDH` 静默落空，而 `erp_schema` 的 `rules.required_empty` 又把这两个字段
+  豁免了必填 → **四道门全绿**，只有人会看出来。
+
+**判别**：`pending/` 里还躺着 `<附件>.meta.json`，而任务目录里没有它 → 就是这个 bug。
+
+**修法（引擎侧，未修）**：`claim_item()` 把同名的 `<name>.meta.json` 一起搬进 `_claimed/`
+（或 `find_unit_meta()` 对单文件再往上一级 `_claimed/../` 找一次）。
+修完要加回归：`tests/test_scan_pending.py` 断言「认领后 `_claimed/` 里有副档」
++ `tests/test_ingest_email.py` 断言 `KHDDH` 落库。
+
+**在此之前**：补 CPMS 时若发现 `KHDH`/`KHDDH` 空，**先看 `pending/*.meta.json`**，
+按「字段 / 现值 / 原文 / 应然值」在汇报里点名，不要自己改这两个键（属引擎侧）。

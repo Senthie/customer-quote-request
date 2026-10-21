@@ -68,7 +68,11 @@ def _run_pipeline(customer: str, attachment: Path, workdir: Path) -> dict:
     for sub in ("pending", "processed", "failed"):
         (workdir / sub).mkdir(parents=True, exist_ok=True)
     target = workdir / "pending" / attachment.name
-    shutil.copy2(attachment, target)
+    if attachment.is_dir():
+        # 单元目录（一封邮件的多个参考文件 = 一份报价）也要能对照
+        shutil.copytree(attachment, target)
+    else:
+        shutil.copy2(attachment, target)
 
     proc = subprocess.run(
         [sys.executable, str(REPO_ROOT / "scripts" / "main.py"), str(target),

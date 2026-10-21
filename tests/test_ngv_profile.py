@@ -314,6 +314,24 @@ def _map(values: dict, profile=None):
     return map_fields(CustomerData(values=values), template, profile or NGV, _Quiet())
 
 
+def test_款数语言数只看邮件最新一封():
+    """LG26090401（2026-10-21 真实录入 TZS=10 / YYS=10）：
+    附件是德文 Titel+Mengen 表，款数/语言数只在正文，且引用区里还有旧单的 6/4。
+    """
+    from main import versions_from_email
+
+    body = ("There are 10 titles in 10 languages based on standard language change:\n"
+            "\nFrom: kevinlai\n6 titles 4 languages\n")
+    titles, langs = versions_from_email(NGV, {"subject": "A00142 Wimmelbücher (Winter)",
+                                             "body": body})
+    assert (titles, langs) == (10, 10), "新封是 10/10，旧封的 6/4 不许串味"
+
+
+def test_没有邮件上下文时款数语言数返回None():
+    from main import versions_from_email
+    assert versions_from_email(NGV, None) == (None, None)
+
+
 def test_数量写法_带总数时以总数为准():
     """`3 x 7000 cps. = 21.000 cps`（PR-00091345 实测）必须算 21000，不能算 3。
 

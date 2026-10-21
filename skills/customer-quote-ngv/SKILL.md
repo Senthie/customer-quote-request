@@ -198,6 +198,45 @@ uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
 `customer-files/samples/ngv/manifest.json` 的 `known_differences`（8 项已拍板口径，
 `CPDL/BZ/PXH/YYS/SFYPJ/Remark1/Remark3/FSCMC`），**先读白名单再动嘴**，否则整份报告会被读成「31 个 bug」。
 
+## 1.8 ★ 第三种形态：BB 书 + 「Titel+Mengen」款量附表（2026-10-21 实单 `LG26090401` / A00142）
+
+NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件承担的事完全不同：
+
+| 文件 | 内容 | 结果 |
+|---|---|---|
+| `<尺寸>_<项目名>_PR-xxxxx_korr-CW.xlsx` | enquiry 分区表单（规格全在这里） | 抽到键最多 → 被选为**主文件** |
+| `Titel+Mengen_<项目>_…xlsx` | 款数 / 语言 / 各市场数量（德文表头 `Titel 1..10`、`QTY per language`） | **一个规范键都不匹配** |
+
+后果（实测）：`versions` 只抽到表单 B6 的 `see detailed breakdown` → 正则失配 →
+**`TZS=1`（默认）、`YYS=0`（`when_missing`）、`CPSL1=0`**；而邮件正文明写
+`10 titles in 10 languages`、款量表 `U227=410,000`（10 款 × 41,000）。
+四道门**全绿** —— 因为这三个字段「有值」，只是值是默认值。
+
+**开工必做**：单元里出现 `Titel+Mengen` / `Mengen` / 带 `Titel 1..10` 行的表 →
+手算一遍 `TZS` / `YYS` / `CPSL1`（款数 × 每款 = 总数；德式点千分位 `410.000`），
+与产物对不上按「字段 / 现值 / 原文 / 应然值」汇报，**不手改 JSON**（见 §9 定时任务那条）。
+
+**顺带两个 NGV 结构缺口**（同日实单暴露，档案侧待补）：
+
+- ★ **`board book` 没有映射**：`customers/ngv.yaml` 的 `cplb.map` 与 `binding.map`
+  都不认 `board book` / `board book binding` → `CPLB=32.00;其他`、`ZDFS=""`，
+  而 `erp_schema --check` 只报 2 条 **warn**（顶层过粗 / 装订空），不报 error。
+  应然值：**`CPLB=27.01;普通BB书`、`ZDFS=普通BB书`**（`普通BB书` 在 ERP 装订枚举里）。
+- ★ **表单模板会被跨项目沿用，B1 标题可能是上一个项目的**：
+  A00142 的 B1 写 `Wimmelbuch Peppa Pig`（那是 PR-00092497 的旧模板），实际项目是
+  `A00142 Wimmelbücher (Winter)`；B30 的 `A+B assorted` 与邮件「only spec A」冲突；
+  G4 `ETD = 25 Dec 2027` 与邮件 `13 Aug 2027` 冲突。
+  判据：**B1 标题 vs 邮件主题 / 款量表项目名**。处理：`CPMC`/`ECPMC` 取邮件 + 款量表的
+  项目名（`Wimmelbücher (Winter)`，照抄不翻译）；这些残留**一律不写进 CPMS**，
+  在 `CPMS_来源对照.md` 的「已删除/未写」表和汇报里点名。
+- **多文件单元的 `cpms_content_audit`**：`--source` 只能指一份 → 用**承载规格的主表单**
+  做门禁；另一份文件独有的事实（款量表的 PR 号 / 日期）会被判无出处，那是**预期**，
+  写进来源对照即可。邮件独有的事实同理：初稿把 `CRD 06 Aug 2027、ETD 13 Aug 2027`
+  写进备注，被 audit 判 `06`/`13` 无出处 → 删掉，日期留给业务/ERP 侧。
+
+> 本单完整复盘（两份文件的原始数据、5 个字段落错、CPMS 成品与取舍）：
+> `references/bb书与款量附表-a00142.md`。
+
 ## 2. 怎么认出这是 NGV
 
 - **文件名关键词**：`ngv`
@@ -462,6 +501,8 @@ NGV 每单固定的第三方检测清单（378 字符，3 份导出逐字相同�
 > `references/cpms-backfill-gotchas.md`。
 > 真实 ERP 逐字段差异表：`references/real-erp-diff-BJXQ260704002.md`（Wire-O 类别、CPMC 业务员、
 > CPSL 空值等 8 条口径分歧的来源单据）。
+> BB 书 + 款量表（`Titel+Mengen`）单元的复盘、5 个字段落错、CPMS 成品与取舍：
+> `references/bb书与款量附表-a00142.md`（§1.8 的配套案例）。
 
 > ⚙️ **执行环境**：本 profile 的会话里终端默认 cwd 可能指向一个已不存在的目录
 > （命令会直接报 `cd: … No such file or directory`，连 `pwd` 都跑不了）。
@@ -576,6 +617,13 @@ uv run ./scripts/customer_profile.py --prefs ngv
   `cpms_content_audit --source` **要指具体客户文件，指目录不报错但等于没审**。
   全套命令/样例/v1 遗留产物（41 键那代只补内部字段、别拿 v2 lint 去「修」）见总纲
   `customer-quote-request/references/cpms-backfill-cron-notes.md`。
+- ★ **「款数在第二份附件里」是 NGV 的固定失分点**（2026-10-21 A00142）：表单 B6 只写
+  `versions: see detailed breakdown`、A5 `quantity` 空，款数/语言/数量全在
+  `Titel+Mengen_*.xlsx` → `TZS=1 / YYS=0 / CPSL1=0` 静默落默认值，四道门全过。
+  同时 `board book` 不被 `cplb.map` / `binding.map` 认（→ `32.00;其他` + `ZDFS` 空，
+  只有 warn）。这两类都**不在 lint 能力范围内**，只能靠 §1.8 的手核 + 汇报。
+  另：表单 B1 标题 / B30 备注 / G4 ETD 可能是**上一个项目**的模板残留，
+  `CPMC`/`ECPMC` 要以邮件 + 款量表的项目名为准（同名残留不许进 CPMS）。
 - ★ **德式千分位在 CPMS 里必须照抄，写 `60000` 会被门禁判成编造**（2026-10-21 实单）：
   `cpms_content_audit` 的溯源是**子串匹配**、不归一 `60.000`。写 `数量共60.000本（每款20.000本）`
   → 0 无出处；写 `60000本` → 退出码 3（`60000/20000/15000` 全报无出处）。NGV 的
@@ -589,6 +637,18 @@ uv run ./scripts/customer_profile.py --prefs ngv
   （漏抄也是缺陷）→ `json.dumps(ensure_ascii=False, indent=2)` 保持键序 → 收尾断言
   `list(out)[:59]==模板键序` 且 `changed ⊆ {CPMS, CPMC, CPMC_ZH}`。
   完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`。
+- ★ **灰板 `mm → g` 会与溯源门禁打架**（2026-10-21 实测）：客户原文写 `boards 2 mm` 时，
+  换算成 `1200g` 会让 `1200` 变成「无出处」→ audit 退出码 1；**照抄 `2mm` 只吃 `CPMS054`
+  一条 warn、audit 0/0**。取舍写进汇报，别为清 warn 去赌 audit。任何**派生数字**
+  （自己算的日期、换算的克重）同理。
+- ★ **audit 只吃单一 source（xlsx/csv/txt/docx，不支持 `.eml`）**：规格在附件、上下文在邮件正文时，
+  邮件里的数字（`PO#13826` / `2019` / `July 31st`）**不能进 CPMS**（拿附件当 `--source` 必被报无出处）；
+  跑两遍取交集也不成立（邮件 pass 会把附件事实全判无出处）。邮件上下文进
+  `CPMS_来源对照.md` + 汇报，单据号归 `KHDH` 字段。
+- ★ **单附件邮件在 cron/Web 路径上会丢副档 → `KHDH`/`KHDDH` 静默为空**：`scan_pending.py` 认领时
+  只搬文件、不搬 `<附件>.meta.json`，而这两个字段在 `required_empty` 里 → **四道门全绿也看不出来**。
+  判别：`pending/` 里还躺着 `<附件>.meta.json`、任务目录里没有。**不要自己改这两个键**，
+  按「字段/现值/原文/应然值」汇报给引擎侧（修法见总纲 `references/cpms-backfill-cron-notes.md` §8）。
 
 ---
 
@@ -619,7 +679,7 @@ uv run ./scripts/customer_profile.py --prefs ngv
 - [ ] 59 键顺序断言通过、`.validation.json` 里 **0 error / 0 warn**
 - [ ] ★ **报价截止日期**：`Reminder` 字段（和 stdout 醒目块）有内容 → **必须写进给业务的消息**
       （业务要求提醒；现已过期的单要问「还报不报」）
-- [ ] `CPLB` 与真实业务一致（套装 29.04 / 贴纸骑钉书 24.03 / PAD头书 23.06 / **Wire-O → 26.07;普通YO书** / 单线圈 → 26.01;普通蛇圈书）
+- [ ] `CPLB` 与真实业务一致（套装 29.04 / 贴纸骑钉书 24.03 / PAD头书 23.06 / **Wire-O → 26.07;普通YO书** / 单线圈 → 26.01;普通蛇圈书 / **`board book` → 27.01;普通BB书**，`ZDFS=普通BB书` —— 档案当前无此映射，落 `32.00;其他` 要先当缺陷报）
 - [ ] 套装单尺寸是 `0/0/0`，`Drop_SJFX` 空；非套装单：有 `N mm side` 才判长/短，**识别不到就是 `null`（空着算正常，不是缺陷）**
 - [ ] ★ **品名三件套**（2026-10-20 起，替代旧的 `KM/Aldi …` 写法 —— 旧检查项已作废）：
       `CPMC` = **中文产品名**（agent 从 `Title:` 译，无占位符、无业务员/品牌/类别/FSC）；
@@ -632,7 +692,9 @@ uv run ./scripts/customer_profile.py --prefs ngv
       照抄 `Malbücher` 补上；igl 没声明 `rules.ecpmc`，空着是对的，清单不会误报。
 - [ ] `YWY` = `KM`（业务员在 `YWY`，**不在** `CPMC` 前缀里）
 - [ ] `KHDDH` = 香港单号（扫不到就空 = 正常）；`KHDH` 只在邮件里有时才填（**不许拿 our_ref 冒充**）
-- [ ] 数量核对：带 `= 总数` 的写法以总数为准，且 CPSL1 是「款数 × 每款数」的结果
+- [ ] 数量核对：带 `= 总数` 的写法以总数为准，且 CPSL1 是「款数 × 每款数」的结果；
+      ★ 单元里有 `Titel+Mengen` / `Titel 1..10` 这类**款量附表**时，必须与它逐项对齐
+      `TZS` / `YYS` / `CPSL1`（表单 B6 常只写 `see detailed breakdown`，会把三者打成 1/0/0）
 - [ ] `ZDFS` 非空（装订类词如 Wire-O 已在映射表里；空的要先查是不是新写法）
 - [ ] `PXH` 空、`ZBLX` 空、`Remark3` 空、`SFYPJ`/`Remark1` 空（推不出就留空）
 - [ ] `YYS`：单语言空 / 提取不到 0 / 多语言为真实数字

@@ -38,7 +38,7 @@ from erp_schema import (declared_exceptions, normalize_result,  # noqa: E402
                         normalize_value, validate_result)
 from extract_fields import (CustomerData, load_customer_data,  # noqa: E402
                             load_customer_unit)
-from ingest_email import read_attachment_meta  # noqa: E402
+from ingest_email import newest_message, read_attachment_meta  # noqa: E402
 from input_unit import (InputUnit, finalize_batch, find_unit_meta,  # noqa: E402
                         resolve_input_unit, resolve_input_units)
 from internal_fields import internal_field_keys, load_internal_fields  # noqa: E402
@@ -686,6 +686,43 @@ def calculate_thickness(extent_pp: int, pp_faw: float, extent_cover: int, cover_
 # 由 agent 跑完后亲自补写，详见 SKILL.md 5.1.6。
 
 
+def versions_from_email(profile: CustomerProfile, email_meta: Optional[dict],
+                        logger: Optional[Logger] = None) -> tuple:
+    """款数 / 每款语言数只写在**邮件正文**时的兜底。
+
+    实测（LG26090401，2026-10-21）：客户附件是德文的 `Titel+Mengen` 表，里面没有
+    `N titles, N languages` 这种规范表述，而正文第一句就写着
+    `There are 10 titles in 10 languages based on standard language change:`
+    → 只按附件取会把 TZS 落成 1、YYS 落成 0（业务真实录入是 10/10）。
+
+    只看**最新一封**（`newest_message`）：引用的旧邮件里写着上一个项目
+    `6 titles 4 languages`，拿它当本单事实同样是错的。
+
+    返回 (款数|None, 语言数|None)；两个独立判定，各自取不到就是 None。
+    """
+    meta = email_meta or {}
+    title_pattern = profile.rule("versions.title_pattern")
+    language_pattern = profile.rule("versions.language_pattern")
+    if not title_pattern and not language_pattern:
+        return None, None
+
+    text = "\n".join(str(meta.get(k) or "") for k in ("subject", "body"))
+    text = newest_message(text)
+    if not text.strip():
+        return None, None
+
+    def pick(pattern) -> Optional[int]:
+        if not pattern:
+            return None
+        m = re.search(str(pattern), text, re.IGNORECASE)
+        return int(m.group(1)) if m else None
+
+    titles, langs = pick(title_pattern), pick(language_pattern)
+    if (titles is not None or langs is not None) and logger:
+        logger.info(f"  邮件正文兜底: 款数={titles} / 语言数={langs}")
+    return titles, langs
+
+
 # ── 字段映射 ─────────────────────────────────────────────────────────────
 def map_fields(customer_data: CustomerData, template: dict, profile: CustomerProfile,
                logger: Logger, email_meta: Optional[dict] = None) -> dict:
@@ -870,18 +907,23 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     title_pattern = profile.rule("versions.title_pattern")
     language_pattern = profile.rule("versions.language_pattern")
 
+    email_titles, email_langs = versions_from_email(profile, email_meta, logger)
+
     num_titles = None
     if versions_raw and title_pattern:
         m = re.search(str(title_pattern), versions_raw, re.IGNORECASE)
         if m:
             num_titles = int(m.group(1))
+    tzs_source = (f"versions（规范键）={versions_raw!r} 用 rules.versions.title_pattern 提取"
+                  if versions_raw else
+                  f"number_of_titles={customer_data.get('number_of_titles')!r}")
+    if num_titles is None and email_titles is not None:
+        num_titles = email_titles
+        tzs_source = "邮件正文（最新一封）用 rules.versions.title_pattern 提取"
     if num_titles is None:
         raw_titles = customer_data.get("number_of_titles", "1")
         num_titles = int(raw_titles) if str(raw_titles).isdigit() else 1
-    assign("TZS", num_titles,
-           f"versions（规范键）={versions_raw!r} 用 rules.versions.title_pattern 提取"
-           if versions_raw else f"number_of_titles={customer_data.get('number_of_titles')!r}",
-           12)
+    assign("TZS", num_titles, tzs_source, 12)
 
     # YYS 取不到时怎么办由档案 rules.versions.when_missing 决定
     #   （NGV：0 —— 业务确认 2026-09-24「提取不到就为 0」，因为客户的邮件可能后面
@@ -892,6 +934,9 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         m = re.search(str(language_pattern), versions_raw, re.IGNORECASE)
         if m:
             lang_count = int(m.group(1))
+    if lang_count is None and email_langs is not None:
+        lang_count = email_langs
+        versions_raw = versions_raw or f"邮件正文: {email_langs} languages"
 
     if lang_count is None:
         if when_missing is not None:
