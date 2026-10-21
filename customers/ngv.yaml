@@ -328,15 +328,11 @@ rules:
   size:
     unit: mm
     # TPS 是「先宽后高」（148 x 210 portrait）。
-    # ★ 2026-10-20 业务拍板：**CD = 长（较长边）、KD = 宽（较短边）** —— 所以 148x210
-    #   落 CD=210 / KD=148（与 BJXQ260708007 的真单一致）。顺序写什么都行：
-    #   `main.parse_size` 解析完会把「长边在前」兜底交换并留日志。
-    #   ⚠️ 历史 3 份导出（240x300 / 145x210）是「TPS 第一段直接进 CD」，与 ERP 字段
-    #     定义（CD=长）矛盾，属业务录入习惯 → 已按 2026-10-20 口径统一，不再跟随。
+    # ★ 2026-10-21 业务改口径（取代 2026-10-20 的「长边进 CD」）：
+    #   **默认顺序 = 长 x 宽 x 高，按书写顺序依次落 CD / KD / GD，不比较长短边。**
+    #   依据：LG26090401 真实录入 `240 x 330` → CD=240 / KD=330。
+    #   所以 148x210 → CD=148 / KD=210（旧的 `long_first: true` 已删除）。
     order: [CD, KD]
-    # ★ 落库前把「长边」放 CD（业务 2026-10-20 拍板：CD=长 / KD=宽）。
-    #   TPS 先宽后高，交换后 148x210 → CD=210 KD=148，与真单 BJXQ260708007 一致。
-    long_first: true
     # 套装（盒子）录系统尺寸一律写 0/0/0 —— 业务决定（2026-09-24）。
     # 附件的 TPS 是盒内单件的尺寸（CU26061701 是 160x104 的卡片、CU26072301 是
     # 100x155 的明信片），不采用；ERP 记录里三单套装全是 0/0/0。
@@ -422,6 +418,11 @@ rules:
       - { match: "wire[- ]?o|wiro|YO书|双线圈", node: "26.07" }          # 普通YO书（双线圈）
       - { match: "spiral|蛇圈|单线圈|线圈", node: "26.01" }              # 普通蛇圈书
       - { match: "case\\s*bound|hardcover|精装", node: "22.02" }          # 精装书
+      # BB书（纸板书）：封面无灰板 → 27.01 普通BB书。放在精装之后，硬封优先。
+      #   实测（LG26090401，2026-10-21）：附件写 `binding: board book` /
+      #   `board book binding`，旧 map 没有这条 → 落成 32.00;其他（业务真单是「普通BB书」）。
+      #   德语同义：Pappbilderbuch / Pappband。
+      - { match: "board\\s*book|pappbilderbuch|pappband|纸板书", node: "27.01" }
       - { match: "ridged?\\s*box|folded\\s*box|\\blose\\b", node: "29.04" }  # 其它套装
       # PAD 头书：**必须原文出现 PAD 字样**（open pad / pad binding / 露 PAD 头）。
       # 有封面的 PAD 头书（二次上胶装）→ 23.06；其余 PAD → 23.05。

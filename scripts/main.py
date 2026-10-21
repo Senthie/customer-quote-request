@@ -559,11 +559,11 @@ def parse_size(size_str: str, profile: CustomerProfile, logger: Logger) -> dict:
 
     例（igl，order=[CD,KD,GD]，unit=mm）：`198mm x 129mm x 10mm` → CD=198 KD=129 GD=10
 
-    ★ ERP 口径（业务 2026-10-20 拍板）：**CD = 长（较长边）、KD = 宽（较短边）**。
-      客户写法五花八门（NGV 的 TPS 是「先宽后高」、igl 是「H x W x D」），所以解析完
-      统一兜底：CD < KD 就交换。这样「产品规格：【长*宽*厚】」（CPMS 概要行）恒成立。
-      同时把客户原始两段保留在 `_raw` 里 —— 书脊方向要靠「装订边是哪条边」算，
-      交换后光看 CD/KD 已经分不出横竖版。
+    ★ ERP 口径（业务 2026-10-21 定，取代 2026-10-20 的「长边进 CD」）：
+      **默认顺序 = 长 x 宽 x 高，按客户书写顺序依次落 CD / KD / GD，不比较长短边。**
+      依据：LG26090401 真实录入 `240 x 330` → CD=240 / KD=330（旧规则会写成 330/240）。
+      所以 148 x 210 → CD=148 / KD=210；横竖版靠 `_raw` + 装订边位置判断，不靠交换。
+      历史上 `size.long_first: true` 的「长边前置」已删除 —— 它会跟真实录入打架。
     """
     unit = str(profile.rule("size.unit", DEFAULT_UNIT))
     order = profile.rule("size.order", ["CD", "KD", "GD"]) or ["CD", "KD", "GD"]
@@ -578,16 +578,9 @@ def parse_size(size_str: str, profile: CustomerProfile, logger: Logger) -> dict:
             raw.append(_num(value))
     out["_raw"] = raw[:2]
 
-    # CD=长 / KD=宽（业务 2026-10-20 对 NGV 拍板）：客户给的是「先宽后高」还是「先高后宽」
-    # 都不管，落库前统一成长边在前。交换必须留痕 —— 否则有人会以为是客户写错了。
-    # ⚠️ 只对声明了 `size.long_first: true` 的客户生效：igl 的附件列本身是「H x W」，
-    #    已核对的口径是 CD=H（不是长度方向），没拿到 igl 的 ERP 反证前不动它。
-    if (profile.rule("size.long_first", False)
-            and out.get("CD") and out.get("KD") and out["CD"] < out["KD"]):
-        out["CD"], out["KD"] = out["KD"], out["CD"]
-        if logger is not None:
-            logger.info(f"  尺寸交换: 客户写 {raw[0]} x {raw[1]}，"
-                        f"按 ERP 口径（CD=长 / KD=宽）落 CD={out['CD']} KD={out['KD']}")
+    # 业务 2026-10-21：**不交换**。默认顺序就是「长 x 宽 x 高」，客户怎么写就怎么落；
+    # 真实录入 LG26090401（240x330 → CD=240/KD=330）已经否掉了「长边前置」
+    # （旧版这里会交换并打日志，现删除）。`_raw` 保留原始两段给书脊方向用。
     return out
 
 

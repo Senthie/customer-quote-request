@@ -151,16 +151,29 @@ def main() -> int:
     ap.add_argument("--attachment", help="客户附件路径（单份模式）")
     ap.add_argument("--erp", help="对应的 ERP 导出 JSON（单份模式）")
     ap.add_argument("--samples-dir", help="语料库目录（批量模式：按文件名里的单号配对 *.erp.json）")
-    ap.add_argument("--accepted", help='口径白名单 JSON：{"字段": "为什么该不同"}')
+    ap.add_argument("--accepted",
+                    help='口径白名单 JSON：{"字段": "为什么该不同"}'
+                         '（不给就自动用 customers/<客户>.erp_diff.json）')
     ap.add_argument("--map", action="append", default=[],
                     help="批量模式的补充配对：单号=附件文件名片段（可重复）")
     args = ap.parse_args()
 
     keys = _load_template_keys()
     accepted = dict(ALWAYS_ACCEPTED)
-    if args.accepted and Path(args.accepted).exists():
-        with open(args.accepted, encoding="utf-8") as f:
-            accepted.update(json.load(f))
+
+    # 白名单：显式 --accepted 优先；否则自动吃 customers/<客户>.erp_diff.json。
+    # 为什么要有这个默认（2026-10-21 踩过）：那份文件里全是业务拍板过的「预期差异」
+    # （CPLB 写法、CPDL/BZ 填法、PXH/SFYPJ/Remark 留空…）。不带它跑，报告会把
+    # 十几条已定口径全列成「需要核对」，人一看就以为整条线都坏了。
+    accepted_path = Path(args.accepted) if args.accepted else \
+        REPO_ROOT / "customers" / f"{args.customer}.erp_diff.json"
+    if accepted_path.exists():
+        with open(accepted_path, encoding="utf-8") as f:
+            data = json.load(f)
+        accepted.update({k: v for k, v in data.items() if not k.startswith("_")})
+        print(f"口径白名单: {accepted_path}（{len(data) - 2} 条已拍板差异）")
+    elif args.accepted:
+        print(f"!! 白名单文件不存在: {accepted_path}")
 
     workdir_base = Path(tempfile.mkdtemp(prefix="cqr-compare-"))
     pairs: list = []

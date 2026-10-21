@@ -184,8 +184,8 @@ def test_端到端_文件夹只产出一份报价(tmp_path):
     # 无线胶装、没冲形状也没 PAD 线索 → 基础节点（不再一律猜 23.06 PAD头书）
     assert data["CPLB"].startswith("23.01"), data["CPLB"]
     assert data["CPSL1"] == 10000
-    # 业务 2026-10-20：CD=长 / KD=宽 —— TPS 148x210 portrait 落 CD=210 KD=148
-    assert (data["CD"], data["KD"]) == (210, 148)
+    # 业务 2026-10-21：按书写顺序（长x宽x高）—— 148x210 → CD=148 KD=210
+    assert (data["CD"], data["KD"]) == (148, 210)
 
 
 # ── 4. 批次拆分：文件夹里有子目录 = 多份报价（1.0.38）──────────────────────
@@ -320,7 +320,8 @@ def test_端到端_两个子目录出两份报价(tmp_path):
         assert (task_dir / Path(subdir).name).is_dir(), "各自的参考文件要跟着自己走"
         assert validation["unit"]["role"] == "subdir"
         quantities[data["CPSL1"]] = data["CD"]
-    assert quantities == {10000: 210, 20000: 280}, quantities   # CD=长边
+    # 2026-10-21 起按书写顺序落 CD：148x210 → 148；210x280 → 210
+    assert quantities == {10000: 148, 20000: 210}, quantities
 
     # 父目录被搬空后删掉；pending 里不许留残骸
     assert not folder.exists()

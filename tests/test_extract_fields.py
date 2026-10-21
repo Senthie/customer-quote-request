@@ -149,14 +149,14 @@ def test_尺寸_支持乘号与星号():
     assert _fields(IGL, "198 mm × 129 mm") == {"CD": 198, "KD": 129}
 
 
-def test_尺寸_NGV按CD为长边落库():
-    """业务 2026-10-20：CD=长 / KD=宽。NGV 的 TPS 先宽后高 → 148x210 落 CD=210 KD=148。
+def test_尺寸_NGV按书写顺序落库_不比较长短():
+    """业务 2026-10-21：默认顺序「长 x 宽 x 高」→ 148x210 落 CD=148 / KD=210。
 
-    igl 没开 `size.long_first`（它的列本身是 H x W，口径是 CD=H），所以这里用 NGV 档案验。
+    （2026-10-20 那条「长边进 CD」已被真实录入 LG26090401 240x330→240/330 否掉。）
     """
     ngv = load_profile("ngv")
     parsed = parse_size("148 x 210 mm portrait", ngv, LOGGER)
-    assert (parsed["CD"], parsed["KD"]) == (210, 148)
+    assert (parsed["CD"], parsed["KD"]) == (148, 210)
     assert parsed["_raw"] == [148, 210], "原始两段要留着 —— 书脊方向靠它算横竖版"
 
 

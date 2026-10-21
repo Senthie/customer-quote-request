@@ -184,9 +184,11 @@ uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
    同时 `perfect binding **at the top**` 的 `top` 是**装订边位置**，不是 PAD 的「头」——
    术语误读。修法与连带代价见总纲
    `references/reconcile-with-salesperson-erp-record.md`。
-2. **`CD/KD` 业务侧自己录得不一致。** 本次 `148x210 → CD=210,KD=148`（长在前），
-   历史导出 `240x300 → CD=240,KD=300`、`145x210 → CD=145,KD=210`（TPS 第一段进 CD）。
-   schema 标 `CD=长 / KD=宽`。**这是业务侧口径分歧，别自己挑一个改**——两派证据并列请森西拍板。
+2. **`CD/KD` 已拍板（2026-10-21，结案）。** 业务口径：**默认顺序 = 长 x 宽 x 高，按书写
+   顺序依次落 `CD/KD/GD`，不比较长短边**。依据是 `LG26090401` 的真实录入
+   `240 x 330` → `CD=240` / `KD=330`（与 `240x300 → 240/300` 那批一致）。
+   所以 `148 x 210 → CD=148 / KD=210`，CPMS 概要行写【148*210*0】。
+   `size.long_first`（长边前置）已从代码和档案删除，别再改回去。
 3. **`CPMS` 与 ERP 字段是两套口径。** 本次业务记录 `Drop_SJFX` 是空的，CPMS 却写
    `书籍方向：【短书脊】`。所以「`Drop_SJFX` 空 → CPMS 省略方向」是错的：
    竖版 + 装订在顶部 ⇒ 书脊在 148mm 短边，推得出来。

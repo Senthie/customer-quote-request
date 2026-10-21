@@ -199,20 +199,22 @@ def test_扫描_装订方向原文只进CPMS不映射ERP():
     assert "binding_direction" not in scan_values(["perfect binding"], NGV)
 
 
-def test_尺寸_CD是长边_KD是宽边():
-    """业务 2026-10-20 拍板：**CD = 长（较长边）、KD = 宽（较短边）**。
+def test_尺寸_按书写顺序落CD_KD不再比较长短():
+    """业务 2026-10-21 改口径：**默认顺序 = 长 x 宽 x 高，按客户书写顺序落 CD/KD/GD，
+    不比较长短边**（取代 2026-10-20 的「长边进 CD」）。
 
-    TPS 是「先宽后高」（148 x 210 portrait），落库必须变成 CD=210 / KD=148 ——
-    与真单 BJXQ260708007 一致（那份 ERP 里就是 210/148，CPMS 概要行【210*148*0】）。
-    历史 3 份导出把 TPS 第一段直接塞进 CD（145/210、240/300），与 ERP 字段定义矛盾，
-    已按这条口径统一；`size.long_first: true` 就是那个开关（igl 没开，见档案注释）。
+    依据：LG26090401 真实录入 `240 x 330` → CD=240 / KD=330。
+    所以 148 x 210 → CD=148 / KD=210（旧口径会给 210/148）。
     """
     got = _map({"size": "148 x 210 mm portrait", "binding": "perfect binding"})
-    assert (got["CD"], got["KD"]) == (210, 148)
+    assert (got["CD"], got["KD"]) == (148, 210), "客户先写 148 就落 CD=148"
 
-    # 横版：客户先写长边，本来就不用换
     got = _map({"size": "280 x 210 mm landscape", "binding": "perfect binding"})
     assert (got["CD"], got["KD"]) == (280, 210)
+
+    # 真实录入复核：240x330 → 240/330
+    got = _map({"size": "240 x 330 mm portrait", "binding": "board book"})
+    assert (got["CD"], got["KD"]) == (240, 330)
 
 
 def test_书脊方向_由装订边位置推出长短():
@@ -223,13 +225,14 @@ def test_书脊方向_由装订边位置推出长短():
     方向 + 版式就是几何换算，不再需要猜：
       * 上/下边（top/head/bottom）→ 书脊沿**宽**边；
       * 左/右边（side/left/right）→ 书脊沿**长**边。
+    （2026-10-21 起 CD/KD 按书写顺序落，148 x 210 → CD=148 宽边 / KD=210 长边。）
     """
     got = _map({
         "size": "148 x 210 mm portrait",
         "binding": "softcover, perfect binding at the top, square back",
         "binding_direction": "at the top",
     })
-    assert (got["CD"], got["KD"]) == (210, 148)
+    assert (got["CD"], got["KD"]) == (148, 210)
     assert got["Drop_SJFX"] == "短书脊", "装订在顶部 → 书脊在 148 短边"
 
     got = _map({"size": "148 x 210 mm portrait", "binding": "perfect binding at the side",
@@ -239,6 +242,17 @@ def test_书脊方向_由装订边位置推出长短():
     # 连方向都没有：留空（不猜）
     got = _map({"size": "148 x 210 mm portrait", "binding": "perfect binding"})
     assert not got["Drop_SJFX"]
+
+
+def test_board_book落普通BB书():
+    """LG26090401（2026-10-21 真实录入 CPLB=普通BB书）：附件写 `board book binding`。
+
+    旧 map 没有 board book 这条 → 落成兜底 32.00;其他。
+    """
+    got = _map({"size": "240 x 330 mm portrait",
+                "binding": "board book",
+                "binding_instructions": "board book binding"})
+    assert got["CPLB"].endswith("普通BB书"), got["CPLB"]
 
 
 def test_书脊方向_给了装订边仍按装订边判():
@@ -888,7 +902,8 @@ def test_CPLB_冲形状胶装不许判成PAD头书():
       ① perfect binding 只是**装订方式**，不是产品形态（PAD头书）；
       ② `at the top` 的 top 被当成 PAD 的「头」（其实是装订边位置）；
       ③ 整书冲形状（shape die-cutting egg form）根本没参与判定。
-    真单的 ERP 类别就是「冲形状无线胶装书」，CPMS 概要行【210*148*0】+【短书脊】。
+    真单的 ERP 类别就是「冲形状无线胶装书」。（尺寸顺序 2026-10-21 改为按书写顺序落库，
+    故这里是 148*210；类别/书脊结论不受影响。）
     """
     got = _map({
         "size": "148 x 210 mm portrait",
@@ -900,7 +915,7 @@ def test_CPLB_冲形状胶装不许判成PAD头书():
     })
     assert got["CPLB"] == "23.03;冲形状无线胶装书", got["CPLB"]
     assert got["ZDFS"] == "胶装/PAD书"
-    assert (got["CD"], got["KD"]) == (210, 148)
+    assert (got["CD"], got["KD"]) == (148, 210)
     assert got["Drop_SJFX"] == "短书脊"
 
 
