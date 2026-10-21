@@ -62,11 +62,22 @@ def test_upload_multi_as_separate_quotes_stays_flat(client):
     assert (pending / "a.xlsx").exists() and (pending / "b.xlsx").exists()
 
 
-def test_upload_rejects_eml_with_hint(client):
-    c, _ = client
-    res = post_files(c, [("mail.eml", b"raw")])
-    assert res.status_code == 400
-    assert "ingest_email" in res.get_json()["error"]
+def test_upload_accepts_eml_alone(client):
+    """1.0.46：`.eml` 直接传（展开由定时扫描器做，上传口只落盘）。"""
+    c, pending = client
+    res = post_files(c, [("CU26072301 price enquiry.eml", b"Subject: x\r\n\r\nbody")])
+    assert res.status_code == 201
+    assert (pending / "CU26072301 price enquiry.eml").exists()
+
+
+def test_upload_rejects_eml_mixed_with_files(client):
+    c, pending = client
+    res = post_files(c, [("mail.eml", b"raw"), ("报价.xlsx", b"1")], group="one")
+    assert res.status_code == 201           # 部分成功：xlsx 落了，eml 被拒
+    body = res.get_json()
+    assert body["rejected"][0]["name"] == "mail.eml"
+    assert "单独上传" in body["rejected"][0]["reason"]
+    assert not (pending / "mail.eml").exists()
 
 
 def test_upload_rejects_when_nothing_valid(client):

@@ -81,9 +81,13 @@ CQR_Web/
 
 单文件（含单个 `.zip`）一律平铺 —— 放进目录里 `input_unit` 会判「文件夹里只有压缩包」而拒。
 
+`.eml`（1.0.46）：**只许单独传**（混在 `group=one` 批次里会被拒收，原因写在 `rejected[].reason`）。
+本服务只落盘；展开由定时扫描器调 `scripts/ingest_email.py` 做 —— 正文落 `.txt`、附件落盘
+（≥2 个附件 → 一个单元目录），原 `.eml` 归档到 `customer-files/inbox/<YYYYMMDD>/`。
+
 安全：`path` 一律经 `data.resolve_export()` 做 resolve + 前缀校验，出不了扫描根；
 上传文件名经 `upload.safe_filename()` 净化（只取 basename、去危险字符、挡 `..`），
-后缀白名单 `xlsx/xls/csv/pdf/docx/txt/zip`，请求体上限 64 MB。
+后缀白名单 `xlsx/xls/csv/pdf/docx/txt/zip/eml`，请求体上限 64 MB。
 
 > ⚠️ **没有登录认证**（业务明确：局域网内自己人用）。`--lan` 暴露出去就等于
 > 「同网段能打开这个地址的人都能上传文件、看产物」。
@@ -123,6 +127,6 @@ uv run pytest                      # 技能仓库根：跑技能全套（CQR_Web
 - [x] 输入单元语义对齐（`group=one|each` ↔ 单文件=一份 / 多文件=参考文件合计）
 - [ ] 抽取明细可视化：`*.extracted.json` 里的「未识别标签」直接在页面上列出来（校准信号）
 - [ ] 上传失败重试 / 清理：`pending/_claimed/` 与 `failed/_stuck_*` 的管理界面
-- [ ] `.eml` 也走上传：调 `ingest_email.py` 后把 `.eml` 归档（现在上传口明确拒收并给指引）
+- [x] **`.eml` 也走上传**（1.0.46）：上传口照收，扫描器调 `ingest_email.py` 展开后再抽，原邮件归档 `inbox/`
 - [ ] CPMS 在线编辑（现在必须 agent 手写；改成「人写 + `cpms_lint` 即时校验」）
 - [ ] 操作留痕：谁上传的、谁改了 CPMS（多人用时才需要）

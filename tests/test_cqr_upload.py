@@ -47,16 +47,27 @@ def test_safe_filename_truncates_but_keeps_suffix():
 # ── 后缀白名单 ─────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("name", ["a.xlsx", "a.XLS", "a.csv", "a.pdf", "a.docx",
-                                  "a.txt", "a.zip", "a.XLSX"])
+                                  "a.txt", "a.zip", "a.XLSX", "a.eml", "a.EML"])
 def test_check_suffix_allows(name):
     U.check_suffix(name)          # 不抛就算过
 
 
-def test_eml_is_rejected_with_actionable_hint():
-    """`.eml` main.py 直接吃不了（要过 ingest_email）—— 上传口要给出下一步。"""
-    with pytest.raises(U.UploadError) as excinfo:
-        U.check_suffix("mail.eml")
-    assert "ingest_email" in str(excinfo.value)
+def test_eml_uploaded_alone_goes_flat(tmp_path):
+    """`.eml` 照收：展开（ingest_email）归定时扫描器，上传口只负责落盘。"""
+    out = U.save_uploads([("CU26072301 price enquiry.eml", b"Subject: x\n\nbody")],
+                         pending_dir=tmp_path)
+    assert out["batch"] is None
+    assert (tmp_path / "CU26072301 price enquiry.eml").exists()
+
+
+def test_eml_mixed_with_other_files_is_rejected(tmp_path):
+    """`.eml` 自带附件与正文 —— 混在一批里会被拆成多份报价，必须拒收并说清楚。"""
+    out = U.save_uploads([("mail.eml", b"m"), ("报价.xlsx", b"1")],
+                         group="one", pending_dir=tmp_path)
+    assert [s["name"] for s in out["saved"]] == ["报价.xlsx"]
+    reason = out["rejected"][0]["reason"]
+    assert "单独上传" in reason
+    assert not (tmp_path / "mail.eml").exists()
 
 
 @pytest.mark.parametrize("name", ["a.exe", "a.png", "a", "a.json", "a.meta.json"])

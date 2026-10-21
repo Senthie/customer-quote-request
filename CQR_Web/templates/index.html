@@ -336,7 +336,7 @@
 <div id="page"></div>
 <input type="file" id="fileInput" accept=".json,application/json">
 <input type="file" id="uploadInput" multiple
-       accept=".xlsx,.xls,.csv,.pdf,.docx,.txt,.zip">
+       accept=".xlsx,.xls,.csv,.pdf,.docx,.txt,.zip,.eml">
 <input type="file" id="dirInput" webkitdirectory multiple>
 
 <script>
@@ -686,7 +686,7 @@ function renderUpload() {
         },
     },
         el("div", { class: "d1", text: "⬆️ 拖客户报价文件到这里，或点击选择" }),
-        el("div", { class: "d2", text: "xlsx / xls / csv / pdf / docx / txt / zip · 单次 ≤ 64 MB" }),
+        el("div", { class: "d2", text: "xlsx / xls / csv / pdf / docx / txt / zip / eml · 单次 ≤ 64 MB（邮件 .eml 请单独传）" }),
     );
 
     const radio = (value, label, hint) => el("label", { title: hint },

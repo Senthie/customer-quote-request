@@ -48,6 +48,27 @@ STUB_SLOW = textwrap.dedent('''
     time.sleep(30)
 ''')
 
+STUB_INGEST = textwrap.dedent('''
+    """假 ingest_email.py：把 .eml「展开」成 pending 里的正文任务 + 附件。"""
+    import sys
+    from pathlib import Path
+    args = sys.argv[1:]
+    eml = Path(args[args.index("--eml") + 1])
+    pending = Path(args[args.index("--pending-dir") + 1])
+    (pending / (eml.stem + "-body.txt")).write_text("QTY: 1000", encoding="utf-8")
+    # 真 ingest_email 会顺手写副档：这些不是报价，绝不能进队列
+    (pending / (eml.stem + "-body.txt.meta.json")).write_text("{}", encoding="utf-8")
+    (pending / "_email_20260101_000000.json").write_text("{}", encoding="utf-8")
+    print("stub: ingested")
+''')
+
+STUB_INGEST_FAIL = textwrap.dedent('''
+    """假 ingest_email.py：解析不了这封邮件。"""
+    import sys
+    print("!! 没有可投递的内容：邮件正文为空且无附件", file=sys.stderr)
+    sys.exit(1)
+''')
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -241,3 +262,80 @@ def test_lock_is_released_after_run(tmp_path, monkeypatch, capsys):
     # 锁已经松开，再拿一次不会阻塞
     with open(lock_path, "w") as again:
         fcntl.flock(again, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+# ── .eml（1.0.46：上传也能传邮件）──────────────────────────────────────
+
+def ingest_stub(env, template=STUB_INGEST, name="fake_ingest.py"):
+    path = env["root"] / name
+    path.write_text(textwrap.dedent(template), encoding="utf-8")
+    return path
+
+
+def test_eml_is_expanded_then_extracted_in_the_same_round(env, capsys):
+    """传一封 .eml → 展开出正文/附件 → 同一轮就抽掉（不让用户等两个 5 分钟）。"""
+    (env["pending"] / "CU26072301 price enquiry.eml").write_bytes(b"Subject: x\n\nbody")
+    ingest = ingest_stub(env)
+    stub = make_stub(env, STUB_OK)
+
+    run(env, main_py=stub, ingest_py=ingest)
+    out = capsys.readouterr().out
+    assert "✅ CU26072301 price enquiry.eml：📧 邮件已展开 → 1 项" in out
+    assert "✅ CU26072301 price enquiry-body.txt" in out
+    assert "成功 2" in out, "只算 1 封邮件 + 1 个正文任务；副档不算"
+    assert "✅ _email_" not in out, "邮件记录副档不是报价，不能进队列抽"
+    assert ".meta.json" not in out, "附件副档同理"
+    assert not (env["pending"] / "CU26072301 price enquiry.eml").exists()
+    assert list((env["root"] / "inbox").glob("*/CU26072301 price enquiry.eml")), \
+        "展开成功的原邮件要归档，不能扔"
+    assert (env["processed"] / "task_stub" / "CU26072301 price enquiry-body.txt").exists()
+
+
+def test_eml_never_reaches_main_py_directly(env, capsys):
+    """main.py 吃不了 .eml：桩 main 一见到 .eml 就报错，跑通了说明它没被直接喂。"""
+    (env["pending"] / "mail.eml").write_bytes(b"Subject: x")
+    ingest = ingest_stub(env)
+    strict = env["root"] / "strict_main.py"
+    strict.write_text(textwrap.dedent('''
+        import shutil, sys
+        from pathlib import Path
+        src = Path(sys.argv[1])
+        if src.suffix.lower() == ".eml":
+            print("!! 不支持的文件格式: .eml", file=sys.stderr)
+            sys.exit(1)
+        dest = Path({processed!r}) / "task_stub"
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest / src.name))
+    ''').format(processed=str(env["processed"])), encoding="utf-8")
+
+    run(env, main_py=strict, ingest_py=ingest)
+    out = capsys.readouterr().out
+    assert "失败 0" in out
+    assert "不支持的文件格式" not in out
+
+
+def test_eml_ingest_failure_returns_to_pending_and_counts(env, capsys):
+    (env["pending"] / "坏的.eml").write_bytes(b"garbage")
+    ingest = ingest_stub(env, STUB_INGEST_FAIL, name="fail_ingest.py")
+    stub = make_stub(env, STUB_OK)
+
+    run(env, main_py=stub, ingest_py=ingest)
+    out = capsys.readouterr().out
+    assert "失败 1" in out and "没有可投递的内容" in out, "失败原因要原样带出来"
+    assert (env["pending"] / "坏的.eml").exists(), "展开失败的要退回 pending 等下一轮"
+    assert S._read_state(env["state"])["坏的.eml"] == 1
+    assert not (env["root"] / "inbox").exists(), "没展开成功就不该归档"
+
+
+def test_eml_with_no_usable_content_goes_stuck_after_three_tries(env, capsys):
+    (env["pending"] / "空邮件.eml").write_bytes(b"garbage")
+    ingest = ingest_stub(env, STUB_INGEST_FAIL, name="fail_ingest.py")
+    stub = make_stub(env, STUB_OK)
+
+    for _ in range(3):
+        run(env, main_py=stub, ingest_py=ingest)
+
+    buckets = list(env["failed"].glob("_stuck_*"))
+    assert len(buckets) == 1
+    assert (buckets[0] / "空邮件.eml").exists()
+    assert not (env["pending"] / "空邮件.eml").exists()

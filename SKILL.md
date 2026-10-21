@@ -14,7 +14,10 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.44（2026-10-21 **定时任务补上 agent 环节 + 纯文本 enquiry 三处引擎缺陷**：
+> **版本：** 1.0.46（2026-10-21 **上传支持 `.eml`**：邮件导出的 `.eml` 直接传，
+> 扫描器调 `ingest_email.py` 展开成「正文 .txt / 附件 / 单元目录」再抽，原邮件归档
+> `customer-files/inbox/<日期>/`；`.eml` 只许单独传，混批拒收）
+> —— 前序 1.0.44：定时任务补上 agent 环节 + 纯文本 enquiry 三处引擎缺陷：
 > `cpms_todo.py` 当交接棒、cron 改 agent 模式（§4.12）；`QTY: 60.000 St. in total` /
 > `3 titles (…)` / `FSC-Mix` 三处让 CU26070901 落错值的缺陷已修）
 > —— 前序 1.0.43：**CQR_Web 上传 → 定时抽取 → 自动刷出产物**：
@@ -1203,8 +1206,22 @@ Hermes 已经跑着的 cron（gateway 常驻），Web 只做它擅长的两件�
 
 **上传口的安全（不是认证，是健壮性）**：`upload.safe_filename()` 只取 basename、危险字符换 `_`、
 点开头去掉（否则 `input_unit` 当隐藏文件静默跳过）、主名截 80 字；后缀白名单
-`xlsx/xls/csv/pdf/docx/txt/zip`；同名加 `(2)` 不覆盖；请求体上限 64 MB（超了返回中文 413）。
-`.eml` **明确拒收**并给出指引 —— 它得先过 `ingest_email.py`，直接喂 `main.py` 会报「不支持的文件格式」。
+`xlsx/xls/csv/pdf/docx/txt/zip/eml`；同名加 `(2)` 不覆盖；请求体上限 64 MB（超了返回中文 413）。
+
+**`.eml`（1.0.46）**：上传口照收、跟别的文件一样平铺，但**只许单独传** —— 混在
+`group=one` 批次里会拒收（理由：它自带附件与正文，混批会被拆成多份报价）。
+展开不归 Web 干（Web 不许起进程，边界测试钉住），归扫描器：
+
+```
+pending/邮件.eml → _claimed/ → ingest_email.py --eml …（副进程）
+                              ├→ 正文落 .txt（无附件时）/ 附件（≥2 个 → 单元目录 + _email.meta.json）
+                              └→ 原 .eml 归档 customer-files/inbox/<YYYYMMDD>/
+                                    ↓ 同一轮立刻排队
+                              main.py 逐份抽
+```
+
+副档（`*.meta.json` / `_email_<ts>.json`）**不进队列** —— 它们是邮件上下文，不是报价
+（踩过一次：副档被当独立报价喂给 `main.py`）。
 
 ### 4.12 定时任务为什么必须带 agent（1.0.44 修正）
 

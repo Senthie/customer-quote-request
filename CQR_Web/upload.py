@@ -15,6 +15,11 @@
 ⚠️ 单个 .zip **必须平铺**到 `pending/` 根下。放进目录里会被 input_unit 判成
 「文件夹里只有压缩包，没有可直接读的文件」而拒掉（踩过一次）。
 
+⚠️ `.eml` 同样**必须平铺**、且**只能单独传**：`main.py` 吃不了 `.eml`，它要先经过
+`scripts/ingest_email.py` 展开（正文 → `.txt` 任务 / 附件 → 落盘），而展开这一步
+归定时扫描器做（1.0.46，见 `scan_pending.py` 的 `ingest_one`）。所以 `.eml`
+混在「同一份报价」的批次目录里没有意义，上传口直接拒收并说清怎么传。
+
 ⚠️ 文件名不能以 `.` 开头：input_unit 的 JUNK_PREFIXES 含 `"."`，点开头会被当垃圾
 静默跳过 —— 用户会以为「传上去了怎么没反应」。
 """
@@ -31,10 +36,13 @@ DEFAULT_PENDING_DIR = REPO_ROOT / "customer-files" / "pending"
 # 扫描器认领中的目录（要跟 scripts/scan_pending.py 保持一致）
 CLAIM_DIR_NAME = "_claimed"
 
-# main.py 能直接吃的后缀（`input_unit.SUPPORTED_SUFFIXES` + 压缩包）。
-# **不含 .eml**：`.eml` 得先过 ingest_email.py 才会变成 pending 里的附件，
-# 直接喂给 main.py 会报「不支持的文件格式」——所以上传口先拦下来，给明确指引。
-ALLOWED_SUFFIXES = (".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt", ".zip")
+# main.py 能直接吃的后缀（`input_unit.SUPPORTED_SUFFIXES` + 压缩包）+ 邮件。
+# `.eml` 是特例：main.py 吃不了，得先由定时扫描器调 `ingest_email.py` 展开成
+# 「正文 .txt / 附件」再抽（1.0.46）—— 上传口照收，落盘跟别的文件一样平铺。
+ALLOWED_SUFFIXES = (".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt", ".zip", ".eml")
+
+# 邮件后缀（上传口只许单独出现，见 save_uploads）
+EML_SUFFIX = ".eml"
 
 # 单个上传请求的字节上限（Flask MAX_CONTENT_LENGTH 用同一个数）
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -78,11 +86,6 @@ def check_suffix(filename: str) -> None:
     suffix = Path(filename).suffix.lower()
     if suffix in ALLOWED_SUFFIXES:
         return
-    if suffix == ".eml":
-        raise UploadError(
-            "邮件（.eml）请走邮件入口：先把附件存成文件再上传，"
-            "或用 `uv run ./scripts/ingest_email.py --eml <文件>` 投递"
-            "（.eml 直接喂 main.py 会报不支持）")
     raise UploadError(
         f"不支持的文件类型 {suffix or '（无扩展名）'}；"
         f"只收 {' / '.join(ALLOWED_SUFFIXES)}")
@@ -132,12 +135,17 @@ def save_uploads(items: Iterable[tuple[str, bytes]], group: str = "one",
     pending = Path(pending_dir) if pending_dir is not None else DEFAULT_PENDING_DIR
     pending.mkdir(parents=True, exist_ok=True)
 
+    raw_items = list(items)
     checked: list[tuple[str, bytes]] = []
     rejected: list[dict[str, str]] = []
-    for raw_name, payload in items:
+    for raw_name, payload in raw_items:
         try:
             name = safe_filename(raw_name)
             check_suffix(name)
+            if Path(name).suffix.lower() == EML_SUFFIX and len(raw_items) > 1:
+                raise UploadError(
+                    "邮件（.eml）请单独上传：它本身就带着附件与正文，"
+                    "混在一批里会被拆成多份报价")
         except UploadError as exc:
             rejected.append({"name": str(raw_name), "reason": str(exc)})
             continue

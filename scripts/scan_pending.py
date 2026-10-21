@@ -15,6 +15,13 @@ CQR_Web 只管上传，抽取一概由本脚本负责 —— 于是 Web 那边�
 用 `customer-files/.scan.lock` 上的 flock 做非阻塞互斥：上一轮还没跑完
 （比如一个文件夹里 20 份），这一轮直接安静退出，不会两份进程抢同一批文件。
 
+邮件（.eml，1.0.46）
+-------------------
+上传口也收 `.eml`，但 `main.py` 吃不了它，所以本脚本多一道展开：认领后调
+`ingest_email.py --eml …`，把邮件变成 pending 里的正文 `.txt` / 附件 /（≥2 个附件时的）
+单元目录，**同一轮**接着抽掉；原邮件归档到 `customer-files/inbox/<YYYYMMDD>/`。
+展开出来的副档（`*.meta.json` / `_email_<ts>.json`）不进队列 —— 它们不是报价。
+
 认领
 ----
 处理前把条目 `os.replace` 到 `pending/_claimed/<name>`（同盘原子操作）：
@@ -51,10 +58,20 @@ LOCK_PATH = CUSTOMER_FILES / ".scan.lock"
 STATE_PATH = CUSTOMER_FILES / ".scan_state.json"
 
 MAIN_PY = SCRIPTS_DIR / "main.py"
-SUPPORTED_SUFFIXES = (".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt", ".zip")
+INGEST_EMAIL_PY = SCRIPTS_DIR / "ingest_email.py"
+
+# main.py 直接能吃的后缀（表格 / 文本 / 压缩包）
+DIRECT_SUFFIXES = (".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt", ".zip")
+# 邮件：main.py 吃不了，得先调 ingest_email.py 展开成「正文 .txt / 附件」再抽
+EML_SUFFIX = ".eml"
+SUPPORTED_SUFFIXES = DIRECT_SUFFIXES + (EML_SUFFIX,)
+
+# 展开成功的 .eml 归档在这（业务上还要能翻回去看原邮件）
+INBOX_DIR = CUSTOMER_FILES / "inbox"
 
 MAX_ATTEMPTS = 3
 TIMEOUT_SECONDS = 600
+INGEST_TIMEOUT_SECONDS = 120
 
 
 # ── 状态（只记「重试次数」，不记业务数据）─────────────────────────────────
@@ -137,6 +154,20 @@ def _stuck(claimed: Path, failed_dir: Path) -> Path:
 
 
 # ── 跑一份 ────────────────────────────────────────────────────────────
+def _run_capture(cmd: list[str], timeout: int, fail_prefix: str) -> tuple[int, str]:
+    """跑子进程，返回 (退出码, 失败原因)。产物一律不接管道 —— 只留最后一行当原因。"""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              cwd=str(REPO_ROOT))
+    except subprocess.TimeoutExpired:
+        return -1, f"{fail_prefix}超时（>{timeout}s）"
+    except OSError as exc:
+        return -1, f"{fail_prefix}起不来: {exc}"
+    tail = [line.strip() for line in (proc.stderr or proc.stdout or "").splitlines()
+            if line.strip() and not line.startswith("warning:")]
+    return proc.returncode, tail[-1] if tail else f"退出码 {proc.returncode}"
+
+
 def run_one(claimed: Path, main_py: Path, timeout: int = TIMEOUT_SECONDS,
             extra_args: Optional[list[str]] = None) -> tuple[bool, str]:
     """跑 main.py 抽一份。返回 (是否成功, 人话结果)。
@@ -147,36 +178,75 @@ def run_one(claimed: Path, main_py: Path, timeout: int = TIMEOUT_SECONDS,
     cmd = [sys.executable, str(main_py), str(claimed), "-c", "auto"]
     if extra_args:
         cmd.extend(extra_args)
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                              cwd=str(REPO_ROOT))
-    except subprocess.TimeoutExpired:
-        return False, f"超时（>{timeout}s）"
-    except OSError as exc:
-        return False, f"起不来: {exc}"
+    code, reason = _run_capture(cmd, timeout, "")
+    if code == -1:
+        return False, reason
 
     moved = not claimed.exists()
-    if proc.returncode == 0 and moved:
+    if code == 0 and moved:
         return True, ""
-
-    # 失败：把 main.py 最后几行有用的内容捞出来当原因
-    tail = [line.strip() for line in (proc.stderr or proc.stdout or "").splitlines()
-            if line.strip() and not line.startswith("warning:")]
-    reason = tail[-1] if tail else f"退出码 {proc.returncode}"
-    if proc.returncode == 0 and not moved:
+    if code == 0 and not moved:
         reason = "退出码 0 但输入没被搬走（main.py 逻辑异常）"
     return False, reason
+
+
+def _archive_eml(eml: Path, inbox: Path) -> Path:
+    """展开成功的 .eml → `customer-files/inbox/<YYYYMMDD>/`（同名加后缀，不覆盖）。"""
+    bucket = inbox / f"{datetime.now():%Y%m%d}"
+    bucket.mkdir(parents=True, exist_ok=True)
+    target = bucket / eml.name
+    if target.exists():
+        target = bucket / f"{eml.stem}_{datetime.now():%H%M%S%f}{eml.suffix}"
+    try:
+        os.replace(eml, target)
+    except OSError:
+        pass                      # 归档失败不该让已经展开的任务白做
+    return target
+
+
+def ingest_one(claimed: Path, pending: Path, inbox: Optional[Path] = None,
+               ingest_py: Optional[Path] = None,
+               timeout: int = INGEST_TIMEOUT_SECONDS) -> tuple[bool, str, list[Path]]:
+    """把 `.eml` 展开成 pending 里的任务（正文 .txt / 附件 / 单元目录）。
+
+    业务（1.0.46 森西）：「上传也得能传 .eml」——邮件导出的 .eml 里正文和附件都在，
+    让人先手工拆附件是把活儿推回给人。所以扫描器多这一步：
+    认领 → `ingest_email.py --eml …` → 新出现的 pending 条目走正常 main.py 抽取。
+
+    返回 (是否成功, 失败原因, 本次新投递的条目)。新条目**按扫描器自己的规矩过滤**——
+    邮件展开时会顺手写 `items.csv.meta.json` / `_email_<ts>.json` 这类副档，
+    那些不是报价，绝不能进队列（踩过：副档被当独立报价喂给 main.py）。
+    """
+    inbox_dir = Path(inbox) if inbox is not None else INBOX_DIR
+    script = Path(ingest_py) if ingest_py is not None else INGEST_EMAIL_PY
+
+    before = {p.name for p in pending.iterdir()} if pending.exists() else set()
+    code, reason = _run_capture(
+        [sys.executable, str(script), "--eml", str(claimed),
+         "--pending-dir", str(pending), "--customer", "auto"],
+        timeout, "邮件展开")
+    if code == -1:
+        return False, reason, []
+    if code != 0:
+        return False, reason, []
+
+    delivered = [p for p in pending_items(pending) if p.name not in before]
+    _archive_eml(claimed, inbox_dir)
+    return True, "", delivered
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────
 def scan(limit: Optional[int] = None, dry_run: bool = False, verbose: bool = False,
          main_py: Optional[Path] = None, pending_dir: Optional[Path] = None,
          claim_dir: Optional[Path] = None, failed_dir: Optional[Path] = None,
-         state_path: Optional[Path] = None, timeout: int = TIMEOUT_SECONDS) -> int:
+         state_path: Optional[Path] = None, timeout: int = TIMEOUT_SECONDS,
+         inbox_dir: Optional[Path] = None, ingest_py: Optional[Path] = None) -> int:
     pending = Path(pending_dir) if pending_dir else PENDING_DIR
     claim = Path(claim_dir) if claim_dir else (pending / "_claimed")
     failed = Path(failed_dir) if failed_dir else FAILED_DIR
     main_path = Path(main_py) if main_py else MAIN_PY
+    inbox = Path(inbox_dir) if inbox_dir else (failed.parent / "inbox")
+    ingest_script = Path(ingest_py) if ingest_py else None
 
     items = pending_items(pending)
     if limit:
@@ -200,7 +270,14 @@ def scan(limit: Optional[int] = None, dry_run: bool = False, verbose: bool = Fal
     retry_state = _read_state(state_file)
     results: list[dict[str, Any]] = []
 
-    for item in items:
+    # 队列而不是 for：`.eml` 展开后会在 pending 里**长出新的条目**，
+    # 那一轮就得顺手抽掉（否则用户传一封邮件要等两个 5 分钟周期）。
+    queue: list[Path] = list(items)
+    seen: set[str] = {p.name for p in items}
+    idx = 0
+    while idx < len(queue):
+        item = queue[idx]
+        idx += 1
         name = item.name
         attempts = int(retry_state.get(name, 0))
         if attempts >= MAX_ATTEMPTS:
@@ -211,10 +288,23 @@ def scan(limit: Optional[int] = None, dry_run: bool = False, verbose: bool = Fal
             continue
 
         claimed = _claim(item, claim)
-        ok, reason = run_one(claimed, main_path, timeout)
+        note = ""
+        if item.suffix.lower() == EML_SUFFIX:
+            ok, reason, delivered = ingest_one(claimed, pending, inbox, ingest_script)
+            if ok:
+                note = (f"📧 邮件已展开 → {len(delivered)} 项" if delivered
+                        else "📧 邮件已展开（没有可抽的内容）")
+                for new_item in delivered:
+                    if new_item.name in seen:
+                        continue
+                    seen.add(new_item.name)
+                    queue.append(new_item)
+        else:
+            ok, reason = run_one(claimed, main_path, timeout)
+
         if ok:
             retry_state.pop(name, None)
-            results.append({"name": name, "ok": True, "reason": ""})
+            results.append({"name": name, "ok": True, "reason": "", "note": note})
             continue
 
         retry_state[name] = attempts + 1
@@ -241,7 +331,8 @@ def print_summary(results: list[dict[str, Any]]) -> None:
     bad = [r for r in results if not r["ok"]]
     lines = [f"📥 自动抽取完成：{len(results)} 份，成功 {len(ok)}，失败 {len(bad)}"]
     for r in ok:
-        lines.append(f"  ✅ {r['name']}")
+        note = r.get("note") or ""
+        lines.append(f"  ✅ {r['name']}" + (f"：{note}" if note else ""))
     for r in bad:
         lines.append(f"  ❌ {r['name']}：{r['reason']}")
     if ok:
