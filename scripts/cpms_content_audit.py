@@ -66,15 +66,32 @@ def codes(text: str) -> list[str]:
     return [c.strip() for c in CODE_RE.findall(text) if re.search(r"\d", c)]
 
 
+# 灰板 thickness↔克重换算（业务 2026-10-19 拍的规范：灰板一律写 g）。
+# 客户文件常写 `boards 2 mm`，CPMS 必须写 `1200g灰板` —— 这不是编数字，
+# 是规范要求的换算，所以审计要认（CU26072401 实测：1200g 被判「无出处」）。
+GREYBOARD_G_TO_MM = {"600": "1", "900": "1.5", "1200": "2", "1500": "2.5", "1800": "3"}
+
+
+def _greyboard_equivalent(num: str, unit: str, src_norm: str) -> bool:
+    """`1200g` 能不能对上原文里的 `2 mm`（灰板换算表）。"""
+    if unit != "g":
+        return False
+    mm = GREYBOARD_G_TO_MM.get(num)
+    if not mm:
+        return False
+    return bool(re.search(rf"(?<![\d.]){re.escape(mm)}mm", src_norm, re.IGNORECASE))
+
+
 def traceable(num: str, unit: str, src_norm: str) -> bool:
     """数字能否在客户原文里找到。
 
     计数词（颗/张/款/行…）是译文，按**数字**溯源即可；
     物理单位（g/mm/pp/kpa/丝）要求同数字 + 兼容单位（`gsm≡g`），
     但允许「数字」和「单位」落在**不同单元格**（如 `vol. 1.25` + `mm bookblock thickness`）。
+    灰板 mm→g 的换算按 `GREYBOARD_G_TO_MM` 认账。
     """
     if num not in src_norm:
-        return False
+        return _greyboard_equivalent(num, unit, src_norm)
     if unit not in PHYSICAL_UNITS:
         return True
     for m in TOKEN_RE.finditer(src_norm):

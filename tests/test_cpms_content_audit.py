@@ -98,3 +98,17 @@ def test_多个source可并列传(tmp_path):
     b = tmp_path / "b.txt"; b.write_text("310 gsm", encoding="utf-8")
     files = A.expand_sources([str(a), str(b)])
     assert [f.name for f in files] == ["a.txt", "b.txt"]
+
+
+def test_灰板mm换克重不算编数字():
+    """CU26072401（2026-10-21）：附件写 `boards 2 mm`，规范要求灰板一律写 g → `1200g灰板`。
+
+    审计曾把这个换算判成「无出处」，逼人把合规写法改回 mm（又踩 CPMS054）。
+    """
+    r = A.audit("皮壳：128g光粉(FSC)+1200g灰板(FSC)", "cover: 128 gsm glossy art paper\nboards 2 mm")
+    assert r["summary"]["untraced"] == 0, r["untraced"]
+
+
+def test_灰板换算是双向核对的_没写厚度仍然报():
+    r = A.audit("皮壳：128g光粉(FSC)+1500g灰板(FSC)", "cover: 128 gsm glossy art paper\nboards 2 mm")
+    assert any(t["token"].startswith("1500") for t in r["untraced"]), r["untraced"]

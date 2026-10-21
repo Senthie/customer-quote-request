@@ -1283,7 +1283,13 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
             # 老 sidecar 兼容：ingest_email 早期只写 khdh 一个键
             from_email = str(email_meta.get("khdh") or "").strip()
         if from_email:
-            value, source = from_email, f"邮件（{email_meta.get('khdh_source') or '标题/正文'}）"
+            # 来源说明按 target 取：`number_sources` 是 1.0.46 起的多单号结构，
+            # 老 sidecar 只有 `khdh_source`（兼容保留）。此前一律取 khdh_source，
+            # 于是 KHDDH 会显示「规则 khdh」—— 号码对、出处说错（CU26072401 实测）。
+            per_target = (email_meta.get("number_sources") or {}).get(target)
+            legacy = email_meta.get(f"{target.lower()}_source")
+            value = from_email
+            source = f"邮件（{per_target or legacy or '标题/正文'}）"
         if not value:
             for key in rule_cfg.get("attachment_keys") or []:
                 found = customer_data.get(key)

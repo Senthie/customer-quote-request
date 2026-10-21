@@ -148,6 +148,31 @@ def test_本单陈述句里的PO号照样取():
     assert numbers.get("KHDH") == "A123456"
 
 
+def test_类似之前订单的历史PO不算本单单号():
+    """CU26072401 实测（2026-10-21）：正文写 `此单产品类似之前订单 KHDD19080122 PO#13826`。
+
+    13826 是**上一单的 PO**，本单没有客户单号（真实 ERP 的 KHDH 也是空）——
+    但旧逻辑只认英文 `same as / per PO`，中文「类似之前订单」拦不住，于是把 13826 落成了 KHDH。
+    """
+    ngv = load_profile("ngv")
+    body = ("RE: 240x240 Das allerschönste Osterei der Welt (SST)\n\n"
+            "此单产品类似之前订单 KHDD19080122 PO#13826\n\n"
+            "Please quote.\n")
+    numbers, sources = extract_numbers(ngv, "RE: 240x240 Osterei (SST)", body, LOGGER)
+    assert "KHDH" not in numbers, f"历史 PO 不该落 KHDH：{numbers}"
+    assert "KHDH" not in sources
+
+
+def test_香港单号与客户单号各自带正确出处():
+    """CU26072401 实测：KHDDH 取到了，但来源写着「规则 khdh」（拼错 target 的出处）。"""
+    ngv = load_profile("ngv")
+    numbers, sources = extract_numbers(
+        ngv, "RE: 240x240 Osterei (SST)", "Please quote.\n", LOGGER,
+        extra_texts=["CU26072401 + CU26072401-01 - RE_ 240x240 Osterei (SST.eml"])
+    assert numbers.get("KHDDH") == "CU26072401", numbers
+    assert "khddh" in sources["KHDDH"], sources
+
+
 def test_解析_eml_标题正文附件(tmp_path):
     eml = _build_eml(tmp_path / "m.eml", "PO 23992 / 23993", "Please quote.\n",
                      attachment_name="SAMPLE.xlsx")

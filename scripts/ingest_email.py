@@ -166,12 +166,25 @@ _QUOTE_MARKERS = (
 #   15900 是上一个项目的 PO）。取成本单 KHDH 就是错的。
 _REFERENCE_BEFORE = re.compile(
     r"(?i)(?:same\s+as|as\s+(?:in|per)|refer(?:ence|ring)?\s+to|参考|參照|参见|参照|"
-    r"wie\s+(?:in|bei)|siehe|laut|per\s+PO|according\s+to)\s*[:#]?\s*$")
+    r"wie\s+(?:in|bei)|siehe|laut|per\s+PO|according\s+to)\s*[:#]?$")
+
+# 中文/英文里「这是另一个（旧）订单」的说法 —— 号照样不是本单的。
+#   实测原话（CU26072401，2026-10-21）：`此单产品类似之前订单 KHDD19080122 PO#13826`
+#   → 13826 是**历史 PO**，本单没有客户单号（真实 ERP 的 KHDH 也是空）。
+#   窗口 60 字内出现这些词就不认这个号；只写「订单号：PO#…」这种正常表述不会被误伤
+#   （单独一个「订单」不在词表里）。
+_REFERENCE_WORDS = re.compile(
+    r"(?i)之前订单|之前那单|以前订单|上次订单|上单|老单|旧单|返单|返单原单|类似|相同|"
+    r"previous\s+order|earlier\s+order|last\s+order|former\s+order|re-?order|"
+    r"vorherige[nr]?\s+(?:bestellung|auftrag)|wie\s+(?:bei|in)\s+(?:der|dem)\s+")
 
 
 def _is_reference(text: str, start: int) -> bool:
-    """这个匹配前面是不是「参考/同上 …」的语气（是 → 引用旧单，别当本单事实）。"""
-    return bool(_REFERENCE_BEFORE.search(text[max(0, start - 40):start]))
+    """这个匹配前面是不是「参考/同上/类似之前订单 …」的语气（是 → 引用旧单，别当本单事实）。"""
+    before = text[max(0, start - 60):start]
+    if _REFERENCE_BEFORE.search(before):
+        return True
+    return bool(_REFERENCE_WORDS.search(before))
 
 
 def newest_message(body: str) -> str:
