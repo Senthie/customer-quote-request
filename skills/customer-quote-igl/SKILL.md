@@ -29,8 +29,16 @@ metadata:
 > 改口径 = **六处同步**（不是「四处」）：档案 `customers/igl.yaml` → `scripts/main.py` →
 > `tests/test_pipeline.py` 基线（`EXPECTED_VALUES` / `UNTOUCHED`）→ `tests/test_igl_profile.py`
 > + `tests/test_cpms_todo.py` → `assets/erp_form_schema.yaml` 的 `notes` → 本文件 + 总纲 `SKILL.md`。
-> ★ **完整 SOP 见 `references/field-spec-change-sop.md`**（口径变更的六处同步清单、找残留旧值的
-> grep、关掉一个能力要「留代码 + 双向测试」、已交付产物改动最小化的外科手术步骤、交付闸门要逐字段查）。
+> ★ **完整 SOP 见 `customer-quote-request/references/changing-a-field-convention.md`**（口径变更要动的
+> 所有位置清单、找残留旧值的 grep、关能力时的双向测试、外科手术式改已交付件、闸门逐字段查。
+> 类级内容 —— NGV 等其它客户同样适用，别在客户子技能里另抄一份。
+>
+> ★ 业务说「**按新规格重新开一单**」时走 `customer-quote-request/references/reissuing-an-order.md`：
+> `ingest_email.py --eml <原邮件>` 重投 → `main.py` 出**新 task 目录**（旧目录保留）→ agent 手写
+> `CPMS`/`CPMC`/`CPMC_ZH`/`ECPMC` → 写 `CPMS_来源对照.md` → 四道门 → 汇报点明「新单号取代旧单号」
+> 并**问**是否把旧目录移 `processed/_superseded_<日期>/`（别自己删）。
+> 审计源要同时给 `--source <xlsx> <邮件正文.txt>` 才能覆盖只在邮件里的事实
+> （`.eml` 不能直接当源，先用 `email` 模块转 txt —— 片段见该 reference）。
 
 - 客户：IGL（香港书商；许可证 `LICENSE` 同仓库）
 - 状态：`calibrated`（用真实报价表 `PUZZLE COLOUR DISNEY.xlsx` 校准）
@@ -255,11 +263,9 @@ IGL 专属七条：
    值是客户原文品名（照抄、不译、不拼类别）。脚本能抽到就自动填；
    抽不到（纯文本邮件没系列名）要 agent 从客户原文抄，抄不出来就**留空并在汇报里说明**，
    不许自己编英文名。`cpms_todo.py` 会把空 ECPMC 列为欠账。
-   `rules.ecpmc.source_keys: [series_name]`，所以 `cpms_todo.py` 会把它列为必填 ——
-   不补就永远 `CPMS_TODO: 1`。取值 = 客户 `Series Name` 去掉表单前缀与包裹引号
-   （`Working Title: 'BIBLE HEROES Treasury'` → `BIBLE HEROES Treasury`）。
-   ⚠️ §5 里「IGL 明确不改 / `ECPMC` 保持空」是 2026-10-20 的旧口径，已被本轮取代；
-   判据以档案与 `cpms_todo.py` 为准（档案声明了就必填）。
+   不补就永远 `CPMS_TODO: 1`（**首轮清单 ≠ 全部工作量**）。取值 = 客户 `Series Name` 去掉表单前缀与
+   包裹引号（`Working Title: 'BIBLE HEROES Treasury'` → `BIBLE HEROES Treasury`）。
+   （§5 已同步更新，不再有「IGL 明确不改」的旧说法；判据以**当前档案** + `cpms_todo.py` 为准。）
 3. **`YWY` 实测为空**（`igl.yaml` 的 `erp_fixed` 里没有 `YWY`，只有 `ngv.yaml` 配了 `KM`），
    而总纲 §4.1/4.3 写「脚本固定 `KM`」—— 属**文档与实现漂移**。
    补 CPMS 时**只改 4 个字段**（`CPMS`/`CPMC`/`CPMC_ZH`/`ECPMC`），不要顺手补 `YWY`；

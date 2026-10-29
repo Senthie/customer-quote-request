@@ -403,9 +403,15 @@ IAN 574239 = 365,340（6 款，25 语言）。
    `PR-…` 询价号、标题原文（如 `Stiftung Lesen`）。
 2. 在语料库 `/home/claw/train/custom_cpms_requie` 里 `grep -rl` 这些锚点，
    命中就 dump 那条 ERP 的 `CPMC / CPLB / TZS / CD / KD / KHDDH / CPMS` 前 200 字。
-3. 判据：**尺寸 + 装订 + 款数 + 品名**四项对得上 → 已报价，**这单不产出新 ERP JSON**，
-   改为交一份去重核对（已有单号 / 报价日期 / 与本次询价的差异 / 需要业务确认的数据缺口）。
-4. 只有确实没报过的部分才落单。
+3. 判据：**尺寸 + 装订 + 款数 + 品名**四项对得上 → 已报价。★ **2026-10-29 业务追加口径：
+   重复单也照样跑管道、照样出 ERP JSON，并且必须把 `CPMS` 写完整** ——
+   原话「如果以后出现重新的报价单，你也需要把 CPMS 补充好」，理由是 **CPMS 是检验/学习的必要数据**，
+   不因为「已经报过价」就省略。别再把「重复」当成「不产出」的许可。
+   与首次报价的区别只在**交付口径**：汇报里点明「重复询价，参照 `<已有单号>`」+ 本次差异，
+   由业务决定要不要再发一版，产物本身四道门照走（lint / audit / schema / pytest）。
+   参考实现：`3fdfd3e1520541b09968cdfee9aa4084`（Rossmann PO 15910 再版）、
+   `cfa1d50f976d418fbcd8e5748a14f2ec`（PR-00078025 重开）—— 两份都写了 CPMS + 来源对照。
+4. 只有确实没报过的部分才落**新单号**（同一封邮件含多个 spec type 时按 spec 拆）。
 
 **实例（2026-10-29，`AW: urgent enquiry for Lidl: BD Stiftung Lesen Wissen + Vorlesen`）**：
 表里 4 个 spec type 全部已报 —— A（210×280 72PP 锁线精装 4 款）→ `CU26100603`、
@@ -416,6 +422,60 @@ C（190×245 锁线精装）→ `LY26072801`、D（200×200 冲形状BB）→ `L
 ⚠️ **cron 不会替你做这一步**：5 分钟扫描见到 pending 里的 xlsx 就跑，这次产出了
 `CPLB=32.00;其他 / CPSL1=0 / CD=KD=0 / CPMS 空` 的垃圾单（已移 `_superseded_*`）。
 所以「先查重」是**人/agent 侧**的责任；看到 `32.00;其他` + 全 0 的产物先怀疑「格式没命中」，别当交付件。
+
+**判别指纹（2026-10-29 补，定时任务那一轮实测）**：`<原名>.extracted.json` 的
+`profile_id` = `generic` + `CPLB = CPMC = 32.00;其他` + `CPSL1~10` 全 `0` + `CD/KD/GD = 0`
++ `values` 只有一两个键 —— 这就是「整张表的形态没被支持」，不是「标签认不出」
+（`unmatched_labels` 反而是空的）。**这种记录上一律不写 CPMS**：四道门全绿是因为
+`0` 与 `32.00;其他` 都合法，没人会问「这个值是不是兜底的」。
+完整的三项预检（抽取命中的判别表 / 语料库查重锚点 / 产物被并发会话 `mv` 到
+`_superseded_*` 后怎么处置 / 不交付时怎么汇报）见总纲
+`customer-quote-request/references/cron-agent-prechecks.md`。
+
+★ **第二种指纹：`profile_id=ngv` 但「值跨格没拼」（2026-10-29 `PR-00078025`）** ——
+`layout: section_pairs×N` 的 N 很小、`values` 只有 4~6 个键、`unmatched_labels` **空的**、
+`CD/KD/GD=0` 而原文明明写了尺寸（表单把 `160 | x | 200 | mm | portrait` 摊在 C6:G6）。
+这不是「标签认不出」而是 `value_mode: first` 只吃到第一格 → 尺寸/页数/纸张/印色全丢，
+四道门照样全绿。同单还叠了三档数量（`5.000 / 7.500 / 10.000` → `CPSL=0`）、
+`flexcover`/`thread-stitching` 未映射（→ `32.00;其他`，应然 `22.03;假精装书`）、
+`offer_deadline` 没进 values（→ `Reminder` 空、过期 21 个月的提醒整条丢失）。
+判别表、修法、以及「同一询价主单 + `-01` 改版两条都要读」的去重实证：
+`references/ngv-multicell-values-and-dedupe.md`。
+
+> ★ **上面这些缺口 2026-10-29 已在引擎里修掉**（`customers/ngv.yaml` +
+> `scripts/extract_fields.py` + `scripts/main.py`，回归 `tests/test_ngv_form_versions.py`）：
+> ① `layout.sections_adaptive: true` —— 分区内按**标签**找行，2025/2026 两版表单都能对上
+> （`offer deadline` 两版位置不同 → 两处都声明；`TPS` 在 versions 或 content → 两处都声明）；
+> ② `value_continue: true`（`Bindung` 行）—— 装订工艺跨行时拼起来
+> （`Flexcover` + `thread-stitching`）；③ `parse_tier_list()` —— 一排档位落 `CPSL1..n`；
+> ④ `cplb.map` 加 `flex\s*o?\s*cover`（`Flexcover`/`Flexocover` 两种拼写）→ `22.03;假精装书`，
+> `binding.map` 加 `flexocover`/`flexcover` → `精装书`；
+> ⑤ 数量「每款」写法：`12,500 cps each` → `CPSL1 = 每款 × TZS`，
+> 客户自报总数与之不符（Rossmann 写 `25,600` vs 2×12,500=`25,000`）→ **按每款算 + WARN**，
+> CPMS 备注写明待客户确认（语料实证：`TZS=2` 的单 `CPSL1` 就是 2×每款，即**印刷总量**）。
+> 再遇到「值跨格 / 多档 / 装订跨行」先看这几处是不是被改回去了。
+
+**去重补充两条（同日实测）**：① 锚点优先用 `PR-…` 询价号，命中主单时**顺手读 `-01`/`-02` 改版目录**
+（改版存在本身就是「当年确实报过」的证据）；② 规格微差（本次内文 `130gsm woodfree white`
+vs 录入 `128gsm哑粉`，差 2g）**不足以破去重**，四项主干（尺寸/装订/数量档/品名）对得上就是同单，
+差异只在报告里点名请业务确认。同一份文件被投递两遍（`.eml` 附件 + 直接上传带 `__1`，md5 相同）
+时两份都归档、报告写明「同源重复」。
+
+**复投判定三条补充（2026-10-29 `Rossmann / Sudoku & Rätselbücher` 实测）**：
+
+1. **先比日期，再比规格**：`.eml` 的 `Date` 头 vs 语料的 `BDBH`（`BJXQ` + **YYMMDD** + 序号）
+   vs `KHDDH`（`CU` + YYMMDD + 序号）。本次邮件 2026-09-30、`BDBH=BJXQ261006005`（10-06 出单）
+   → 同一封邮件六天后已报过。日期比规格更快，一眼可判，还能证明「不是新一轮」。
+2. **裸数字 grep 必须二次过滤**：`grep -rl 15910` 命中的常是无关单（数字也出现在价格/日期里），
+   要用尺寸把候选收窄（`CD==140 and KD==200`）。**最硬的证据是 CPMS 里那句
+   「半返之前订单 KHDD… PO#…」** —— 同一次返单的报价几乎都会写它。
+3. **重复件的处置要连孤儿副档一起清**：不写 CPMS、产物移 `_superseded_<日期>/`，
+   并把留在 `pending/` 的 `<单元名>.txt.meta.json` 一并归进去（扫描器只搬文件不搬副档）；
+   收尾 `cpms_todo.py` 应为 `CPMS_TODO: 0`。**重复 ≠ 无事发生**：复投邮件里可能有上一份记录缺的信息
+   （本次 `CU26100601` 的 `CPSL1~10` 全 null，而邮件给了每款数量与 `ETD CW 13/2027`）
+   → 报告单列 delta，并写明「可直接补进已有单，不必新开」。
+
+> 可照抄的执行配方（日期指纹 / 查重命令 / 报告五节 / 本次案例）：`references/dedupe-repeat-run-recheck.md`。
 
 **第五种形态（尚未支持）**：Lidl `Übersicht … _Preisanfrage.xlsx` —— 表头在 A1 的**平铺多列表**
 （`spec type / Nr. / reference IAN/PO / article number / title / assortment in display / QTY to be printed /
@@ -845,8 +905,33 @@ uv run ./scripts/customer_profile.py --prefs ngv
   `parse_single_quantity` 解析不出 → `CPSL1/2/3 = 0/0/0`，而**四道门照样全绿**（0 也「有值」）。
   判别：`CPSL1=0` 且 B5/邮件里出现多个数量。动作：按「字段 / 现值 / 客户原文 / 应然值」汇报
   （应然 `CPSL1=3000 CPSL2=5000 CPSL3=10000`），**不许自己改 CPSL**；
-  同时把三档数量**如实写进 CPMS 备注**（`报价三档：3.000/5.000/10.000 cps`）——
-  概要行不含数量，若不写进备注，业务在产物里就完全看不到真实报价档位。
+  同时把三档数量**如实写进 CPMS 备注**（`报价三档：3.000/5.000/10.000 cps`）—— 概要行不含数量，
+  若不写进备注，业务在产物里就完全看不到真实报价档位。
+- ★ **纯文本邮件的裸行 `2 titles` 也会落 `TZS=1`**（2026-10-29 `Rossmann / Sudoku & Rätselbücher`）：
+  1.0.44 加的款数兜底锚的是 `^(N) titles (` **带括号**形态，客户只写裸行 `2 titles`
+  （后面直接换行接数量）就命中不了 → `TZS=1`，而 `1` 是合法值，四道门全绿。
+  判别：正文逐行看有没有 `N titles` / `N Titel` 的独立行，与 `TZS` 对不上就是它。
+  动作同下：按「字段 / 现值 / 客户原文 / 应然值」汇报，**不许自己改 `TZS`**。
+- ★ **`X cps each (= Y cps in total)` 这种「每款 + 合计」写法 → `CPSL1=0`**（同日同单）：
+  `parse_single_quantity` 只认 `=` 后总数 / `N x M` / 全串单数字三种形态，`each` 这种不算。
+  ★★ 而且**客户自己可能算错账**：本次 `12,500 × 2 = 25,000`，客户写 `= 25,600`（÷2 = 12,800）。
+  两个数都点名请客户确认，**不许挑一个写进 `CPSL1`，也不许挑一个写进 CPMS 当事实**
+  （严格模式：客户没给出一致的数，就不能替他决定）。
+  `flexocover + thread-stitching + square back + case-in book block` 同单仍落
+  `CPLB=32.00;其他` / `ZDFS=""` —— 应然 `22.03;假精装书` / `精装书`（依据是同产品真实录入
+  `CU26100601`），`cplb.map` / `binding.map` 缺这两个关键词，属实**已知引擎缺口**，报不改。
+- ★ **NGV 的表可能「一个值横跨 5 格」→ 尺寸/页数/纸张/印色整片丢失（2026-10-29 `PR-00078025`）**：
+  `B6 TPS` 后面是 `160 | x | 200 | mm | portrait`（C6:G6），`B8 paper` 后面是 `130 | gsm | woodfree…`。
+  `section_pairs` 的 `value_mode: first` 只取第一格 → `values` 只剩 4~6 个键、`CD/KD/GD=0`，
+  **而 `unmatched_labels` 是空的、四道门全绿**。判别：`profile_id=ngv` + values 键数少 +
+  `unmatched_labels` 空 + 原文尺寸明明有。同一份表里这类行还有 `extent` / `printing` / `paper` ×3 处。
+  修法是这些 entries 改 `value_mode: run`（向右拼到分区结束），**不是**放宽标签匹配。
+  另：`offer_deadline` 也可能整条不进 values（本次 C2 `2025-01-22` 没抽到 → `Reminder` 空，
+  过期提醒静默消失），交付前对一眼 `schedule` 分区。复盘见
+  `references/ngv-multicell-values-and-dedupe.md`。
+- ★ **中文文案别塞进 shell 命令**：`printf '中文说明…' > 文件` 会被安全扫描判
+  `Confusable Unicode characters`（`tirith:confusable_text`）并挂起等审批。
+  `mv`/`cp` 这类纯路径操作单独跑，说明文字一律用 `write_file` 写。
 - ★ **「款数在第二份附件里」是 NGV 的固定失分点**（2026-10-21 A00142）：表单 B6 只写
   `versions: see detailed breakdown`、A5 `quantity` 空，款数/语言/数量全在
   `Titel+Mengen_*.xlsx` → `TZS=1 / YYS=0 / CPSL1=0` 静默落默认值，四道门全过。

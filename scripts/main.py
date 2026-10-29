@@ -481,6 +481,37 @@ def _de_number(text: str) -> Optional[float]:
         return None
 
 
+def parse_tier_list(text: str) -> list:
+    """解析「一排档位」的数量写法 → [档1, 档2, …]（少于 2 档就返回空）。
+
+    2026-10-29（PR-00078025 / 100 Dinge 实单）：NGV 的表单也会给**多档**，
+    写成 `5.000 / 7.500 / 10.000`（德式千分位、斜杠分隔）—— 档案
+    `quantity.mode: single` 只认单一总数，这一行就整体解析失败 → CPSL1~3 全 0，
+    四道门照样全绿（静默丢数据）。同类写法 PR-00096460 也出现过。
+    只认「整段都是数字（可带 k/cps/St. 后缀）」的片段，避免把
+    `perfect binding at the top` 这种文本误当档位。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return []
+    parts = [p.strip() for p in re.split(r"[/、;,]|\s+or\s+|\s+oder\s+", s) if p.strip()]
+    tiers = []
+    for part in parts:
+        m = re.fullmatch(r"(\d[\d.,]*)\s*(k|cps|pcs|st\.?|stk\.?|ex\.?|copies)?", part, re.IGNORECASE)
+        if not m:
+            return []
+        raw = m.group(1)
+        if m.group(2) and m.group(2).lower() == "k":
+            value = _de_number(raw)
+            value = int(value * 1000) if value else 0
+        else:
+            value = _de_number(raw)
+        if not value:
+            return []
+        tiers.append(int(value))
+    return tiers if len(tiers) >= 2 else []
+
+
 def parse_single_quantity(text: str, logger: Optional[Logger] = None) -> Optional[int]:
     """解析「单一总数」的数量写法 → int；解析不出或为 0 返回 None。
 
@@ -1053,7 +1084,38 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     if qty_mode == "single":
         qty_text = str(customer_data.get("quantity") or "")
         qty = parse_single_quantity(qty_text, logger)
-        if qty:
+        # ★ 2026-10-29（Rossmann 半返单 PO 15910）：客户只写「每款」数量 ——
+        #   `12,500 cps each (= 25,600 cps in total)`，没有 `total qty:` 标签。
+        #   报价基数是**每款**数量，而 CPSL1 存的是**印刷总量**（语料实证：TZS=2 的单
+        #   CPSL1=6000 就是 2×3000；TZS=4 的 20000 就是 4×5000）→ 总量 = 每款 × 款数。
+        #   客户自己写的总数与之不符时**不静默采信**，按每款算并 WARN 交人工核对。
+        if not qty:
+            per_title = parse_single_quantity(str(customer_data.get("qty_per_title") or ""))
+            tzs_n = result.get("TZS")
+            if per_title and isinstance(tzs_n, int) and tzs_n > 0:
+                qty = per_title * tzs_n
+                declared = parse_single_quantity(str(customer_data.get("qty_total") or ""))
+                if declared and declared != qty:
+                    logger.warn(
+                        f"  数量: 客户写「每款 {per_title} × {tzs_n} 款 = {qty}」，"
+                        f"但客户自报总数 {declared} —— 两者不符，CPSL1 按每款×款数取 {qty}，"
+                        f"CPMS 备注必须写明待客户确认")
+                else:
+                    logger.info(f"  数量: 客户只给每款数量 {per_title} × {tzs_n} 款 = {qty}")
+        # ★ 2026-10-29：客户给的是**一排档位**（`5.000 / 7.500 / 10.000`）而不是单一总数
+        #   —— 档案写 single 只是「默认只有一个数」，不代表客户不会给多档。
+        #   落到 CPSL1..n 并 WARN 说明「档案是 single、客户给了 N 档」，不静默丢数据。
+        tiers = [] if qty else parse_tier_list(qty_text)
+        if tiers:
+            for idx, tq in enumerate(tiers[:10], start=1):
+                result[f"CPSL{idx}"] = tq
+                assigned.append(f"CPSL{idx}")
+            logger.warn(f"  数量: quantity={qty_text!r} 是 **{len(tiers)} 档**报价 "
+                        f"{tiers} → CPSL1~CPSL{len(tiers)}（档案 quantity.mode=single，"
+                        f"但客户给了多档；按档位落库）")
+            logger.info(f"  映射: CPSL1~CPSL{len(tiers)} = {tiers}，其余保持 0")
+            success_count += len(tiers)
+        elif qty:
             result["CPSL1"] = qty
             assigned.append("CPSL1")
             logger.info(f"  来源: quantity（规范键）={qty_text!r}（档案 quantity.mode=single）")

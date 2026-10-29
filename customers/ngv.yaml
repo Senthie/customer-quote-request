@@ -121,6 +121,10 @@ sections:
 
   - names: [schedule, Termine]
     entries:
+      # 2025 版表单把 `offer deadline` 放在 schedule 里（2026 版在 enquiry 里）。
+      # 两处都声明 → 哪一版都能取到；values.setdefault 先到先得。放最前是为了
+      # 2025 版能匹配到（自适应模式找不到标签时不推进游标，顺序已无副作用）。
+      - { label: "offer deadline",   key: offer_deadline }
       - { label: "files to printer", key: files_to_printer }
       - { label: "ETA w/h",          key: delivery_date }
 
@@ -137,6 +141,8 @@ sections:
 
   - names: [content, Inhalt]
     entries:
+      # 2025 版表单把 TPS 放在 content 分区（2026 版在 versions 分区）→ 两处都声明。
+      - { label: "TPS",      key: size,           value_mode: run }   # 145 | x | 210 | mm | portrait
       - { label: "extent",   key: extent,         value_mode: run }   # 36 pp + Cover
       - { label: "paper",    key: text_material,  value_mode: run }   # 120 gsm woodfree…
       - { label: "printing", key: text_printing_spec, value_mode: run }
@@ -156,13 +162,18 @@ sections:
       - { label: "printing",  key: jacket_printing_spec,  value_mode: run }
       - { label: "finishing", key: jacket_finishes,       value_mode: run }
       # binding 行在 cover 分区里（A21 为空），值是 Softcover / ridged box / see below
-      - { label: "binding",   key: binding }
+      # value_continue（2026-10-29）：2025 版表单的装订工艺**跨两行** ——
+      #   C20=`Flexcover` / C21=`thread-stitching`（C21 那行 B 列是空的）
+      #   → 只取第一格会把「锁线」丢掉，CPMS 的装订段就写不全。
+      - { label: "binding",   key: binding, value_continue: true }
 
   - names: [finishing, Verarbeitung]
     entries:
       # Bindung 行要整行拼：`perfect binding | 210 | mm side`
       # 左值给『装订工艺』，右值 `210 mm side` 由 rules.scan 捞出装订边。
-      - { label: "Bindung", key: binding_instructions, value_mode: run }
+      # value_continue：2025 版表单把装订工艺写成两行（`C20=Flexcover` / `C21=thread-stitching`，
+      # 第二行 B 列空），只取第一格会丢掉「锁线」→ CPMS 装订段写不全。
+      - { label: "Bindung", key: binding_instructions, value_mode: run, value_continue: true }
       - { label: "back",    key: back }
 
   - names: [specials, Sonstiges]
@@ -174,6 +185,10 @@ sections:
 
   - names: [packaging, Verpackung]
     entries:
+      # 2025 版表单的包装分区多两行：`shrinkwrapping`（是/否）与 `sticker`（贴纸内容），
+      # 2026 版把它们并进 specials 分区 → 两处都声明，哪版都能取到。
+      - { label: "shrinkwrapping", key: primary_packaging }
+      - { label: "sticker",        key: sticker }
       - { label: "packing unit", key: packaging_unit }
       - { label: "assortment",   key: assortment }
       - { label: "specials",     key: packaging_specials }
@@ -228,6 +243,12 @@ ignored_labels:
   - "Bemerkungen"
   - "TPS"
   - "Format"
+  # 2025 版表单的包装分区多这两行：前者已映射到 primary_packaging、
+  # 后者（每箱本数）ERP 无对应字段 → 登记为「已知标题」，不再进未识别清单。
+  - "shrinkwrapping"
+  - "Einschweißung"
+  - "copies per carton"
+  - "Expl. pro Karton"
   - "quantity"
   - "Auflage"
 
@@ -332,6 +353,11 @@ rules:
     section_col: 0          # A 列 = 分区
     label_col: 1            # B 列 = 标签
     first_value_col: 2      # C 列起 = 值
+    # ★ 2026-10-29（PR-00078025 / 100 Dinge 实单）：NGV 的 enquiry 表单有**两个版本**，
+    #   行顺序不同 —— 严格按行号对齐会整段错位（19 条 WARN、CD/KD=0、纸张/印色全丢）。
+    #   自适应 = 分区内按声明标签向后找行：多行/少行/换位置都能对上，
+    #   找不到的字段留空（绝不硬取隔壁字段的值）。2026 版样本回归见 test_ngv_profile。
+    sections_adaptive: true
     max_label_len: 60       # >60 字符的单元格一律不当标签（保护 B24 的长文本）
     # ★ Lidl `Anlage_<IAN>` 表（2026-10-29 实单 IAN 574237 / 574239 校准）：
     #   H2 = `IAN 574237 K Motiv Puzzlebücher Overview of Countries, Quantities, and Titles`
@@ -449,6 +475,17 @@ rules:
       "ridged box": 套装                     # CU26061701 → ERP 套装 ✓
       "lose": 套装
       "hardcover": 精装书
+      # ★ 2026-10-29 Rossmann 半返单（PO 15910）实单：
+      #   `flexocover, thread-stitching, square back, glue-on end sheet, case-in book block`
+      #   —— `flexocover`（软封套硬壳 = 假精装）与 `case-in`（书芯装进皮壳）都不在旧表里，
+      #   只有 `thread-stitching` 能认，而它单独出现时是「车线」不是「精装」→ ZDFS 会落空。
+      #   历史权威单 CU26100601（同一 Rossmann 项目）ZDFS=精装书。
+      #   顺序要紧：flexocover / case-in 必须排在通用词之前，命不中才往下走。
+      "flexocover": 精装书
+      "flexcover": 精装书        # 客户也写 Flexcover（少一个 o）
+      "flexo cover": 精装书
+      "case-in": 精装书
+      "case in book block": 精装书
       # 2026-09-24 新增（PR-00091345 那单实测：binding=Softcover + Bindung=Wire-O Binding）：
       # 蛇圈/线圈类。ERP 合法值是「线圈书」（不是「蛇圈书」—— 那是 CPLB 树里的类别名）。
       "wire-o": 线圈书
@@ -483,6 +520,12 @@ rules:
       - { match: "safety\\s*saddle|saddle[- ]stitch", node: "24.03" }   # 贴纸骑钉书
       - { match: "wire[- ]?o|wiro|YO书|双线圈", node: "26.07" }          # 普通YO书（双线圈）
       - { match: "spiral|蛇圈|单线圈|线圈", node: "26.01" }              # 普通蛇圈书
+      # 假精装书（22.03，树里判据「软封套硬壳，成本低于精装」）：
+      #   Rossmann 半返单实单写 `flexocover`（客户德语习惯写法），旧 map 无此词
+      #   → 落 32.00;其他。历史单 CU26100601 的 CPLB 就是「假精装书」。
+      #   必须排在 case bound / 精装 之前：`case-in book block` 含 case 但不含 `case bound`，
+      #   所以不会互抢，但 flexocover 与精装类同现时以「假精装」为准。
+      - { match: "flex\\s*o?\\s*cover|flexibond|假精装|半精装", node: "22.03" }
       - { match: "case\\s*bound|hardcover|精装", node: "22.02" }          # 精装书
       # BB书（纸板书）：封面无灰板 → 27.01 普通BB书。放在精装之后，硬封优先。
       #   实测（LG26090401，2026-10-21）：附件写 `binding: board book` /
@@ -617,6 +660,9 @@ rules:
     #    `it should be 60,000cps/15,000cps = 4 titles instead of 3 titles`
     #    （CU26070901 实单实测：不加锚点会落 TZS=4，那是客户的假设不是订单事实）。
     - { key: number_of_titles, pattern: "(?m)^(\\d+)\\s+titles?\\s*\\(" }
+    # ★ 2026-10-29 Rossmann 半返单：款数**单独一行、不带括号**（`2 titles`）。
+    #   锚行首 + 整行只有这一句 → 不会抓到句子中间的 `= 4 titles instead of 3 titles`。
+    - { key: number_of_titles, pattern: "(?m)^\\s*(\\d+)\\s+titles?\\s*$" }
     # 香港单号：附件文件名里带「香港单号 CU26072301」，表内也常有。
     # ⚠️ 落到 **KHDDH**（模板第 43 键，中文标签就是「香港单号」），不是 KHDH。
     - { key: khddh, pattern: "香港单号\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)" }
@@ -633,6 +679,13 @@ rules:
     # 总数量：`Total QTY: 112,266 cps in total`（德式/英式千分位都交给
     # parse_single_quantity 归一）。只在正文里出现时用它兜底。
     - { key: quantity, pattern: "(?i)total\\s*qty\\s*[:：]\\s*(\\d[\\d.,]*)" }
+    # ★ 2026-10-29 Rossmann 半返单的数量写法：
+    #     `12,500 cps each (= 25,600 cps in total)`
+    #   `12,500 cps each` = **每款**数量（报价基数），总数要 ×TZS 才对得上。
+    #   quantity 取不到时，main.py 用 qty_per_title × TZS 落 CPSL1，
+    #   并把客户自己写的 qty_total（这里的 25,600，与 2×12,500=25,000 不符）打 WARN。
+    - { key: qty_per_title, pattern: "(?i)(\\d[\\d.,]*)\\s*cps\\s*(?:each|/\\s*title|per\\s*title)" }
+    - { key: qty_total, pattern: "(?i)(\\d[\\d.,]*)\\s*cps\\s*(?:in\\s+total|insgesamt)" }
 
 # ── 邮件规则：两组单号必须分开 ───────────────────────────────────
 # 2026-09-24 修正：KHDH 与 KHDDH 只差一个字母，此前把附件里的「香港单号」

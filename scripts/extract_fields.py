@@ -287,61 +287,124 @@ def _extract_sections(rows: list, profile: CustomerProfile, logger=None) -> tupl
     section_col = int(profile.rule("layout.section_col", 0))
     label_col = int(profile.rule("layout.label_col", 1))
     first_value_col = int(profile.rule("layout.first_value_col", label_col + 1))
+    # ★ 自适应模式（档案 `layout.sections_adaptive`，NGV 2026-10-29 打开）：
+    #   NGV 的表单存在**两个版本**（2025-01 的 enquiry A1:L37 / 2026 的 A1:L37）：
+    #     · 2025 版把 `offer deadline` 放在 schedule 分区里（2026 版在 enquiry 里）；
+    #     · 2025 版的 TPS 在 content 分区（2026 版在 versions 里）；
+    #     · 2025 版 cover 分区的顺序是 boards→padding→paper…（2026 版是 paper 起）。
+    #   严格「按行号对齐」遇到哪一版都会整段错位（实测：19 条 WARN、CD/KD=0、
+    #   纸张/印色全丢）。自适应 = 在本分区内**按声明标签向后找行**，允许增删行；
+    #   找不到的字段留空（不硬取，避免取到隔壁字段的值）。
+    adaptive = bool(profile.rule("layout.sections_adaptive", False))
+
+    # 所有分区声明过的标签（自适应模式判「这行到底是不是我们没映射的字段」用）：
+    # 只认「任何分区都没声明过」的标签进未识别清单，避免把 `files to printer` 这类
+    # 声明在别处的标签重复记成未识别（会让校准报告噪音爆炸）。
+    declared_labels = [
+        str(e.get("label"))
+        for sec in sections for e in (sec.get("entries") or []) if e.get("label")
+    ]
+
+    def _is_declared_anywhere(cell: str) -> bool:
+        return any(_label_matches(profile, lab, cell) for lab in declared_labels)
 
     values: dict = {}
     raw_labels: dict = {}
     unmatched: list = []
-    current = None
-    current_no = -1
-    start_row = -1
     gained = 0
-    consumed_rows = 0
+    skipped_total = 0
+
+    def _consume(rows_in_section: list, entries: list, sec_names: list) -> int:
+        """消费一个分区的行，返回命中条目数。"""
+        nonlocal skipped_total
+        local = 0
+        cursor = 0
+        for entry in entries:
+            if cursor >= len(rows_in_section):
+                break
+            row_no, label_cell, cells = rows_in_section[cursor]
+
+            if "section_value" in entry:
+                key = entry.get("section_value")
+                if key and label_cell:
+                    values.setdefault(key, label_cell)
+                    local += 1
+                cursor += 1
+                continue
+
+            want = str(entry.get("label", ""))
+            if not _label_matches(profile, want, label_cell):
+                if not adaptive:
+                    log(f"  分区「{sec_names[0] if sec_names else '?'}」第 {row_no + 1} 行期望标签 "
+                        f"{want!r}，实际是 {label_cell!r} —— 表单结构可能已变化，"
+                        f"该字段按声明位置取值，请核对", "warn")
+                    if label_cell:
+                        unmatched.append(label_cell)
+                    cursor += 1
+                    continue
+                found = next((j for j in range(cursor, len(rows_in_section))
+                              if _label_matches(profile, want, rows_in_section[j][1])), None)
+                if found is None:
+                    # 本分区里没有这个标签 → 该字段留空，**且不推进游标**（不误吃下一行：
+                    # `offer deadline` 在 2025 版属 schedule、2026 版属 enquiry，
+                    # 推进游标会把本该匹配的行吃掉）。
+                    # 当前行若不是任何分区声明过的标签，才算「我们没映射的字段」记下来供校准。
+                    if label_cell and not _is_declared_anywhere(label_cell):
+                        unmatched.append(label_cell)
+                    log(f"  自适应：分区「{sec_names[0] if sec_names else '?'}」里没有标签 "
+                        f"{want!r} → 该字段留空", "info")
+                    continue
+                if found > cursor:
+                    skipped_total += found - cursor
+                    log(f"  自适应：跳过 {found - cursor} 行未声明的行，"
+                        f"命中标签 {want!r}（第 {rows_in_section[found][0] + 1} 行）", "info")
+                cursor = found
+                row_no, label_cell, cells = rows_in_section[cursor]
+
+            mode = str(entry.get("value_mode", "first"))
+            value = _values_to_the_right(cells, first_value_col, profile, mode)
+            # 值跨行：`binding` 行下一行只有值、没有标签（2025 版
+            # `C20=Flexcover` / `C21=thread-stitching`）→ 拼起来才是完整装订工艺。
+            if entry.get("value_continue") and cursor + 1 < len(rows_in_section):
+                nxt_label, nxt_cells = rows_in_section[cursor + 1][1], rows_in_section[cursor + 1][2]
+                if not str(nxt_label or "").strip():
+                    nxt_val = _values_to_the_right(nxt_cells, first_value_col, profile, "run")
+                    if nxt_val:
+                        value = f"{value} {nxt_val}".strip()
+                        cursor += 1
+            key = entry.get("key")
+            if key and value:
+                values.setdefault(key, value)
+                raw_labels.setdefault(label_cell, value)
+                local += 1
+            elif label_cell:
+                unmatched.append(label_cell)
+            cursor += 1
+        return local
+
+    current = None
+    buffered: list = []          # [(row_no, label, cells)]
+    cur_names: list = []
 
     for r, cells in enumerate(rows):
         # ① 分区切换（只有已声明的分区名才算）
         if section_col < len(cells) and cells[section_col]:
             hit = profile.match_section(cells[section_col])
-            if hit is not None:
-                no = next(i for i, s in enumerate(sections) if s is hit)
-                if no != current_no:
-                    current, current_no, start_row = hit, no, r
+            if hit is not None and hit is not current:
+                if current is not None:
+                    gained += _consume(buffered, current.get("entries") or [], cur_names)
+                current, buffered = hit, []
+                cur_names = hit.get("names") or []
         if current is None:
             continue
-
-        entries = current.get("entries") or []
-        offset = r - start_row
-        if offset >= len(entries):          # 分区声明的行数已用完 —— 多余行忽略
-            continue
-        entry = entries[offset]
         label_cell = cells[label_col] if label_col < len(cells) else ""
-        consumed_rows += 1
+        buffered.append((r, label_cell, cells))
 
-        if "section_value" in entry:
-            key = entry.get("section_value")
-            if key and label_cell:
-                values.setdefault(key, label_cell)      # 先到先得，不覆盖
-                gained += 1
-            continue
+    if current is not None:
+        gained += _consume(buffered, current.get("entries") or [], cur_names)
 
-        # 标签行：先断言声明的标签与表里的一致
-        if not _label_matches(profile, entry.get("label", ""), label_cell):
-            log(f"  分区「{(current.get('names') or ['?'])[0]}」第 {r + 1} 行期望标签 "
-                f"{entry.get('label')!r}，实际是 {label_cell!r} —— "
-                f"表单结构可能已变化，该字段按声明位置取值，请核对", "warn")
-            if label_cell:
-                unmatched.append(label_cell)
-            continue
-
-        mode = str(entry.get("value_mode", "first"))
-        value = _values_to_the_right(cells, first_value_col, profile, mode)
-        key = entry.get("key")
-        if key and value:
-            values.setdefault(key, value)
-            raw_labels.setdefault(label_cell, value)
-            gained += 1
-        elif label_cell:
-            unmatched.append(label_cell)
-
+    if adaptive and skipped_total:
+        log(f"  自适应分区表：共跳过 {skipped_total} 行未声明的行（表单版本差异）", "info")
     layout = f"section_pairs×{gained}" if gained else ""
     if not gained:
         log("分区表未命中任何条目 —— 检查档案 sections: 与 rules.layout 的列号", "warn")
