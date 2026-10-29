@@ -177,8 +177,30 @@ CPMS=''（必须为空，交给 agent）
 
 ---
 
-## 8. 交付检查清单（IGL 专用）
+## 7.5 ★ 2026-10-29 实单 `BIBLE HEROES Treasury`（Igloo / Christine Still）暴露的四处
 
+表形态：单表 `V1 - 25.02.26 - Printer`，`New Product Development Cost Request Form`。
+`Format=Hardback`、`Cased book, section sewn, cover drawn on over 3mm boards`、
+64pp text + 8pp ends、`over 3mm boards`、`Spine width: To suit extent`（客户没给厚度）。
+
+| 问题 | 现象 | 修法 |
+|---|---|---|
+| **`ZDFS` 落错** | `cased` 不在 `binding.map`、`case bound` 也匹配不上（cased ≠ case bound）→ 落到最后的 `sewn` → **车线书** | map 里加 `cased` / `case bound` / `hardcover` / `hardback → 精装书`，**排在 `sewn` 前面**。语料 1597 条 `CPLB=方脊精装书` 里 1588 条 `ZDFS=精装书`（99.4%）；`车线书` 那 157 条配的是 `普通车线书`/`精装车线书`（25 类软封面车线） |
+| **`GD` 漏灰板** | 旧公式只有「内文 + 封面纸」→ 64PP/128g 出 5.16mm，成品实际约 11mm | 新 `rules.thickness.boards`（`board_allowance()`）：命中精装特征就 `+ 板厚 × 2`。业务非 0 的 26 条精装样本全是「书芯+两块板」（`160*196*10`、`210*285*8`、`230*230*10`） |
+| **系列名带表单痕迹** | `Series Name = Working Title: 'BIBLE HEROES Treasury'` → CPMC 变成 `22.02;方脊精装书-Working Title: 'BIBLE HEROES Treasury'` | `rules.series_name.strip_pattern`：只清前缀与包裹引号，不翻译 |
+| **环衬/实际尺寸抽不出** | `End Paper Material`、`End Paper Printing Spec`、`Size (actual) H x W x D mm` 三行没有别名 → CPMS 只能手读原文 | 补规范键 `ends_material` / `ends_printing_spec` / `size_actual`（`CANONICAL_KEYS` 同步加） |
+
+**派生 GD 与审计的冲突**（通用经验）：概要行 `【250*210*11.16】` 里的 GD 是**算出来的**，
+`cpms_content_audit` 按子串找原文必然报「无出处」→ 逼人删掉或改成 0。
+现在审计有 `derived` 通道：数值 == 当前产物 `GD` 字段才放行并打印理由（`cpms_lint` CPMS011 已保证
+概要行与字段一致），改个数字就立刻不被放行。**别再为过门禁把 GD 写成 0。**
+
+**邮件重复投递**：同一封 `.eml` 被投了 3 份（md5 相同），cron 5 分钟扫描跑出 3 个任务目录
+（`__1` / `__2` 后缀）。处理顺序：先 `md5sum` 去重 → 只保留一个任务目录 → 其余移
+`processed/_superseded_<日期>/`。同名 `*.meta.json` 会因为 cron「只搬文件不搬副档」留在 `pending/`，
+记得一起清。
+
+## 8. 交付检查清单（IGL 专用）
 - [ ] 客户识别是 `igl`（不是 NGV；正文特征优先）
 - [ ] ★ 若输入是**文件夹 / 压缩包 / 多附件邮件**：确认里面**确实是同一单**的参考文件
       （`validation.json` 的 `unit.members` 全是这一单的材料、`conflicts` 已核对）。
@@ -197,3 +219,48 @@ CPMS=''（必须为空，交给 agent）
       产物目录有 `CPMS_来源对照.md`（逐句出处）
 - [ ] `extras_found` 里的附加信息一条不漏
       （纸箱重量/尺寸、报价有效期、加箔/UV/击凸等增值工序都只存在于此）
+- [ ] **定时任务「后半段」（cron 只列出 `CPMS_TODO`、由 agent 补写）**：按下面第 9 节执行，
+      并把 audit / lint 的真实结论如实写进汇报（`.eml` 正文要转 txt 才能当 `--source`；
+      概要行派生 `GD` 现行 audit 会放行，旧的「无出处 1」是版本差异）
+
+---
+
+## 9. 定时任务「后半段」补 CPMS（IGL 注意点）
+
+触发：`cqr_scan_and_cpms.sh` 打印 `CPMS_TODO: N`，agent 逐条补 `CPMS`/`CPMC`/`CPMC_ZH`/`ECPMC`。
+通用坑（audit 不收 `.eml`、`GD` 必然无出处、档位写 `3k`、CPMS013↔011 死锁、重复上传、
+一文件多组规格）见 `customer-quote-request/references/cpms-backfill-gotchas.md`。
+
+IGL 专属七条：
+
+1. **`CPMC`/`CPMC_ZH` 写中文品名**（同值、反映产品实质、不带业务员/品牌/类别/FSC），
+   例如 `Working Title: 'BIBLE HEROES Treasury'` → `圣经英雄故事珍藏集`。
+   这与本文 §4 的历史模板 `{cplb}-{series_name}`（`23.01;无线胶装书-…`）**不同** ——
+   补写路径以任务说明为准；**不要**因为「与基线写法不一致」而卡住或写占位符，
+   在汇报里注明「CPMC 按运营口径改为中文品名，与 `tests/test_pipeline.py` 基线口径不同」即可。
+2. **`ECPMC` 保持空**：igl 未声明 `rules.ecpmc.source_keys`（见 §5），不要照抄 `series_name`。
+3. **`YWY` 实测为空**（`igl.yaml` 的 `erp_fixed` 里没有 `YWY`，只有 `ngv.yaml` 配了 `KM`），
+   而总纲 §4.1/4.3 写「脚本固定 `KM`」—— 属**文档与实现漂移**。
+   补 CPMS 时**只改 4 个字段**（`CPMS`/`CPMC`/`CPMC_ZH`/`ECPMC`），不要顺手补 `YWY`；
+   在汇报里列为字段缺陷：「`YWY` 空，业务口径应为 `KM`」，留给引擎侧改 `igl.yaml`。
+4. **精装（cased hardback）别套平装结构**：`Cased book, section sewn, cover drawn on over 3mm
+   boards, ends secured, square backed` → `皮壳 / 皮壳衬纸 / 内文 / 装订`。实测映射
+   （`BIBLE HEROES Treasury` 成本表，2026-10-29）：
+   - 封面 `128gsm Gloss Artpaper over 3mm boards` → `皮壳：128g光粉+1800g灰板`
+     （3mm=1800g；`4C+哑胶/0C` 来自 `Printed 4/0` + `Finishes: Matt lam`）
+   - `8pp ends` + `160gsm woodfree` + `Printed 4/4` → `皮壳衬纸：8PP，160g书纸，4C/4C`
+   - `64pp text` + `128gsm matt art` + `Printed 4/4` → `内文：64PP，128g哑粉，4C/4C`
+   - `Additional Costs to cover`（Add 100%foil / 50%foil / holo foil / spot UV / emboss /
+     1 PMS / pallets）→ **`请拆分` 段**，不要塞进 `备注`
+   - `3 shipment splits`、`20 x Advance copies`（重印 6 本）、`Target Age`/`Safety Checks`、
+     `Project description`、`Spine width: To suit extent` → `备注`
+   - `装箱`：客户给的是「最大箱重 14kg 或 60 本」+ 箱规区间，**装箱数量写「待确认」**
+     （原文：carton qty will be confirmed when the order is placed），不是漏抄
+5. **`CPMS054` 会在装订段复触发**：`装订：精装，…，封面裱3mm灰板` 同样被判「灰板写 mm」。
+   全篇凡提灰板一律写 g（`装订：精装，锁线，方脊，封面裱1800g灰板，环衬粘牢`）→ 0 warn。
+6. **档位列表用顿号**：`3k、5k、7.5k、10k、20k、25k、30k`。用 `/` 会被印色正则抓成 `5/10`
+   报 CPMS052（与总纲 gotchas §3 同源）。
+7. **精装 `GD` 已含灰板补偿**（2026-10-29 引擎新增 `rules.thickness.boards`）：
+   `GD = 书芯 + 前后两块灰板`，同一份表重跑可能出现 5.16 → 11.16 的差。概要行必须跟**本任务**
+   JSON 的 `GD` 一致，别照抄另一份重复产物的数字。
+

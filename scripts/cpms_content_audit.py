@@ -71,6 +71,11 @@ def codes(text: str) -> list[str]:
 # 是规范要求的换算，所以审计要认（CU26072401 实测：1200g 被判「无出处」）。
 GREYBOARD_G_TO_MM = {"600": "1", "900": "1.5", "1200": "2", "1500": "2.5", "1800": "3"}
 
+# cm ↔ mm 换算（Lidl `Anlage` 实测，2026-10-29）。客户表写 `20 x 20 x 2 cm`，
+# 而 CPMS 规范与 ERP 的 `CD/KD` 都是 mm —— 与灰板 `2mm → 1200g` 同类的机械换算。
+CM_MM_FACTOR = {"mm": 0.1, "": 0.1, "cm": 10.0}
+ANY_NUM_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
 
 def _num_eq(a: str, b: str) -> bool:
     """`2` / `2.0` 视作同一个数（客户写 `2.0 mm`、换算表写 `2`）。"""
@@ -87,9 +92,37 @@ def _greyboard_equivalent(num: str, unit: str, src_norm: str) -> bool:
     mm = GREYBOARD_G_TO_MM.get(num)
     if not mm:
         return False
-    # 2 与 2.0 等价：原文常写 `boards 2.0 mm`
-    pattern = rf"(?<![\d.]){re.escape(mm)}(?:\.0+)?mm"
+    # 2 与 2.0 等价：原文常写 `boards 2.0 mm`；`|` 是单元格分隔符
+    # （xlsx 里数字与单位可能分处两格：`2` | `mm`）
+    pattern = rf"(?<![\d.]){re.escape(mm)}(?:\.0+)?\|?mm"
     return bool(re.search(pattern, src_norm, re.IGNORECASE))
+
+
+def _unit_scale_equivalent(num: str, unit: str, src_norm: str) -> bool:
+    """`cm ↔ mm` 的机械换算（Lidl `Anlage` 实测，2026-10-29）。
+
+    客户表里尺寸写 `20 x 20 x 2 cm` / `25 x 25,3 x 2,3 cm`，而 CPMS 规范要求 mm
+    （`200*200*20mm`）、ERP 的 `CD/KD` 也是 mm —— 换算不是编数字，跟灰板
+    `2mm → 1200g` 是同一类。只在「本数字在原文里压根不存在」时才走这条，
+    并且要求另一个单位词在原文里出现过（否则普通数量也能蹭过去）。
+    """
+    factor = CM_MM_FACTOR.get(unit)
+    if factor is None:
+        return False
+    other = "cm" if unit in ("mm", "") else "mm"
+    if other not in src_norm:
+        return False
+    try:
+        alt = float(num) * factor
+    except ValueError:
+        return False
+    for m in ANY_NUM_RE.finditer(src_norm):
+        try:
+            if abs(float(m.group(0).replace(",", ".")) - alt) < 1e-6:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _has_number(num: str, text: str) -> bool:
@@ -111,7 +144,8 @@ def traceable(num: str, unit: str, src_norm: str) -> bool:
     灰板 mm→g 的换算按 `GREYBOARD_G_TO_MM` 认账。
     """
     if not _has_number(num, src_norm):
-        return _greyboard_equivalent(num, unit, src_norm)
+        return (_greyboard_equivalent(num, unit, src_norm)
+                or _unit_scale_equivalent(num, unit, src_norm))
     if unit not in PHYSICAL_UNITS:
         return True
     for m in TOKEN_RE.finditer(src_norm):
@@ -125,19 +159,29 @@ def traceable(num: str, unit: str, src_norm: str) -> bool:
     return unit in src_norm
 
 
-def audit(cpms: str, source: str, accepted: dict | None = None) -> dict:
+def audit(cpms: str, source: str, accepted: dict | None = None,
+          derived: dict | None = None) -> dict:
     """accepted：业务口径白名单 {token: 理由} —— 客户文件里没有、但业务拍板要写的值。
 
     为什么要有这个口子（2026-10-21 CU26072401）：客户 enquiry 写 `128 gsm glossy art`，
     业务按 2019 旧单 PO#13826 的材质写 `140g光粉`。严格模式会判「140g 无出处」，
     逼人把业务要的值删掉 —— 那不是漏抄，是**已拍板的口径**，要留痕而不是拦。
     白名单放在 `customers/<客户>.cpms_accepted.json`，每条都必须写理由。
+
+    derived：**派生数字**白名单 {数值: 理由} —— 概要行里由字段推算、客户文件里当然没有的数。
+    典型是 `GD`（成品厚度）：客户没给 `D` 时由「页数 × 纸张厚度 + 皮壳灰板」算出来
+    （2026-10-29 IGL `BIBLE HEROES Treasury`：书芯 5.16 + 两块 3mm 灰板 = 11.16）。
+    概要行是**派生数据**，规范要求它与 ERP 字段逐值一致（`cpms_lint` CPMS011 已校验），
+    所以这里按「与当前产物的 GD 字段相同」放行并打印理由 —— 不是随口认账：
+    值变了（比如手改成 9），对不上字段就不会被放行。
     """
     src_norm = normalize(source)
     accepted = accepted or {}
+    derived = derived or {}
     cpms_tokens = tokens(cpms)
     untraced = []
     accepted_hits = []
+    derived_hits = []
     seen = set()
     for raw, num, unit in cpms_tokens:
         key = (num, unit)
@@ -149,6 +193,10 @@ def audit(cpms: str, source: str, accepted: dict | None = None) -> dict:
             if tok_norm in {normalize(k) for k in accepted}:
                 reason = next(v for k, v in accepted.items() if normalize(k) == tok_norm)
                 accepted_hits.append({"token": raw, "reason": reason})
+                continue
+            # 概要行的 `【250*210*11.16】` 里数字后面没有单位（unit=""），也一并认
+            if unit in ("mm", "") and num in derived:
+                derived_hits.append({"token": raw, "reason": derived[num]})
                 continue
             untraced.append({"token": raw, "num": num, "unit": unit})
 
@@ -183,10 +231,12 @@ def audit(cpms: str, source: str, accepted: dict | None = None) -> dict:
         "untraced_codes": untraced_codes,
         "missing": missing,
         "accepted": accepted_hits,
+        "derived": derived_hits,
         "summary": {
             "untraced": len(untraced) + len(untraced_codes),
             "missing": len(missing),
             "accepted": len(accepted_hits),
+            "derived": len(derived_hits),
         },
     }
 
@@ -194,6 +244,8 @@ def audit(cpms: str, source: str, accepted: dict | None = None) -> dict:
 def read_source(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
+        import datetime as _dt
+
         import openpyxl
 
         wb = openpyxl.load_workbook(path, data_only=True)
@@ -201,9 +253,22 @@ def read_source(path: Path) -> str:
         for ws in wb:
             for row in ws.iter_rows():
                 for cell in row:
-                    if cell.value not in (None, ""):
-                        parts.append(str(cell.value))
-        return "\n".join(parts)
+                    if cell.value in (None, ""):
+                        continue
+                    value = cell.value
+                    # 日期单元格只留日期部分（2026-10-29 实测踩坑）：
+                    # str(datetime) = "2027-04-30 00:00:00"，normalize() 去掉空白后
+                    # 粘成 "2027-04-3000:00:00" —— 日号 `30` 前后都是数字，被判「无出处」，
+                    # 逼人把客户真实交期从 CPMS 里删掉。日期是客户原文事实，不许因此丢。
+                    if isinstance(value, _dt.datetime):
+                        value = value.date().isoformat()
+                    elif isinstance(value, _dt.date):
+                        value = value.isoformat()
+                    parts.append(str(value))
+        # 单元格之间用 `|` 分隔：`normalize()` 会把所有空白（含换行）删掉，
+        # 用换行 join 时相邻单元格的数字会粘成一个数（`2027-04-30` + `2027-09-03`
+        # → `30` 后面还是数字 → 日号被判无出处）。`|` 不是数字，也不会被删。
+        return "|".join(parts)
     if suffix == ".csv":
         return path.read_text(encoding="utf-8", errors="ignore")
     if suffix in {".txt", ".md"}:
@@ -322,7 +387,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"读不了口径白名单：{args.accepted}（{exc}）", file=sys.stderr)
             return 1
         accepted = {k: v for k, v in accepted.items() if not str(k).startswith("_")}
-    result = audit(cpms, source_text, accepted)
+    derived: dict = {}
+    gd = record.get("GD")
+    try:
+        if gd not in (None, "", 0, "0") and float(gd) != 0:
+            derived[f"{float(gd):g}"] = (
+                f"派生字段 GD={float(gd):g}mm：客户没给成品厚度，由内文页数/纸张厚度"
+                f"+皮壳灰板推算（与 ERP GD 字段一致，cpms_lint CPMS011 已校验）")
+    except (TypeError, ValueError):
+        pass
+    result = audit(cpms, source_text, accepted, derived)
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -340,6 +414,10 @@ def main(argv: list[str] | None = None) -> int:
         if result["accepted"]:
             print("\n· 业务口径放行（客户文件里没有、业务拍板要写）")
             for t in result["accepted"]:
+                print(f"  - {t['token']}：{t['reason']}")
+        if result.get("derived"):
+            print("\n· 派生字段放行（概要行由字段推算，与产物 GD 一致）")
+            for t in result["derived"]:
                 print(f"  - {t['token']}：{t['reason']}")
         if result["missing"]:
             print("\n· 客户文件里有、CPMS 未写（人判：真漏 / 有意不写）")

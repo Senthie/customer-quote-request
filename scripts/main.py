@@ -673,6 +673,48 @@ def calculate_thickness(extent_pp: int, pp_faw: float, extent_cover: int, cover_
     return round(total, 2)
 
 
+def board_allowance(profile: CustomerProfile, customer_data: CustomerData,
+                    logger: Optional[Logger] = None) -> float:
+    """精装皮壳的灰板厚度补偿（加到 GD 上）。
+
+    为什么需要（2026-10-29，IGL `BIBLE HEROES Treasury` 实单）：`calculate_thickness`
+    只算「内文 + 封面纸」，**不含皮壳的灰板** —— 64PP/128g 算出来 5.16mm，
+    而 cased 书是「书芯 + 前后两块 3mm 灰板」，实际成品厚约 11mm。
+
+    语料实证（1597 条 `方脊精装书` 里 GD 非 0 的 26 条，全是精装）：
+      `230*230*10`（140 哑粉 + 1800g灰板 + 3mm 海绵）→ GD=10
+      `160*196*10`（140 光粉 + 3mm 灰板）           → GD=10
+      `210*285*8` （140 光粉 + 1200g灰板）          → GD=8
+    → GD = 书芯 + 前后两块灰板。档案用 `rules.thickness.boards` 显式开关，
+    没声明的客户（NGV 关掉整段厚度计算）不受影响。
+    """
+    cfg = profile.rule("thickness.boards", {}) or {}
+    if not isinstance(cfg, dict) or not cfg.get("enabled", False):
+        return 0.0
+    keys = cfg.get("source_keys") or ["cover_material", "binding"]
+    text = " ".join(str(customer_data.get(k) or "") for k in keys)
+    if not text.strip():
+        return 0.0
+    trigger = str(cfg.get("trigger") or "").strip()
+    if trigger and not re.search(trigger, text, re.IGNORECASE):
+        if logger is not None:
+            logger.info(f"  灰板补偿: 未命中精装特征 /{trigger}/ → 不加")
+        return 0.0
+    m = re.search(str(cfg.get("pattern") or r"(\d+(?:\.\d+)?)\s*mm\s*(?:boards?|灰板|chipboard)"),
+                  text, re.IGNORECASE)
+    if not m:
+        return 0.0
+    try:
+        board_mm = float(m.group(1))
+    except (TypeError, ValueError):
+        return 0.0
+    panels = int(cfg.get("panels", 2) or 2)
+    allowance = round(board_mm * panels, 2)
+    if logger is not None:
+        logger.info(f"  灰板补偿: 命中 {m.group(0)!r} → {board_mm}mm × {panels} 块 = +{allowance}mm")
+    return allowance
+
+
 # 【CPMS 由 agent 亲自撰写 —— 脚本不再生成任何 CPMS 内容】
 # 业务确认（2026-09-23）：产品描述（CPMS）无法用 Python 统一处理。每个客户的报价文件
 # 结构、栏目命名、信息分布都不同，必须通读全文、翻译成中文、按类别分段并优化格式。
@@ -823,6 +865,14 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     zh_tpl = str(profile.rule("cpmc.zh_template", "") or "")
     product_name = str(customer_data.get("product_name") or "")
     series_name = str(customer_data.get("series_name") or "")
+    # 系列名里的「表单痕迹」要清掉：IGL 的 `Series Name` 常写
+    # `Working Title: 'BIBLE HEROES Treasury'`（前缀 + 引号），直接拼进 CPMC 会变成
+    # `22.02;方脊精装书-Working Title: 'BIBLE HEROES Treasury'`。
+    # 档案 rules.series_name.strip_pattern 只清前缀与包裹引号，**不翻译不改写**。
+    series_strip = profile.rule("series_name.strip_pattern")
+    if series_strip and series_name:
+        stripped = re.sub(str(series_strip), "", series_name, count=1).strip()
+        series_name = stripped.strip("\"'“”‘’ ").strip() or series_name
     cplb_full = str(result.get("CPLB", ""))
     # 业务员（档案 rules.cpmc.salesperson）：该客户固定对接人，NGV = KM
     #   （业务 2026-09-24 拍板）。留空则该段省略，不塞占位符。
@@ -1095,6 +1145,11 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
                 cover_style = resolve_page_style(cover_material, "cover", profile, logger)
                 result["GD"] = calculate_thickness(
                     extent_pp, pp_faw, extent_cover, cover_faw, pp_style, cover_style, logger)
+                allowance = board_allowance(profile, customer_data, logger)
+                if allowance:
+                    before = result["GD"]
+                    result["GD"] = round(float(before) + allowance, 2)
+                    logger.info(f"  精装灰板补偿: GD {before} + {allowance} = {result['GD']}mm")
                 assigned.append("GD")
                 logger.info(f"  映射值: {result['GD']}")
                 logger.info("  状态: 成功")

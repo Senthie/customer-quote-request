@@ -58,6 +58,15 @@ fields:
   text_material:        ["Text Material"]
   cover_printing_spec:  ["Cover Printing Spec"]
   cover_material:       ["Cover Material"]
+  # ★ 2026-10-29（BIBLE HEROES Treasury 实单）：环衬纸/环衬印色是**独立两行**，
+  #   旧别名表里没有 → 抽不出来，CPMS 的「皮壳衬纸」只能靠 agent 手工回读原文。
+  #   NGV 那边早就有 ends_material，IGL 这里补齐（只喂 CPMS，不映射 ERP 字段）。
+  ends_material:        ["End Paper Material", "Ends Material", "Endpaper Material"]
+  ends_printing_spec:   ["End Paper Printing Spec", "Ends Printing Spec"]
+  # 成品尺寸两行：`Size (tps) H x W` 是**成品/裁切尺寸**（进 CD/KD），
+  # `Size (actual) H x W x D mm` 是**实际外廓**（皮壳/包装用，只进 CPMS）。
+  # 别名取最长，所以 `Size (actual) …` 不会抢走 `size`。
+  size_actual:          ["Size (actual) H x W x D mm", "Size (actual)"]
   spine_width:          ["Spine width"]
   binding:              ["Binding instructions", "Binding"]
   finishes:             ["Finishes"]
@@ -135,6 +144,24 @@ rules:
     unit: mm
     order: [CD, KD, GD]       # 客户写 "H x W x D"，第 1 段=长(CD) 第 2 段=宽(KD) 第 3 段=厚(GD)
 
+  # ── GD（成品厚度）────────────────────────────────────────────
+  # 客户给了 `D` 就用客户的；没给才由「页数 × 纸张厚度」推算（calculate_thickness）。
+  # ★ 2026-10-29 新增 `boards`：精装皮壳的灰板**必须加上**。
+  #   实单 `BIBLE HEROES Treasury`：64PP/128g 书芯算出 5.16mm，但封面是
+  #   `128gsm Gloss Artpaper over 3mm boards` —— 成品厚 = 书芯 + 前后两块 3mm 灰板 ≈ 11mm。
+  #   语料实证（1597 条方脊精装书里 GD 非 0 的 26 条）：`160*196*10`（3mm 灰板）、
+  #   `210*285*8`（1200g 灰板 = 2mm）、`230*230*10`（1800g 灰板 + 3mm 海绵）——
+  #   全是「书芯 + 两块灰板」。只算书芯会把精装书算薄一半，纸箱/书脊尺寸跟着错。
+  thickness:
+    enabled: true
+    boards:
+      enabled: true
+      trigger: "cased|case\\s*bound|hardcover|hard\\s*back|精装"
+      source_keys: [cover_material, binding]
+      # `over 3mm boards` / `3mm灰板` / `3 mm chipboard`
+      pattern: "(\\d+(?:\\.\\d+)?)\\s*mm\\s*(?:boards?|灰板|chipboard)"
+      panels: 2                # 前封面 + 后封面各一块
+
   # 数量档位（CPSL1~CPSL10）识别方式
   quantity_tiers:
     k_suffix: true                            # 支持 3k / 7.5k
@@ -174,6 +201,13 @@ rules:
       "coil": 线圈书
       "saddle": 骑马钉
       "staple": 骑马钉
+      # ★ 2026-10-29 修的真 bug（BIBLE HEROES Treasury 实单）：
+      #   `Cased book, section sewn, cover drawn on over 3mm boards` —— `cased` 不在
+      #   旧表里、`case bound` 也匹配不上（cased ≠ case bound），于是落到下表最后的
+      #   `sewn` → ZDFS=车线书。而语料库 1597 条 `CPLB=方脊精装书` 里 1588 条 ZDFS 是
+      #   `精装书`（99.4%）—— 皮壳 + 锁线是**精装**，车线书是软封面车线（25 类）。
+      #   所以 `cased` 必须排在 `sewn` 前面；`sewn` 只在没有皮壳线索时才用。
+      "cased": 精装书
       "case bound": 精装书
       "hardcover": 精装书
       "hardback": 精装书
@@ -181,6 +215,13 @@ rules:
       "thread sewn": 车线书
       "slipcase": 套装
       "box set": 套装
+
+  # 系列名的「表单痕迹」清理（2026-10-29 BIBLE HEROES 实单）：
+  # 客户把 `Series Name` 写成 `Working Title: 'BIBLE HEROES Treasury'`，
+  # 直接拼 CPMC 会变成 `22.02;方脊精装书-Working Title: 'BIBLE HEROES Treasury'`。
+  # 只清前缀与包裹引号，不翻译、不改写 —— 清完 `BIBLE HEROES Treasury`。
+  series_name:
+    strip_pattern: "(?i)^\\s*(?:working\\s+title|w\\.?\\s*t\\.?|series\\s+name|title)\\s*[:：]\\s*"
 
   # 产品类别查表：先走 cplb.map（档案关键词 → 树节点，精确可控），
   # 命中不到再退回 assets/product_categories.xlsx 的 customer_product_categories 列
@@ -213,7 +254,6 @@ rules:
   dates:
     JHRQ: { from: pub_month }
     WCRQ: { mode: today_plus_days, days: 10 }
-
   # 书脊方向 Drop_SJFX（业务确认 2026-09-23：默认由 CD/KD 比较决定）
   # ERP 合法枚举（assets/erp_form_schema.yaml）：短书脊(0) / 长书脊(1) / 四边裁(2)
   # 本档案只按尺寸判前两种；「四边裁」需要业务明确判据后再加规则。

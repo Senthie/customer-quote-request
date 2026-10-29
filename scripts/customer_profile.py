@@ -55,6 +55,10 @@ CANONICAL_KEYS = {
     # 规格类
     "size", "format", "extent", "text_printing_spec", "text_material",
     "cover_printing_spec", "cover_material", "spine_width", "binding", "finishes",
+    # 2026-10-29（IGL BIBLE HEROES）：表格里 `Size (tps)` 与 `Size (actual)` 是两行 ——
+    #   `size` 落 ERP 的 CD/KD（成品/裁切），`size_actual` 只喂 CPMS（皮壳/包装外廓）。
+    #   环衬两张独立行同理（NGV 早有 ends_material，IGL 补齐）。
+    "size_actual", "ends_material", "ends_printing_spec",
     # 数量档位
     "quantity_tiers",
     # 客户单号（来自邮件正文/标题的独立列，可选）
