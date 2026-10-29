@@ -26,8 +26,11 @@ metadata:
 > `CPMC_ZH` 同值；旧写法 `23.01;无线胶装书-<系列名>` **作废**（那是历史 ERP 记录的写法）。
 > ② `ECPMC` = 报价**原始产品名**（照抄客户原文，不译不拼类别；igl 取 `series_name`）。
 > ③ `GD` **不做推算** —— 客户写了厚度就照抄，没写就是 `0`。
-> 改口径 = 四处同步：档案 `customers/igl.yaml` → `scripts/main.py` → `tests/test_pipeline.py`
-> 基线（`EXPECTED_VALUES` / `UNTOUCHED`）+ `tests/test_igl_profile.py` → 本文件 + 总纲 `SKILL.md`。
+> 改口径 = **六处同步**（不是「四处」）：档案 `customers/igl.yaml` → `scripts/main.py` →
+> `tests/test_pipeline.py` 基线（`EXPECTED_VALUES` / `UNTOUCHED`）→ `tests/test_igl_profile.py`
+> + `tests/test_cpms_todo.py` → `assets/erp_form_schema.yaml` 的 `notes` → 本文件 + 总纲 `SKILL.md`。
+> ★ **完整 SOP 见 `references/field-spec-change-sop.md`**（口径变更的六处同步清单、找残留旧值的
+> grep、关掉一个能力要「留代码 + 双向测试」、已交付产物改动最小化的外科手术步骤、交付闸门要逐字段查）。
 
 - 客户：IGL（香港书商；许可证 `LICENSE` 同仓库）
 - 状态：`calibrated`（用真实报价表 `PUZZLE COLOUR DISNEY.xlsx` 校准）
