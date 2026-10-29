@@ -23,6 +23,12 @@ metadata:
 > 交付四道门命令也在这页。
 > 改完必须重跑：`uv run pytest` + 本文件第 8 节的对照命令。
 
+> ★ **队列纪律（业务 2026-10-29 明确）**：卡在业务口径上（类别拆不拆、配件算不算、品名怎么译）
+> **不许把队列停在那里等人回话**。正确做法是：① 把**能确定的字段全部落成 ERP JSON**、
+> ② 把待确认项按「字段 / 现值 / 客户原文 / 应然值 / 一句话理由」写进汇报，
+> ③ **立刻转去处理下一份报价**，那一份等业务回来再重跑（重跑成本远低于空等）。
+> 现场信号：等一次 `clarify` 的十分钟里就积压了下一封询价邮件。
+
 - 客户：NGV（德国/欧洲的 Aldi、Circon 线）
 - 状态：`calibrated`（4 份真实邮件附件 + 随包权威 ERP 导出校准）
 - 语料库：`customer-files/samples/ngv/`（客户原文，gitignored；含 `manifest.json` 已知差异表）
@@ -190,11 +196,19 @@ uv run ./scripts/main.py "customer-files/pending/两张单/" --customer ngv
    所以 `148 x 210 → CD=148 / KD=210`，CPMS 概要行写【148*210*0】。
    `size.long_first`（长边前置）已从代码和档案删除，别再改回去。
 3. **`CPMS` 与 ERP 字段是两套口径。** 本次业务记录 `Drop_SJFX` 是空的，CPMS 却写
-   `书籍方向：【短书脊】`。所以「`Drop_SJFX` 空 → CPMS 省略方向」是错的：
+   `书籍方向：【短书脊】`。所以「`Drop_SJFX` 空 → CPMS 省略方向」不是无条件成立的：
    竖版 + 装订在顶部 ⇒ 书脊在 148mm 短边，推得出来。
-   另外装订段**不许照抄 `ZDFS` 的下拉值**（`胶装/PAD书`），要写客户原文的
-   `冲形状无线胶装书（冲鸡蛋形状）`。
-   ⚠️ 这两处 `cpms_lint` 都放过（0 error）——**lint 过 ≠ 文本对**。
+   ★ **但这条只在文件里真的给了装订边时成立**（`at the top` / `at the side` / `<N> mm side`）。
+   **没有任何装订边信息时不许反推** —— 那时 CPMS 必须省略方向词、认下 `CPMS013` 的 1 条 warn。
+   2026-10-29 `CU26093001-01`（A00152 Option B）就栽在这条上：客户只写
+   `softcover, safety saddle-stitching` + `210 x 280 portrait`，没有装订边，产物却写了
+   `书籍方向：【长书脊】`，理由居然是「业务真单的 CPMS 也这么写」（跨单据引用）。
+   概要行的方向必须 = `Drop_SJFX`；字段 `null` 就省略。
+   另外装订段**不许照抄 `ZDFS` 的下拉值**（`胶装/PAD书`），也**不许把 `CPLB` 类别名当装订方式**
+   （那次落地成 `装订：贴纸骑马钉书（…）`），要写客户原文的方式 + 方向/工艺：
+   `装订：骑马钉，软封面，安全骑马钉`。
+   ⚠️ 这三处 `cpms_lint` 全放过（0 error / 0 warn）——**lint 过 ≠ 文本对**，
+   实测盲区与自检清单见总纲 `references/cpms-gates-blindspots.md`。
 
 对账纪律：`"" ≡ null` 归一后先读 `customers/ngv.erp_diff.json` 与
 `customer-files/samples/ngv/manifest.json` 的 `known_differences`（8 项已拍板口径，
@@ -373,6 +387,41 @@ IAN 574239 = 365,340（6 款，25 语言）。
   （`at the top`），老测试断言的字符串不变。
 - **`safety saddle-stitching`（-ing）不命中 `safety saddle-stitched`（-ed）** → `ZDFS` 空。
   `binding.map` 已补 `-ing` / `saddle stitch` 三种写法。
+
+> 📎 这两节的**可复现原始数据、新增布局策略要同步的七处、后台补写任务的并发写处置、
+> `cpms_content_audit` 的 token 怪癖（`1.000` / `A00152` 会被判无出处）、分类双证查询命令**：
+> `references/lidl-anlage-表与并发补写.md`。
+
+## 1.12 ★ 开工前先查「这单是不是已经报过」（2026-10-29 业务明确要求）
+
+业务原话：**不要出现重复的产品报价**。NGV/Lidl 的邮件会晚到或被重复投递（信箱同步、客户转发），
+而同一条 enquiry 常常**几天前就已经由业务手动报过**了。
+
+**流程（跑管道之前做，两分钟）**：
+
+1. 从附件里取「可检索锚点」：`reference IAN/PO`、article number（`5/20/8243513/FSG`）、
+   `PR-…` 询价号、标题原文（如 `Stiftung Lesen`）。
+2. 在语料库 `/home/claw/train/custom_cpms_requie` 里 `grep -rl` 这些锚点，
+   命中就 dump 那条 ERP 的 `CPMC / CPLB / TZS / CD / KD / KHDDH / CPMS` 前 200 字。
+3. 判据：**尺寸 + 装订 + 款数 + 品名**四项对得上 → 已报价，**这单不产出新 ERP JSON**，
+   改为交一份去重核对（已有单号 / 报价日期 / 与本次询价的差异 / 需要业务确认的数据缺口）。
+4. 只有确实没报过的部分才落单。
+
+**实例（2026-10-29，`AW: urgent enquiry for Lidl: BD Stiftung Lesen Wissen + Vorlesen`）**：
+表里 4 个 spec type 全部已报 —— A（210×280 72PP 锁线精装 4 款）→ `CU26100603`、
+B（120×150 精装BB+塑胶手挽 4 款）→ `CU26100604`（两份单的装箱段互指 `A款28本+B款12本`，同一天同一批）、
+C（190×245 锁线精装）→ `LY26072801`、D（200×200 冲形状BB）→ `LY26072802`（7 月 IAN 543832 在产项目）。
+核对报告：`customer-files/processed/_dedupe_20261029_AW_BD_Stiftung_Lesen.md`。
+
+⚠️ **cron 不会替你做这一步**：5 分钟扫描见到 pending 里的 xlsx 就跑，这次产出了
+`CPLB=32.00;其他 / CPSL1=0 / CD=KD=0 / CPMS 空` 的垃圾单（已移 `_superseded_*`）。
+所以「先查重」是**人/agent 侧**的责任；看到 `32.00;其他` + 全 0 的产物先怀疑「格式没命中」，别当交付件。
+
+**第五种形态（尚未支持）**：Lidl `Übersicht … _Preisanfrage.xlsx` —— 表头在 A1 的**平铺多列表**
+（`spec type / Nr. / reference IAN/PO / article number / title / assortment in display / QTY to be printed /
+width / height / binding / content / content gsm / content paper / printing of content / cover material / …`），
+一行一款、`spec type` 用 A/B/C/D 分组。现有 `section_pairs` / `lidl_anlage` 都吃不下，
+要支持得加「按表头名定位列」的策略。
 
 ## 2. 怎么认出这是 NGV
 
@@ -817,6 +866,14 @@ uv run ./scripts/customer_profile.py --prefs ngv
   写回前重新 `json.load`（不要用几分钟前读进内存的对象）→ **合并**别人版本里有出处的事实
   （漏抄也是缺陷）→ `json.dumps(ensure_ascii=False, indent=2)` 保持键序 → 收尾断言
   `list(out)[:59]==模板键序` 且 `changed ⊆ {CPMS, CPMC, CPMC_ZH}`。
+  ★ 2026-10-29 抓到一个新的写者：**后台 CPMS 补写任务**（不是定时 scan）。它会在你交付后几分钟内
+  改写 `ERP_*.json` 的 `CPMS`，并**静默覆盖 `CPMS_来源对照.md`**。它的版本 lint 只出 1 warn、
+  audit 0 无出处 —— 看着像合格，实际会（a）丢掉概要行的「书籍方向」、（b）把**上一版规格**的事实
+  搬进新版 CPMS。判别：写完 20 秒再 `stat` 一次 mtime；`write_file`/`patch` 返回
+  `_warning: modified by sibling subagent '<uuid>'`。交付前必须合并 + 重跑四道门 + 再 stat 一次。
+  另外：`cpms_content_audit` 会误伤 `1.000 Sticker`、`A00152`（切成 `00152`）这类数字
+  → 只在复合词/项目号里出现的数字**宁可不写、写进汇报**，不要改写成 `1000` 去骗审计。
+  细节见 `references/lidl-anlage-表与并发补写.md` §3 / §4。
   完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`；
   **同一单出现多个任务目录 / 两个实例并发时怎么判「谁是交付件」、为什么已归档的重复件不许补 CPMS**，
   见总纲 `references/cron-concurrency-and-duplicate-tasks.md`。
@@ -910,6 +967,10 @@ uv run ./scripts/customer_profile.py --prefs ngv
       `ECPMC` = **原始产品名**（客户原文照抄，**不限语言** —— 德文 `Malbücher`、日文、法文一律照抄；
       业务 2026-10-21 澄清：ERP 字段 label 写「产品英文名」是历史命名，口径以这句为准）；
       `CPMC_ZH` = 与 `CPMC` 同值
+      ★ 2026-10-29：**项目号不进 `ECPMC`**。邮件标题 `A00152 1.000 Sticker (AN)` 里
+      `A00152` 是项目号、`(AN)` 是变体标记，产品名只取 `1.000 Sticker`（与业务真单
+      `CPMC` 里的原文段一致）。项目号写进品名，既污染品名，也会让 `cpms_content_audit`
+      把 `A00152` 切成数字 token `00152` 判「无出处」。
 - [ ] `cpms_todo.py` 现在**四个字段都查**（2026-10-21 补）：`CPMS` 空 / `CPMC`·`CPMC_ZH` 是占位符 /
       档案声明了 `rules.ecpmc.source_keys` 但 `ECPMC` 空 —— `CPMS_TODO: 0` 才是真的写完。
       实测 `CU26070901` 邮件没有 `Title:` 标签 → 脚本取不到 ECPMC（WARN 留空）→ agent 从原文
@@ -930,6 +991,14 @@ uv run ./scripts/customer_profile.py --prefs ngv
       null 属空值，与权威导出一致，导入端按空处理）
 - [ ] **`CPMS` 已由 agent 手写**（非空）；**严格模式**：只写客户文件里的事实，确认单/ERP 导出的补充信息不进 CPMS
 - [ ] ★ **`cpms_content_audit.py` 退出码 0**（CPMS 里每个数字/单位/料号都能在客户附件里找到）
+- [ ] ★ **门禁抓不到的三处，交付前人工过一眼**（2026-10-29 实测：一份 lint 0/0 + audit 无出处 0
+      的 CPMS 同时中了三条）：① 概要行方向是否 = `Drop_SJFX`（为空就省略，**不许编**）；
+      ② 装订段里有没有 `CPLB` 类别名；③ 客户文件里带**千分位**的实数（`1,000` / `112,266`）
+      是否都抄全 —— `TOKEN_RE` 不认逗号，会切成 `1`+`000`，两个碎片在别处出现过就都算「有出处」，
+      **整条事实漏抄永远不会报**。另：`A00152` 这类「字母+数字」项目号写进 CPMS **必定**被判
+      无出处（`normalize()` 删空白后与后面的数字连成 `001521`）—— 放汇报/ERP 字段里就行，
+      别为过审计改数字、也别往 `cpms_accepted.json` 白名单里塞技术性误报。
+      盲区全文 + 邮件线程「哪一轮算当前生效」：总纲 `references/cpms-gates-blindspots.md`
 - [ ] ★ 产物目录有 `CPMS_来源对照.md`（逐句出处 + 从确认单删掉的内容清单）
 - [ ] ★ **字段级自检（四道门抓不到这一层）**：`cpms_lint` / `cpms_content_audit` / `erp_schema` / `pytest`
       校验的都是「已经有值的字段」，**整个字段空着照样全绿**。交付前逐字段过一遍
