@@ -702,7 +702,8 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | ERP 字段 | 来源 |
 |----------|------|
 | `CPLB` | 档案 `cplb.map`（客户关键词正则 → 产品类别树节点编号）→ 命中即用；未命中退回类别表查表（`--lookup category`，旧路径）→ 最后用 `product_category.fallback`（默认 `32.00;其他`）。结果一律校验是否在 `assets/cplb_tree.yaml` 里（见 4.7） |
-| `CPMC` | 档案 `cpmc.template` 拼装（**英文表达**），占位符 `{salesperson} {cn_name} {cplb} {cplb_name} {product_name} {series_name} {fsc} {our_ref}`；默认模板 `{cplb}-{series_name}`（igl 口径）。NGV 用 `{salesperson}/Aldi {product_name}({fsc})`；**中文表达**由 `cpmc.zh_template` 渲染后落内部字段 `CPMC_ZH`（1.0.22），中文品名要人工拟 → 脚本给占位符 `【中文品名待定】` 并标 `cpmc.needs_agent: true`，**必须 agent 补全** |
+| `CPMC` | 档案 `cpmc.template` 渲染，占位符 `{salesperson} {cn_name} {cplb} {cplb_name} {product_name} {series_name} {fsc} {our_ref}`。★ 2026-10-21 起 **NGV 与 IGL 同口径**：`CPMC` = 产品名称的**中文译名**（`cpmc.template: "【中文品名待定】"` + `needs_agent: true`，agent 交付前补），`CPMC_ZH` 同值；配方差异只在 `cpmc.template`（NGV 另带 `{salesperson}/Aldi …({fsc})` 的旧写法记录）。占位符 `【中文品名待定】` **必须 agent 补全**，`cpms_todo.py` 会报欠账 |
+| `ECPMC` | 档案 `ecpmc.source_keys`（NGV：`[product_name, series_name]`；IGL：`[series_name]`）→ **报价原始产品名照抄**，不译不拼类别；系列名先过 `series_name.strip_pattern` 洗表单痕迹。没声明 = 该客户不产出 |
 | `TZS` | `versions` + 档案 `versions.title_pattern`（如 `12 titles` → 12）；没有则退回 `number_of_titles` |
 | `YYS` | 档案 `versions.language_pattern` 从 `versions` 取（如 `5 languages` → 5）。三种口径必须分清（业务 2026-09-24）：`empty_when_single: true` 时**语言数 1 留空**；提取不到语言数时按 `versions.when_missing` **落 0**（NGV，0 = 待业务核对 —— 邮件可能后补而附件未更新）；两个开关都没声明才保留档案固定值 + WARN |
 | `CPSL1`~`CPSL10` | 按档案 `quantity.mode`：`tiers`（igl，一排档位）/ `single`（NGV，一个总数 → 只填 `CPSL1`）。见 4.4 |
@@ -1876,7 +1877,9 @@ uv run pytest tests/test_pipeline.py -v
   一直悄悄走 `克重 × 0.001` 的粗估。
 - ⚠️ **本文件曾出现过两个假的厚度示例**：`0.09/0.25 → 5.65`（其实是查表失败的粗估）、
   `0.10/0.32 → 6.32`（2026-05 那份**手工伪造日志**里的数字）。**以实跑为准**
-  （igl 样本：`0.11 / 0.25 → 6.85`）。别照抄文档里的示例值。
+  （igl 样本曾算成 `0.11 / 0.25 → 6.85`）。别照抄文档里的示例值。
+  ★ 2026-10-21 业务拍板：**igl 不再做厚度推算**（`thickness.enabled: false`）——
+  客户没给厚度就是 `GD=0`；想用推算能力的客户在档案里打开即可。
 - **`ZXLB`/`ZBLX`/`ZXFS`/`DKMC`/`ECPMC` 的中文名 v1 文档写错过**：
   分别是 纸箱类别 / 纸板类型 / 装箱方式 / 底卡名称 / 产品英文名。
 - 改完 `scripts/*.py` 或 `customers/*.yaml` 后，**回头同步 SKILL.md 的 4.3 表与示例**，
@@ -2533,6 +2536,10 @@ ERP 表单里 `txtCPMC`（产品名称）与 `txtECPMC`（产品英文名）是*
 业务拍板「先不做，后续补充真实的 ERP 信息再做处理」→ igl 保持历史写法、`CPMC_ZH` 为空，
 TODO 里的 P0 项措辞改成「待真实 ERP 信息」。（NGV 已迁移，不受影响。）
 
+> ★ **2026-10-21 已推翻上面这条**：业务拍板「IGL 按 NGV 口径做」→ igl 的 `CPMC` = 中文译名、
+> `CPMC_ZH` 同值、`ECPMC` = 原文品名；同时 `GD` 改为不做推算（客户没给就是 0）。
+> 本节保留为变更史，**现行口径以子技能 `customer-quote-igl` 顶部三条为准**。
+
 **实测**（PR-00091345 重出）：62 键 = 59 ERP + `ID`/`CPMC_ZH`/`Reminder`；
 `CPSX = null`；`Reminder` 带「已过期 90 天」；`--check --customer ngv` → **62 字段全过（0 error / 0 warn）**；
 `compare_with_erp` 白名单外差异 0 条。测试 **210 项全绿**。
@@ -2765,7 +2772,7 @@ PR-00091345）试跑，抓出三处缺陷 —— 都是「**静默算错**」这
 | ♻️ 装订方式映射 | 机制落地（档案 `rules.binding`），igl **默认关闭**（`无线胶装` vs `胶状/PAD书` 口径待业务确认） |
 | ♻️ 三个文本解析器 | `pdf2json` / `docx2json` / `txt2json` 改为 `extract_fields` 的**薄封装**，消灭第二套弱解析；docx 表格也会被读入 |
 | ♻️ `SKILL.md` | 按「架构 / 客户档案 / 抽取 / 邮件 / CPMS / 校验」重排；igl 专属细节移入 `customers/igl.yaml`，不再在文档里重复维护列名 |
-| ✅ 回归验证 | 同一份真实样本（`PUZZLE COLOUR DISNEY.xlsx`）：**59 键顺序一致**，23 个规范键，24 个赋值字段值**与重构前逐字段一致**（`CD=198 KD=129 GD=6.85`、`CPSL1~7`、`KHDH=23992 / 23993`…），29 个未触碰字段等于模板默认值 |
+| ✅ 回归验证 | 同一份真实样本（`PUZZLE COLOUR DISNEY.xlsx`）：**59 键顺序一致**，23 个规范键，赋值字段值与重构前逐字段一致（`CD=198 KD=129`、`CPSL1~7`、`KHDH=23992 / 23993`…），29 个未触碰字段等于模板默认值。⚠️ 当时记录的 `GD=6.85` 是**推算值**，2026-10-21 业务拍板「不做厚度推算」后改为 **`GD=0`**；`CPMC` 同期改为中文译名口径（这两条是后来的口径变更，不是重构回归差异） |
 
 **修掉的真 bug（测试逼出来的）**
 
@@ -2795,11 +2802,11 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
       「无」落 **JSON `null`**（= 空值），枚举校验与口径例外都不再需要。P0 关闭。
 - [ ] **内部字段 ERP 导入端收不收**（`ID` / `CPMC_ZH` / `Reminder`）—— 现在默认追加在 59 键之后。
       若导入端报「未知字段」，用 `--strip-internal` 出纯净 59 键（已实现，一条命令的事）。
-- [ ] **`igl` 的 `CPMC` 英文表达**（2026-09-24 业务拍板：**先不做**）—— 原话「igl 的先不做，
-      后续补充真实的 ERP 信息再做处理」。所以 igl **保持历史写法**
-      （`23.01;无线胶装书-Puzzle & Colour Disney`，含中文类别名）、`CPMC_ZH` 为空，
-      等拿到真实 ERP 信息后再决定英文表达怎么拼（改 `customers/igl.yaml` 的
-      `rules.cpmc.template` / `zh_template` 两行即可）。**不要凭猜迁移。**
+- [x] ~~**`igl` 的 `CPMC` 英文表达**~~ —— **2026-10-21 业务拍板：IGL 按 NGV 口径做**
+      （`CPMC` = 产品名称中文译名、`CPMC_ZH` 同值、`ECPMC` = 报价原始产品名照抄）。
+      旧写法 `23.01;无线胶装书-<系列名>` 作废。同时定案：**`GD` 不做推算**，客户没给厚度就是 0。
+      落地位置：`customers/igl.yaml`（`rules.cpmc` / `rules.ecpmc` / `rules.thickness`）+
+      `tests/test_pipeline.py` 基线 + `tests/test_igl_profile.py` + 子技能 `customer-quote-igl`。
 
 ### P1 · 待业务确认（阻塞实现）
 

@@ -311,6 +311,11 @@ def delivery_gates(data: dict[str, Any]) -> list[str]:
     cpmc_zh = data.get("CPMC_ZH")
     if isinstance(cpmc_zh, str) and CPMC_ZH_PLACEHOLDER in cpmc_zh:
         gates.append(f"CPMC_ZH 仍是占位符 {CPMC_ZH_PLACEHOLDER} —— 中文品名必须 agent 拟")
+    # 2026-10-21 起 CPMC 自己也是中文品名位（NGV / IGL 同口径）→ 占位符一样算未完成。
+    # 只查 CPMC_ZH 会漏：补写的人可能只改了 ZH、把占位符留在 CPMC 里（ERP 就带着占位符出去）。
+    cpmc = data.get("CPMC")
+    if isinstance(cpmc, str) and CPMC_ZH_PLACEHOLDER in cpmc:
+        gates.append(f"CPMC 仍是占位符 {CPMC_ZH_PLACEHOLDER} —— 产品名称必须 agent 拟")
     return gates
 
 

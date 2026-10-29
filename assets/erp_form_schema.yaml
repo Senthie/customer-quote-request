@@ -198,7 +198,7 @@ fields:
     form_name: txtCPMC
     label: 产品名称
     type: text
-    notes: "由 CPLB + 系列名拼出（历史单据：`23.01;无线胶装书-Puzzle & Colour Disney`）。"
+    notes: "产品名称。2026-10-21 起 NGV / IGL 统一口径：填**中文译名**（agent 拟），`CPMC_ZH` 同值；原始产品名另落 `ECPMC`。历史单据的 `23.01;无线胶装书-Puzzle & Colour Disney` 是旧写法，不再沿用。"
 
   TZS:
     form_name: txtTZS

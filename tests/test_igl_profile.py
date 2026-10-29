@@ -83,25 +83,72 @@ def test_没有皮壳线索时_sewn仍然落车线书():
     assert got["ZDFS"] == "车线书"
 
 
-def test_精装灰板要算进GD():
-    """GD = 书芯 + 前后两块灰板（档案 rules.thickness.boards）。
+def test_没有厚度就不推算_GD落0():
+    """2026-10-21 业务拍板：**不做厚度推算**，客户没给厚度 → GD = 0。
 
-    64PP/128g + 8PP/160g 书芯算出 5.16mm；`over 3mm boards` → +6.0mm = 11.16mm。
-    业务非 0 的 26 条精装记录全是「书芯 + 两块板」口径（8 / 10 / 16mm）。
+    这单客户只给 `Size (tps) 250 x 210mm` + `Spine width: To suit extent`，
+    旧逻辑会按「64PP/128g + 3mm 灰板」推成 11.16mm —— 业务否掉了：
+    推算值没有客户出处（审计对不上、报价也没人认），留 0 更安全。
     """
-    allowance = board_allowance(IGL, CustomerData(values=dict(BIBLE)), _Quiet())
-    assert allowance == 6.0, "3mm × 2 块 = 6mm"
-
-    # 平装没有皮壳 → 不加，基线样本（PUZZLE COLOUR DISNEY）不受影响
-    assert board_allowance(IGL, CustomerData(values={"binding": "perfect bound",
-                                                     "cover_material": "250gsm art card"}),
-                           _Quiet()) == 0.0
-
-
-def test_系列名要去掉Working_Title前缀():
-    """`Working Title: 'BIBLE HEROES Treasury'` → `BIBLE HEROES Treasury`（不翻译）。"""
     got = _map(BIBLE)
-    assert got["CPMC"] == "22.02;方脊精装书-BIBLE HEROES Treasury"
+    assert got["CD"] == 250 and got["KD"] == 210
+    assert got["GD"] == 0, f"客户没给厚度 → GD=0，实际 {got['GD']!r}"
+    # 档案两处开关都必须是关的（少关一处就会悄悄推算出 5.16 / 11.16）
+    assert IGL.rule("thickness.enabled") is False
+    assert (IGL.rule("thickness.boards") or {}).get("enabled") is False
+
+
+def test_客户给了厚度就照抄():
+    """客户写了 `D`（`Size … H x W x D`）就是客户的事实 → 照抄，不覆盖。"""
+    got = _map({**BIBLE, "size": "250 x 210 x 10mm"})
+    assert got["GD"] == 10
+
+
+def test_灰板补偿能力仍在_只是igl关掉了():
+    """`board_allowance` 是通用能力（开关在档案）：igl 关掉后返回 0，
+    但把 boards 打开时仍按「板厚 × 块数」算 —— 防止以后有人删代码把能力弄丢。
+    """
+    class _BoardsOn:
+        def rule(self, path, default=None):
+            if path == "thickness.boards":
+                return {"enabled": True, "source_keys": ["cover_material", "binding"],
+                        "trigger": "cased|hardcover|精装",
+                        "pattern": r"(\d+(?:\.\d+)?)\s*mm\s*(?:boards?|灰板)",
+                        "panels": 2}
+            return default
+
+    assert board_allowance(IGL, CustomerData(values=dict(BIBLE)), _Quiet()) == 0.0, \
+        "igl 档案关掉 boards → 不补偿"
+    assert board_allowance(_BoardsOn(), CustomerData(values=dict(BIBLE)), _Quiet()) == 6.0, \
+        "3mm × 2 块 = 6mm（能力保留）"
+
+
+def test_系列名去掉Working_Title前缀后进ECPMC():
+    """`Working Title: 'BIBLE HEROES Treasury'` → `BIBLE HEROES Treasury`（不翻译）。
+
+    2026-10-21 起系列名不再拼进 CPMC（那是中文译名的位置），它的去处是
+    `ECPMC`（报价原始产品名，客户原文照抄）。
+    """
+    got = _map(BIBLE)
+    assert got["ECPMC"] == "BIBLE HEROES Treasury"
+    assert "Working Title" not in got["ECPMC"]
+    assert got["CPMC"] == "【中文品名待定】", "CPMC 是中文译名位（agent 补），脚本给占位符"
+    assert got["CPMC"] == got["CPMC_ZH"] if "CPMC_ZH" in got else True
+
+
+def test_CPMC口径是中文译名_而不是旧英文串():
+    """业务 2026-10-21：IGL 按 NGV 口径 —— `CPMC` = 产品名称中文译名。
+
+    旧口径 `23.01;无线胶装书-<系列名>` 是历史 ERP 记录的写法，已作废。
+    档案必须：`cpmc.needs_agent: true` + `cpmc.allow_chinese: true` + 中文占位符。
+    """
+    assert IGL.rule("cpmc.needs_agent") is True
+    assert IGL.rule("cpmc.allow_chinese") is True
+    assert IGL.rule("cpmc.template") == "【中文品名待定】"
+    assert IGL.rule("cpmc.zh_template") == "【中文品名待定】"
+    assert IGL.rule("ecpmc.source_keys") == ["series_name"]
+    got = _map(BIBLE)
+    assert not got["CPMC"].startswith("22.02;"), "CPMC 不许再是「类别;名称-系列」的英文串"
 
 
 def test_审计派生GD_只认与产物字段一致的值():

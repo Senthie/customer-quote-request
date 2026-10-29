@@ -145,20 +145,22 @@ rules:
     order: [CD, KD, GD]       # 客户写 "H x W x D"，第 1 段=长(CD) 第 2 段=宽(KD) 第 3 段=厚(GD)
 
   # ── GD（成品厚度）────────────────────────────────────────────
-  # 客户给了 `D` 就用客户的；没给才由「页数 × 纸张厚度」推算（calculate_thickness）。
-  # ★ 2026-10-29 新增 `boards`：精装皮壳的灰板**必须加上**。
-  #   实单 `BIBLE HEROES Treasury`：64PP/128g 书芯算出 5.16mm，但封面是
-  #   `128gsm Gloss Artpaper over 3mm boards` —— 成品厚 = 书芯 + 前后两块 3mm 灰板 ≈ 11mm。
-  #   语料实证（1597 条方脊精装书里 GD 非 0 的 26 条）：`160*196*10`（3mm 灰板）、
-  #   `210*285*8`（1200g 灰板 = 2mm）、`230*230*10`（1800g 灰板 + 3mm 海绵）——
-  #   全是「书芯 + 两块灰板」。只算书芯会把精装书算薄一半，纸箱/书脊尺寸跟着错。
+  # ★ 2026-10-21 业务拍板（`BIBLE HEROES Treasury` 那单之后）：
+  #   **不做厚度推算**。客户表里写了 `D`（`Size … H x W x D`）就照抄客户的；
+  #   客户没写（`Spine width: To suit extent` / 只给 H x W）→ **GD 落 0**，
+  #   不许按「页数 × 纸张克重」推、更不许估灰板。理由：
+  #   ① 推算值没有客户出处，审计/报价都对不上（推出来的 11.16 客户从不给）；
+  #   ② 语料里业务绝大多数精装单 GD 也是 0（1597 条里 1567 条为 0）；
+  #   ③ 厚度影响纸箱与书脊，猜错的代价比留 0 高（留 0 业务会问，猜错不会）。
+  #   所以 `enabled: false` + `boards.enabled: false` 两处都关；将来若业务要恢复
+  #   「客户没给就推算」，把 enabled 打开即可（代码路径仍在，`boards` 负责灰板补偿）。
   thickness:
-    enabled: true
+    enabled: false
     boards:
-      enabled: true
+      enabled: false
+      # `over 3mm boards` / `3mm灰板` / `3 mm chipboard`
       trigger: "cased|case\\s*bound|hardcover|hard\\s*back|精装"
       source_keys: [cover_material, binding]
-      # `over 3mm boards` / `3mm灰板` / `3 mm chipboard`
       pattern: "(\\d+(?:\\.\\d+)?)\\s*mm\\s*(?:boards?|灰板|chipboard)"
       panels: 2                # 前封面 + 后封面各一块
 
@@ -222,6 +224,29 @@ rules:
   # 只清前缀与包裹引号，不翻译、不改写 —— 清完 `BIBLE HEROES Treasury`。
   series_name:
     strip_pattern: "(?i)^\\s*(?:working\\s+title|w\\.?\\s*t\\.?|series\\s+name|title)\\s*[:：]\\s*"
+
+  # ── 产品名称 CPMC / 产品英文名 ECPMC ───────────────────────────
+  # ★ 2026-10-21 业务拍板：IGL 按 **NGV 口径** 做（此前 IGL 用旧写法
+  #   `23.01;无线胶装书-<系列名>`，那是历史 ERP 记录的样子，不再沿用）。
+  #   新口径：
+  #     CPMC    = 产品名称的**中文译名**（agent 从客户文件译出，脚本不翻译）
+  #     CPMC_ZH = 与 CPMC 同值
+  #     ECPMC   = 报价的**原始产品名**，客户写什么语言就照抄什么（不译不拼类别）
+  #   中文品名是**每单**的，档案里给不出来 → 模板留可见占位符 `【中文品名待定】`，
+  #   交付前由 agent 直接改产物（needs_agent=true 会在日志里点名，也进 cpms_todo）。
+  #   ⚠️ 只改这里不够：tests/test_pipeline.py 的 EXPECTED_VALUES / UNTOUCHED 同步改，
+  #      否则端到端基线立刻红（口径变更四处同步，见总纲）。
+  cpmc:
+    allow_chinese: true      # CPMC 允许中文（新口径就是中文译名）
+    cn_name: ""              # 每单不同 → 留空，占位符 + agent 补
+    template: "【中文品名待定】"
+    zh_template: "【中文品名待定】"
+    needs_agent: true
+  # 产品英文名 ECPMC（ERP 字段 `txtECPMC`，label「产品英文名」＝原始产品名）：
+  # IGL 表里能当品名用的就是 `Series Name`（已是 `Working Title:` 前缀清过的原文）。
+  # 取不到时留空 + WARN，由 `cpms_todo.py` 列为待办，**不许自己编英文名**。
+  ecpmc:
+    source_keys: [series_name]
 
   # 产品类别查表：先走 cplb.map（档案关键词 → 树节点，精确可控），
   # 命中不到再退回 assets/product_categories.xlsx 的 customer_product_categories 列

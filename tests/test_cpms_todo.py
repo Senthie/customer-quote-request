@@ -91,11 +91,17 @@ def test_NGV的ECPMC空着算欠账(processed: Path):
     assert items and items[0]["missing"] == ["ECPMC"]
 
 
-def test_igl的ECPMC空着不算欠账(processed: Path):
-    """igl 业务明确「先不做」（2026-09-24），档案没声明 ecpmc → 空着是正确的，不能报警。"""
-    _task(processed, "igl1", cpms="完整描述", cpmc="23.01;无线胶装书-系列")
+def test_igl也声明了ECPMC_空着同样算欠账(processed: Path):
+    """2026-10-21 起 igl 按 NGV 口径产出 `ECPMC`（报价原始产品名）→ 空着就是缺陷。
+
+    此前 igl「先不做」（2026-09-24），档案没声明 `rules.ecpmc.source_keys`；
+    业务 2026-10-21 拍板「IGL 按 NGV 口径做」→ 档案已声明（取 `series_name`），
+    所以这条从「不报警」改成「算欠账」。
+    """
+    _task(processed, "igl1", cpms="完整描述", cpmc="涂色拼图书")
     _with_profile(processed, "igl1", "igl")
-    assert cpms_todo.iter_incomplete(processed) == []
+    items = cpms_todo.iter_incomplete(processed)
+    assert items and items[0]["missing"] == ["ECPMC"]
 
 
 def test_没有档案信息时不猜ECPMC要不要(processed: Path):

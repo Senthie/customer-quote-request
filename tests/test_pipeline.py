@@ -19,12 +19,19 @@ TEMPLATE = REPO_ROOT / "assets" / "add_customer_quote_request.json"
 EXPECTED_VALUES = {
     "CPDL": "书版", "YYS": 1, "BZ": "美元", "PXH": 1, "KHMBDJ": 0,
     "CPLB": "23.01;无线胶装书",
-    "CPMC": "23.01;无线胶装书-Puzzle & Colour Disney",
+    # ★ 2026-10-21 业务拍板：IGL 按 NGV 口径 —— CPMC = 产品名称中文译名（脚本给占位符，
+    #   agent 交付前补），CPMC_ZH 同值；ECPMC = 报价原始产品名（客户原文照抄）。
+    #   旧口径 `23.01;无线胶装书-Puzzle & Colour Disney` 作废（历史 ERP 记录的写法）。
+    "CPMC": "【中文品名待定】",
+    "ECPMC": "Puzzle & Colour Disney",
     "TZS": 2,
     "CPSL1": 3000, "CPSL2": 5000, "CPSL3": 7500, "CPSL4": 10000,
     "CPSL5": 20000, "CPSL6": 25000, "CPSL7": 30000,
     "CPSL8": 0, "CPSL9": 0, "CPSL10": 0,
-    "CD": 198, "KD": 129, "GD": 6.85,
+    # GD：客户表只给 `198mm x 129mm`（没有厚度）→ **0**。
+    #   2026-10-21 业务拍板：不做厚度推算（旧的 6.85 是「120pp/90g + 250g 封面」算出来的，
+    #   没有客户出处）。客户写了 `D` 就照抄，没写就是 0。
+    "CD": 198, "KD": 129, "GD": 0,
     "Drop_SJFX": "长书脊",
     "ZDFS": "胶装/PAD书",             # 按 ERP 合法枚举（2026-09-23 定口径）
     "DWMC": "本",                    # 业务确认 2026-09-23
@@ -37,7 +44,7 @@ EXPECTED_VALUES = {
 UNTOUCHED = [
     "BDBH", "YWY", "KHZL", "GDY", "Remark", "CPMX",
     "BZFS", "TBLX", "SHFS", "FSCMC", "OLD_KHDDH", "SFYPJ", "Remark1",
-    "CPLX", "KHDDH", "ECPMC", "ZXLB", "ZBLX", "ZXFS", "DKMC",
+    "CPLX", "KHDDH", "ZXLB", "ZBLX", "ZXFS", "DKMC",          # ECPMC 2026-10-21 移出：igl 已开
     "YSLX", "SHDQ", "KHDQ", "BGMS", "Remark4", "Remark3",
 ]
 
@@ -111,19 +118,26 @@ def test_内部字段_ID_标注本次任务(pipeline_run):
 
 
 def test_内部字段_CPMC_ZH_与_CPMC分工(pipeline_run):
-    """`CPMC` 存英文表达、中文表达落 `CPMC_ZH`（业务 2026-09-24）。
+    """`CPMC` = 产品名称（中文译名）、`CPMC_ZH` = 同值、`ECPMC` = 报价原始产品名。
 
-    这份样本是 **igl** —— 它**还没迁移**（未声明 `rules.cpmc.zh_template`）：
-    igl 的 CPMC 历史口径是 `编号;名称-系列`（含中文类别名），英文版怎么写
-    **等业务补充真实 ERP 信息后再处理**（2026-09-24 拍板）→ 见 SKILL.md 第 12 节。
-    所以这里只钉住「字段存在 + 未迁移时为空」，
-    NGV 那种已迁移的严格断言在 tests/test_ngv_profile.py。
+    这份样本是 **igl**。2026-10-21 业务拍板「IGL 按 NGV 口径做」：
+      ① `CPMC` 不再是 `编号;类别-系列名` 的英文串，而是**产品名称的中文译名**；
+      ② 中文品名是每单不同的，脚本不翻译 → 给可见占位符 `【中文品名待定】`
+         （档案 `cpmc.needs_agent: true`），**必须 agent 交付前补全**；
+      ③ `ECPMC` = 客户文件里的原始产品名，照抄不译（igl 取 `series_name`）。
+    旧口径（`23.01;无线胶装书-Puzzle & Colour Disney`）已在 2026-10-21 作废。
     """
+    import cpms_todo
+
     out = pipeline_run["erp"]
     assert out["ID"], "内部字段 ID 必须有值"
-    assert "CPMC_ZH" in out, "内部字段 CPMC_ZH 必须在产物里（哪怕为空）"
-    assert out["CPMC_ZH"] == "", "igl 尚未声明 zh_template → CPMC_ZH 为空（待补真实 ERP 信息）"
-    assert out["CPMC"] == EXPECTED_VALUES["CPMC"], "未迁移的客户 CPMC 保持历史写法不变"
+    assert "CPMC_ZH" in out, "内部字段 CPMC_ZH 必须在产物里"
+    assert out["CPMC"] == cpms_todo.CPMC_PLACEHOLDER, \
+        "脚本不翻译品名 → CPMC 必须是可见占位符（不是空、不是旧英文串）"
+    assert out["CPMC_ZH"] == out["CPMC"], "CPMC_ZH 与新口径 CPMC 同值（都要 agent 补）"
+    assert out["ECPMC"] == "Puzzle & Colour Disney", \
+        "ECPMC = 客户原文品名（series_name 照抄，不翻译、不拼类别）"
+    assert "无线胶装书-" not in out["CPMC"], "旧口径已作废：CPMC 不再是 `类别-系列名` 英文串"
 
 
 def test_内部字段_Reminder_把提醒固化进产物(pipeline_run):

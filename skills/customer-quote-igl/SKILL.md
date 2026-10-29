@@ -21,10 +21,13 @@ metadata:
 > 业务给参照单先问「比哪一层」（默认学 `CPMS`）、`CPMS` 严格模式、「没有就是没有」、
 > 口径变更四处同步、交付四道门。
 >
-> ⚠️ **`CPMC` 口径正在变更（2026-10-19 业务拍板）**：新口径是「`CPMC` = 产品名称（中文译名）」，
-> 业务员代号 `KM` 落 `YWY`，品牌/类别/FSC 都不进产品名。**NGV 已切换**，IGL 仍用旧写法
-> `23.01;无线胶装书-<系列名>`（端到端基线钉着）。给 IGL 改之前**先问业务**，
-> 改则四处同步（档案 → main.py → `tests/test_pipeline.py` 基线 → 本文件 + 总纲）。
+> ★ **`CPMC` / `ECPMC` / `GD` 三条口径 2026-10-21 已定案（业务拍板，IGL 跟 NGV）：**
+> ① `CPMC` = 产品名称的**中文译名**（脚本给占位符 `【中文品名待定】`，agent 交付前补），
+> `CPMC_ZH` 同值；旧写法 `23.01;无线胶装书-<系列名>` **作废**（那是历史 ERP 记录的写法）。
+> ② `ECPMC` = 报价**原始产品名**（照抄客户原文，不译不拼类别；igl 取 `series_name`）。
+> ③ `GD` **不做推算** —— 客户写了厚度就照抄，没写就是 `0`。
+> 改口径 = 四处同步：档案 `customers/igl.yaml` → `scripts/main.py` → `tests/test_pipeline.py`
+> 基线（`EXPECTED_VALUES` / `UNTOUCHED`）+ `tests/test_igl_profile.py` → 本文件 + 总纲 `SKILL.md`。
 
 - 客户：IGL（香港书商；许可证 `LICENSE` 同仓库）
 - 状态：`calibrated`（用真实报价表 `PUZZLE COLOUR DISNEY.xlsx` 校准）
@@ -89,10 +92,12 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 | ERP 字段 | 来源 |
 |----------|------|
 | `CPLB` 产品类别 | `rules.cplb.map` 关键词 → 树节点（样本 → `23.01;无线胶装书`）。长正则在前，`board book` 限定写法防误命中 |
-| `CPMC` 产品名称 | 默认模板 `{cplb}-{series_name}` → `23.01;无线胶装书-Puzzle & Colour Disney` |
+| `CPMC` 产品名称 | ★ 2026-10-21 新口径：**中文译名**（档案 `cpmc.template: "【中文品名待定】"` + `needs_agent: true`）→ 脚本给占位符，agent 交付前写真的译名（`BIBLE HEROES Treasury` → `圣经英雄故事珍藏集`）。旧写法 `{cplb}-{series_name}`（`23.01;无线胶装书-Puzzle & Colour Disney`）**已作废** |
+| `CPMC_ZH` | 与 `CPMC` 同值（同一次补写里两个字段一起改） |
+| `ECPMC` 产品英文名 | `rules.ecpmc.source_keys: [series_name]` → 客户原文品名照抄（`Puzzle & Colour Disney` / `BIBLE HEROES Treasury`），先被 `series_name.strip_pattern` 洗掉表单前缀与引号 |
 | `TZS` 款数 | `number_of_titles` / `versions`（样本 2） |
 | `CPSL1`~`CPSL10` | **档位口径**（`quantity.mode: tiers`）：客户给一排档位按列序依次落 `CPSL1..n`，其余 `0`（样本 3000/5000/7500/10000/20000/25000/30000） |
-| `CD`/`KD`/`GD` | `size` 按 `size.order: [CD, KD, GD]`（客户写 `H x W x D`）。样本 `198 × 129 × 6.85`；`GD` 由页数+纸张算（`extent/2 × 内页厚 + 封面厚`） |
+| `CD`/`KD`/`GD` | `size` 按 `size.order: [CD, KD, GD]`（客户写 `H x W x D`）。样本 `198 × 129`（客户**没给厚度**）→ `GD=0`。★ 2026-10-21：**`thickness.enabled: false` + `boards.enabled: false`，不做任何厚度推算**；客户写了 `D` 就照抄，没写就是 0 |
 | `ZDFS` 装订方式 | `rules.binding.map`（`perfect bound`/`paperback`/`无线胶装` → `胶装/PAD书`），未命中用 `default`（同样必须合法） |
 | `Drop_SJFX` 书脊方向 | `spine.mode: cd_vs_kd`（`CD > KD` → `长书脊`）。样本 `198×129` → `长书脊` |
 | `DWMC` 单位 | 档案固定值 `本` |
@@ -111,15 +116,15 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 
 `BDBH` `YWY` `KHZL` `GDY` `Remark` `CPMX`（ERP 自动带出，业务已确认留空即正确）、
 以及 IGL 样本里客户文件根本没提的 `BZFS` `TBLX` `SHFS` `FSCMC` `OLD_KHDDH` `SFYPJ`
-`Remark1` `CPLX` `KHDDH` `ECPMC` `ZXLB` `ZBLX` `ZXFS` `DKMC` `YSLX` `SHDQ` `KHDQ`
+`Remark1` `CPLX` `KHDDH` `ZXLB` `ZBLX` `ZXFS` `DKMC` `YSLX` `SHDQ` `KHDQ`
 `BGMS` `Remark4` `Remark3` —— 它们应**等于模板默认值**，`tests/test_pipeline.py`
 的 `UNTOUCHED` 列表逐个断言。往这些字段里加逻辑前先想清楚：**是通用能力还是 IGL 特有**。
 
-> ★ **`ECPMC`（产品英文名）2026-10-20 的业务口径**：NGV 已切到「`CPMC`=中文品名 / `ECPMC`=英文原文」，
-> **IGL 明确不改**（`CPMC` 仍是 `23.01;无线胶装书-<系列名>`，`ECPMC` 保持空）。
-> 所以 IGL 的 `ECPMC` 留在 `UNTOUCHED` 里是正确的。若业务以后要开：档案加
-> `rules.ecpmc.source_keys: [series_name]`，**同时**把 `ECPMC` 从 `UNTOUCHED` 移出并更新
-> `tests/test_pipeline.py` 基线 —— 只改档案会让基线测试红。
+> ★ **`ECPMC` 2026-10-21 起不再留空**：业务拍板「IGL 按 NGV 口径做」→ 档案已声明
+> `rules.ecpmc.source_keys: [series_name]`，`ECPMC` = 客户原文品名，并已从 `UNTOUCHED` 移出。
+> `cpms_todo.py` 现在会把「igl 单 ECPMC 空着」列为欠账（`tests/test_cpms_todo.py` 钉着）。
+> 系列名会被 `series_name.strip_pattern` 洗掉 `Working Title:` 前缀与包裹引号 ——
+> `main.py` 的 ECPMC 分支用的是**洗过的** `series_name`（否则同一单 CPMC 干净、ECPMC 带前缀）。
 
 ---
 
@@ -146,9 +151,9 @@ uv run ./scripts/erp_schema.py --check <ERP JSON 路径>
 
 ```
 CPDL=书版  YYS=1  BZ=美元  PXH=1  KHMBDJ=0
-CPLB=23.01;无线胶装书   CPMC=23.01;无线胶装书-Puzzle & Colour Disney   TZS=2
+CPLB=23.01;无线胶装书   CPMC=【中文品名待定】(agent 补)   ECPMC=Puzzle & Colour Disney   TZS=2
 CPSL1..7 = 3000/5000/7500/10000/20000/25000/30000（CPSL8~10 = 0）
-CD=198  KD=129  GD=6.85   Drop_SJFX=长书脊   ZDFS=胶装/PAD书   DWMC=本
+CD=198  KD=129  GD=0(客户没给厚度)   Drop_SJFX=长书脊   ZDFS=胶装/PAD书   DWMC=本
 CPSX=3岁以上（要寄第三方测试）   JHRQ=2027-05-01   KHDH=23992 / 23993
 CPMS=''（必须为空，交给 agent）
 抽取明细：unmatched_labels=[]，quantity_tiers=[3000,5000,7500,10000,20000,25000,30000]
@@ -186,14 +191,16 @@ CPMS=''（必须为空，交给 agent）
 | 问题 | 现象 | 修法 |
 |---|---|---|
 | **`ZDFS` 落错** | `cased` 不在 `binding.map`、`case bound` 也匹配不上（cased ≠ case bound）→ 落到最后的 `sewn` → **车线书** | map 里加 `cased` / `case bound` / `hardcover` / `hardback → 精装书`，**排在 `sewn` 前面**。语料 1597 条 `CPLB=方脊精装书` 里 1588 条 `ZDFS=精装书`（99.4%）；`车线书` 那 157 条配的是 `普通车线书`/`精装车线书`（25 类软封面车线） |
-| **`GD` 漏灰板** | 旧公式只有「内文 + 封面纸」→ 64PP/128g 出 5.16mm，成品实际约 11mm | 新 `rules.thickness.boards`（`board_allowance()`）：命中精装特征就 `+ 板厚 × 2`。业务非 0 的 26 条精装样本全是「书芯+两块板」（`160*196*10`、`210*285*8`、`230*230*10`） |
-| **系列名带表单痕迹** | `Series Name = Working Title: 'BIBLE HEROES Treasury'` → CPMC 变成 `22.02;方脊精装书-Working Title: 'BIBLE HEROES Treasury'` | `rules.series_name.strip_pattern`：只清前缀与包裹引号，不翻译 |
+| **`GD` 一度算错** | 旧公式只有「内文 + 封面纸」→ 64PP/128g 出 5.16mm。当日加了 `rules.thickness.boards`（命中精装就 `+ 板厚 × 2`）算出 11.16mm —— **业务 2026-10-21 否掉了整个推算**：「GD 设置为 0」「没有厚度就设置为 0」 | 现在 `thickness.enabled: false` + `boards.enabled: false`：客户给了 `D` 就照抄，没给就是 `0`。`board_allowance()` 代码保留（通用能力，别的客户打开开关即可用），`tests/test_igl_profile.py` 同时钉住「igl 关掉 → 0」和「打开时 3mm×2=6mm 仍算得对」 |
+| **系列名带表单痕迹** | `Series Name = Working Title: 'BIBLE HEROES Treasury'` → 旧口径下 CPMC 变成 `22.02;方脊精装书-Working Title: 'BIBLE HEROES Treasury'` | `rules.series_name.strip_pattern`：只清前缀与包裹引号，不翻译。2026-10-21 起系列名的去处是 **`ECPMC`**（`BIBLE HEROES Treasury`），`CPMC` 是中文译名位 —— 两条路径都要用洗过的系列名 |
 | **环衬/实际尺寸抽不出** | `End Paper Material`、`End Paper Printing Spec`、`Size (actual) H x W x D mm` 三行没有别名 → CPMS 只能手读原文 | 补规范键 `ends_material` / `ends_printing_spec` / `size_actual`（`CANONICAL_KEYS` 同步加） |
 
-**派生 GD 与审计的冲突**（通用经验）：概要行 `【250*210*11.16】` 里的 GD 是**算出来的**，
-`cpms_content_audit` 按子串找原文必然报「无出处」→ 逼人删掉或改成 0。
-现在审计有 `derived` 通道：数值 == 当前产物 `GD` 字段才放行并打印理由（`cpms_lint` CPMS011 已保证
-概要行与字段一致），改个数字就立刻不被放行。**别再为过门禁把 GD 写成 0。**
+**派生值 GD 与审计的冲突**（通用经验，别的客户打开厚度推算时会再遇到）：概要行
+`【250*210*11.16】` 里的 GD 若是**算出来的**，`cpms_content_audit` 按子串找原文必然报「无出处」→
+逼人删掉或改成 0。审计有 `derived` 通道：数值 == 当前产物 `GD` 字段才放行并打印理由
+（`cpms_lint` CPMS011 已保证概要行与字段一致），改个数字就立刻不被放行。
+**但现在 IGL 不再推算 GD**（业务 2026-10-21），所以 IGL 单的概要行厚度就该是客户给的或 `0` ——
+`0` 也必须写进概要行（`书籍方向：【长书脊】产品规格：【250*210*0】`），lint 要求三段齐全。
 
 **邮件重复投递**：同一封 `.eml` 被投了 3 份（md5 相同），cron 5 分钟扫描跑出 3 个任务目录
 （`__1` / `__2` 后缀）。处理顺序：先 `md5sum` 去重 → 只保留一个任务目录 → 其余移
@@ -212,6 +219,9 @@ CPMS=''（必须为空，交给 agent）
 - [ ] `KHDH` 来自邮件或附件列，允许 `23992 / 23993` 这种多号写法
 - [ ] 档位数与客户表一致的**列序**（这是「档位顺序口径」待确认项，若业务改口径需重写规则）
 - [ ] `CPMS` 已由 agent 手写（非空），**严格模式**：只写客户文件里的事实，确认单/历史单据的补充信息不进 CPMS
+- [ ] ★ `CPMC` / `CPMC_ZH` 已由 agent 译成中文品名（**不能留 `【中文品名待定】` 占位符**，两者同值）
+- [ ] ★ `ECPMC` 是客户原文品名（照抄不译）；空着就说明「客户原文没给」而不是漏填
+- [ ] ★ `GD`：客户给了厚度 → 照抄；没给 → `0`（概要行也写 0）
       —— 业务给真实单据时，目的是**学交付物怎么写**，不是逐字段对账；确需对账也只报「真错 / 口径差 / 格式差」三层
       （口径与依据见 `customer-quote-ngv` 3.2、总纲第 5 节严格模式）
       —— 规则与五种「柔性造数」见 `customer-quote-request/references/data-provenance-strict-mode.md`
@@ -234,11 +244,19 @@ CPMS=''（必须为空，交给 agent）
 IGL 专属七条：
 
 1. **`CPMC`/`CPMC_ZH` 写中文品名**（同值、反映产品实质、不带业务员/品牌/类别/FSC），
-   例如 `Working Title: 'BIBLE HEROES Treasury'` → `圣经英雄故事珍藏集`。
-   这与本文 §4 的历史模板 `{cplb}-{series_name}`（`23.01;无线胶装书-…`）**不同** ——
-   补写路径以任务说明为准；**不要**因为「与基线写法不一致」而卡住或写占位符，
-   在汇报里注明「CPMC 按运营口径改为中文品名，与 `tests/test_pipeline.py` 基线口径不同」即可。
-2. **`ECPMC` 保持空**：igl 未声明 `rules.ecpmc.source_keys`（见 §5），不要照抄 `series_name`。
+   例如 `Working Title: 'BIBLE HEROES Treasury'` → `圣经英雄故事珍藏集`；
+   `Puzzle & Colour Disney` → `拼图涂色迪士尼`。
+   这**就是**现在的主口径（2026-10-21 起与 `tests/test_pipeline.py` 基线一致），不再是「补写路径例外」。
+   脚本给的是可见占位符 `【中文品名待定】` —— **不许交付带占位符的产物**。
+2. **`ECPMC` 必须填**：igl 已声明 `rules.ecpmc.source_keys: [series_name]`（见 §5），
+   值是客户原文品名（照抄、不译、不拼类别）。脚本能抽到就自动填；
+   抽不到（纯文本邮件没系列名）要 agent 从客户原文抄，抄不出来就**留空并在汇报里说明**，
+   不许自己编英文名。`cpms_todo.py` 会把空 ECPMC 列为欠账。
+   `rules.ecpmc.source_keys: [series_name]`，所以 `cpms_todo.py` 会把它列为必填 ——
+   不补就永远 `CPMS_TODO: 1`。取值 = 客户 `Series Name` 去掉表单前缀与包裹引号
+   （`Working Title: 'BIBLE HEROES Treasury'` → `BIBLE HEROES Treasury`）。
+   ⚠️ §5 里「IGL 明确不改 / `ECPMC` 保持空」是 2026-10-20 的旧口径，已被本轮取代；
+   判据以档案与 `cpms_todo.py` 为准（档案声明了就必填）。
 3. **`YWY` 实测为空**（`igl.yaml` 的 `erp_fixed` 里没有 `YWY`，只有 `ngv.yaml` 配了 `KM`），
    而总纲 §4.1/4.3 写「脚本固定 `KM`」—— 属**文档与实现漂移**。
    补 CPMS 时**只改 4 个字段**（`CPMS`/`CPMC`/`CPMC_ZH`/`ECPMC`），不要顺手补 `YWY`；
@@ -260,7 +278,15 @@ IGL 专属七条：
    全篇凡提灰板一律写 g（`装订：精装，锁线，方脊，封面裱1800g灰板，环衬粘牢`）→ 0 warn。
 6. **档位列表用顿号**：`3k、5k、7.5k、10k、20k、25k、30k`。用 `/` 会被印色正则抓成 `5/10`
    报 CPMS052（与总纲 gotchas §3 同源）。
-7. **精装 `GD` 已含灰板补偿**（2026-10-29 引擎新增 `rules.thickness.boards`）：
-   `GD = 书芯 + 前后两块灰板`，同一份表重跑可能出现 5.16 → 11.16 的差。概要行必须跟**本任务**
-   JSON 的 `GD` 一致，别照抄另一份重复产物的数字。
+7. **`GD` 不做推算**（2026-10-21 业务拍板）：客户表里写了 `D` 就照抄；没写（`Spine width:
+   To suit extent` / 只给 `250 x 210`）就是 **`0`**，概要行也必须写 `0`
+   （`产品规格：【250*210*0】`）。别再用「书芯 + 灰板」推 11.16 ——
+   旧产物里的 11.16 已按业务口径改成 0，`CPMS_来源对照.md` 同步改了。
+8. **补完必须复跑 `uv run ./scripts/cpms_todo.py`，直到 `CPMS_TODO: 0`** ——
+   清单是当下快照，补完 `CPMC_ZH` 后可能冒出 `ECPMC`（档案在会话中途被 sibling 提交过，
+   或 `_requires_ecpmc()` 读档案失败时静默返回 False）。判「该不该填」以**当前档案**为准，
+   不以「客户名叫 igl」为准。首轮清单 ≠ 全部工作量。
+   同时**同步 `CPMS_来源对照.md`**：口径一变（`CPMC` 换中文名、`ECPMC` 由空变有值），
+   那张表对应行必须跟着改，否则交付给业务的是两份互相矛盾的文件。
+   详见 `customer-quote-request/references/cpms-backfill-gotchas.md` §8 / §11 / §12。
 

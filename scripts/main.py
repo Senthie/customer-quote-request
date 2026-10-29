@@ -927,9 +927,14 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     ecpmc_keys = profile.rule("ecpmc.source_keys", []) or []
     ecpmc_value, ecpmc_src = "", ""
     for key in ecpmc_keys:
-        val = str(customer_data.get(str(key)) or "").strip()
+        k = str(key)
+        # ★ 系列名已经在上面被 rules.series_name.strip_pattern 洗过（`Working Title: '…'`
+        #   → `…`）。ECPMC 要的是**清干净后的原文**，不是带表单痕迹的原始格值 ——
+        #   否则同一份单里 CPMC 干净、ECPMC 却带 `Working Title:` 前缀。
+        val = (series_name if k == "series_name"
+               else str(customer_data.get(k) or "")).strip()
         if val:
-            ecpmc_value, ecpmc_src = val, str(key)
+            ecpmc_value, ecpmc_src = val, k
             break
     # ★ 文件夹/压缩包单元：里面的「规格样张」只覆盖其中一款，它的品名不是这份报价
     #   的品名（实测 LG26090401：样张 `Wimmelbuch Peppa Pig`，本单是 10 款的
