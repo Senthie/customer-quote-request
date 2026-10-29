@@ -54,6 +54,11 @@ detect:
     - "Finished binding"
     - "euroscale"
     - "Technical Specification and Print Runs"
+    # 2026-10-29：Lidl 的 IAN 项目也是走 NGV 这条线（VEMAG 接单 → 我们报价），
+    # 但附件是 Lidl 自己的 `Anlage_<IAN>` 款量表，上面那些 enquiry 标签一个都没有，
+    # 而且是 Rex 内部转发（发件人不是 vemag-medien.de）→ 靠这两行表头/交期行识别。
+    - "Overview of Countries, Quantities, and Titles"
+    - "Delivery Time: KW"
   min_signature_hits: 2
   # 发件方域名（Naumann & Göbel / VEMAG 出版社集团）；域名 30 分，配合正文特征才稳
   sender_domains:
@@ -320,11 +325,39 @@ rules:
     # NGV 只用 section_pairs。**不要**加 auto_pairs —— NGV 表里 `paper`
     # 这类标签在 B 列反复出现，平铺策略会抓出一堆错值（校准前实测：
     # format 变成 145、series_name 变成签字人 Ebers, Lea）。
-    strategies: [section_pairs]
+    # `lidl_anlage`（2026-10-29 新增）专吃 Lidl 发来的 `Anlage_<IAN>` 多国别款量表：
+    # 那种表一行一款一市场，数量/语言码/结构全在固定列上，section_pairs 完全抽不到
+    # （实测只抽出一个 `quantity: 'Spaltenbeschriftungen'` 的垃圾值）。
+    strategies: [lidl_anlage, section_pairs]
     section_col: 0          # A 列 = 分区
     label_col: 1            # B 列 = 标签
     first_value_col: 2      # C 列起 = 值
     max_label_len: 60       # >60 字符的单元格一律不当标签（保护 B24 的长文本）
+    # ★ Lidl `Anlage_<IAN>` 表（2026-10-29 实单 IAN 574237 / 574239 校准）：
+    #   H2 = `IAN 574237 K Motiv Puzzlebücher Overview of Countries, Quantities, and Titles`
+    #   A 列国别分区标题（`Griechenland:` / `Online Shop: DE unmixed`），
+    #   数据行 F=article、H=title、J=quantity/title、E=语言码、O=尺寸、P=结构、S=材质。
+    #   列号是 0 基（pandas 矩阵下标），与 Excel 列字母差 1。
+    lidl_anlage:
+      enabled: true
+      sheet_prefix: "Anlage"          # Pivot / Tabelle1 是同一批数据的另一种排布，跳过
+      title_pattern: "IAN\\s*(\\d{6})\\s*(.*?)\\s*Overview"
+      delivery_label: "Delivery Time"
+      article_pattern: "^\\d{6}_[A-Z]$"
+      columns:
+        pub: 3        # D 出版社
+        lang: 4       # E 语言码（20/ 德国 22/ 法国 …）
+        art: 5        # F article
+        title: 7      # H title /style
+        assort: 8     # I assortiment
+        qty: 9        # J quantity / title
+        weight: 13    # N weight
+        dim: 14       # O dimension
+        tech: 15      # P quality / technical specifications
+        brand: 16     # Q Brand reference
+        material: 17  # R material
+        spec: 18      # S material（含材质与克重明细）
+        color: 19     # T color
   size:
     unit: mm
     # TPS 是「先宽后高」（148 x 210 portrait）。
@@ -405,6 +438,12 @@ rules:
     match_keys: [binding, binding_instructions]
     map:
       "safety saddle-stitched": 骑马钉      # CU26051601-01 → ERP 骑马钉 ✓
+      # ★ 2026-10-29（A00152 / CU26093001-01 option B）客户写的是
+      #   `softcover, safety saddle-stitching`（-ing 形式），旧 key 是 -ed → 不命中，
+      #   ZDFS 落空。两种时态都要认。
+      "safety saddle-stitching": 骑马钉
+      "saddle-stitching": 骑马钉
+      "saddle stitch": 骑马钉
       "perfect binding": 胶装/PAD书          # CU26072302 → ERP 胶装/PAD书 ✓
       "open pad": 胶装/PAD书
       "ridged box": 套装                     # CU26061701 → ERP 套装 ✓
@@ -568,7 +607,11 @@ rules:
     # 装订边位置 ≠ ERP 的长/短书脊）。识别不到时 Drop_SJFX 走 rules.spine.default。
     # ⚠️ 2026-10-20：加 `side` —— 客户写 `perfect binding at the side` 时旧正则抓不到，
     #   书脊方向就白丢了（`at long side` 这种没 the 的写法仍抓不到，靠 binding_side 数字兜）。
-    - { key: binding_direction, pattern: "(?i)(?:at|on|along)\\s+the\\s+(?:top|bottom|left|right|head|spine|side|short|long)\\b[\\w ]{0,12}" }
+    # ★ 2026-10-29 加「必须先出现 binding/stitch/Bindung/装订」的上下文约束：
+    #   A00152 那封邮件的上一轮往来里写着 `specs are mentioned at the bottom left`
+    #   （说的是 Excel 里规格在左下角），旧正则把它当成装订边 → Drop_SJFX 落「短书脊」。
+    #   捕获组只留方向词本身（`at the top`），测试与 CPMS 都按这个字符串用。
+    - { key: binding_direction, pattern: "(?i)(?:binding|stitch\\w*|bindung|装订)[^.\\n]{0,40}?((?:at|on|along)\\s+the\\s+(?:top|bottom|left|right|head|spine|side|short|long)\\b[\\w ]{0,12})" }
     # 款数：纯文本 enquiry 里写成 `3 titles (all in one language):`（没有 `versions:` 标签）。
     # ⚠️ 必须锚在**行首且紧跟括号**，否则会抓到邮件串里客户自己的疑问句
     #    `it should be 60,000cps/15,000cps = 4 titles instead of 3 titles`
@@ -577,6 +620,19 @@ rules:
     # 香港单号：附件文件名里带「香港单号 CU26072301」，表内也常有。
     # ⚠️ 落到 **KHDDH**（模板第 43 键，中文标签就是「香港单号」），不是 KHDH。
     - { key: khddh, pattern: "香港单号\\s*([A-Z]{2}\\d{6,}(?:-\\d+)?)" }
+    # Lidl 的项目号（IAN = 德国的商品编号）。不确定订单号，但它是**客户原文里
+    # 唯一能标识这一单的编号** —— 进 scanned 供 CPMS / 汇报引用，不映射 ERP 字段。
+    - { key: ian, pattern: "IAN\\s*(\\d{6})" }
+    # ★ 2026-10-29 CU26093001-01（A00152）实单：客户回信只说「option B …The rest
+    #   remains as before」，款数/语言数/总数量全在**同一封邮件引用的上一轮往来**里
+    #   （`6 Titles 6 Language` / `Total QTY: 112,266 cps in total`）。
+    #   `versions_from_email` 只读最新一封（那是为了防止引用旧项目串数），所以这里
+    #   用全表扫描兜：整串一起抓成一个值，再交给 versions.title_pattern /
+    #   language_pattern 各自取数 —— 只抓数字会丢掉「哪个是款、哪个是语言」。
+    - { key: versions, pattern: "(\\d+\\s*titles?\\s*[,+/]?\\s*\\d+\\s*languages?)" }
+    # 总数量：`Total QTY: 112,266 cps in total`（德式/英式千分位都交给
+    # parse_single_quantity 归一）。只在正文里出现时用它兜底。
+    - { key: quantity, pattern: "(?i)total\\s*qty\\s*[:：]\\s*(\\d[\\d.,]*)" }
 
 # ── 邮件规则：两组单号必须分开 ───────────────────────────────────
 # 2026-09-24 修正：KHDH 与 KHDDH 只差一个字母，此前把附件里的「香港单号」

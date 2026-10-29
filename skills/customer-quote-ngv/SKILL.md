@@ -271,7 +271,7 @@ NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件�
 |---|---|---|
 | `CPMC` | **用我们的中文译名** | 真实录入/权威导出写 `联系人/说明 类别/原品名(FSC Mix)`（`Corinna/方脊锁线精装书（有鱼鳞片+布）/…(FSC Mix)`）是业务侧**旧写法**，不改；`ngv.yaml` 仍 `needs_agent` |
 | `SFYPJ` | **只填布尔**：有配件 `true`、无 `false` | 档案 `rules.accessories` 关键词判（aufsteller/stand/sequin/patch/贴片…），**不按 specials 非空**（那里还装圆角/光油）；`Remark1`（自厂购/外购）仍留空 |
-| 精装封面面纸 | **140g光粉**（客户 enquiry 写 128g 也按 140g） | `customers/ngv.cpms_accepted.json` 口径白名单 + `cpms_content_audit --accepted`；CPMS 备注写明「客户写 128g、按旧单口径取 140g、待确认」 |
+| 精装封面面纸 | **140g光粉**（客户 enquiry 写 128g 也按 140g） | ★**只适用于有「再版 / 沿用旧单」证据的单**（CU26072401 邮件明写 reprint of PO#13826）。**没有这种证据的普通新单按客户原文写** —— 2026-10-29 `PR-00096460` 客户写 `128 gsm glossy art paper` 即写 `128g光粉`，audit 0 无出处、未动白名单。口径白名单在 `customers/ngv.cpms_accepted.json`，用 `cpms_content_audit --accepted` 放行并打印理由；真按 140g 写时 CPMS 备注必须写明「客户写 128g、按旧单口径取 140g、待确认」 |
 | `KHCPMC` | **不补**进我方 59 字段 | 真实导出多这一列，业务确认不跟 |
 
 ### 140g 的来源（客户 enquiry 没写，凭什么写 140g）
@@ -284,16 +284,103 @@ NGV 的 Wimmelbuch / BB 书项目常是**两附件一单元**，而两份文件�
 
 → 结论写进白名单理由，交付时 CPMS 备注同时点名「待客户确认」，不许静默替换。
 
+### 落地这几条时踩到的两件事（下次直接照做）
+
+- **业务给的是一句话决策时（`1：… 2：… 3：…`）**，落地清单是**七处**：
+  引擎 / 档案 / `erp_diff.json`（字段口径）/ `cpms_accepted.json`（CPMS 内容口径）/ 总纲 SKILL /
+  本技能 / 测试。运行细节与模板见 `references/erp-record-calibration-playbook.md` §2、§6。
+- **改口径必然弄红旧测试**（本次 `SFYPJ`）—— 那是预期。**连断言语义一起改**并在 docstring
+  写「旧口径作废 + 日期」，别为了让测试变绿直接删断言。审计报「0 无出处」时先自查语料里
+  有没有混进我们自己的产物（同 playbook §7）。
+
 > 本单完整复盘（两份文件的原始数据、5 个字段落错、CPMS 成品与取舍）：`references/bb书与款量附表-a00142.md`。
 > 其中的 **§7「重跑一单的正确姿势」**：把单元目录（**含 `_email.meta.json`**）拷到 `/tmp/` 再跑
 > `main.py` → 写 CPMS → 四道门 → 旧目录 `mv processed/_superseded_<日期>/`。
 > ⚠️ 漏拷 `_email.meta.json` → `TZS`/`YYS`/`ECPMC` 三条邮件兜底**全失效**，而且四道门照样全绿。
 
+## 1.10 ★ 第四种形态：Lidl `Anlage_<IAN>` 多国别款量表（`.xlsm`，2026-10-29 实单 574237 / 574239）
+
+Rex 内部转发 VEMAG 的 Lidl 项目时，附件是 **Lidl 自己的表**，不是 NGV 的 enquiry 表单：
+
+```
+H2   IAN 574237 K Motiv Puzzlebücher Overview of Countries, Quantities, and Titles
+H4   Delivery Time: KW 24 / 2027:  |  all countries
+r9   A=Griechenland:            ← 国别分区标题（A 列，结尾冒号；Online Shop 段没有冒号）
+r11  A=ArtNr. … F=article: H=title /style J=quantity /title O=dimension P=结构 S=材质
+r12  D=5/ E=28/ F=574237_A G=/FSM H=Match it Puzzle Book - DINOSAURS J=956 …
+rN   H=total: I=10 J=4780      ← 分区合计，**不参与累加**
+另两张表：Pivot（交叉表，`Summe von quantity/title` + Gesamtergebnis）、Tabelle1（平铺）
+```
+
+**策略：`rules.layout.strategies: [lidl_anlage, section_pairs]`**（`extract_fields._extract_lidl_anlage`）。
+它只认工作表名以 `Anlage` 开头的表；命中后同一文件里的 Pivot / Tabelle1 **整张跳过**
+（否则 section_pairs 会从 Pivot 抽出 `quantity: 'Spaltenbeschriftungen'` 这种垃圾值，
+数量还会重复计）。产出规范键：`product_name`（标题行项目名）/ `quantity`（明细行累加）/
+`versions`（`<款数> titles, <语言数> languages`）/ `size`（cm→mm）/ `specials` / `text_material` / `notes`（交期）。
+
+实测两份与客户 Pivot 的 `Gesamtergebnis` **逐格相等**：IAN 574237 = 51,460（5 款，24 语言），
+IAN 574239 = 365,340（6 款，25 语言）。
+
+四个必踩的坑：
+
+1. **`.xlsm` 要当成表格加进四处清单**：`extract_fields.TABLE_SUFFIXES`、`input_unit.TABLE_SUFFIXES`、
+   `main.SUPPORTED_INPUT_SUFFIXES`、`ingest_email.SUPPORTED_ATTACHMENTS`。
+   漏 `main.py` 那处 → 步骤 1 直接「不支持的格式 .xlsm」并把文件搬进 failed/；
+   漏 `main.py` 的**内容探针**（`probe_member.suffix in (".xlsx", ".xlsm", …)`）→ 正文不参与识别，
+   只凭文件名 `Puzzle` 判成 **igl（10 分）**，整单口径全错。
+2. **客户表的 `ArtNr` 整列可能是别的 IAN**：574237 那张表里，除希腊以外的所有分区都写着
+   `574239_A…E`（客户复制了另一份文件只改了标题）。**项目号看 H2 标题行的 IAN，不要拿 F 列当款号**，
+   并在汇报里点名这处客户数据缺陷。
+3. **一个 xlsm 里的多款可能不同结构**：574239 的 6 款 = 3 款滑动发声（皮壳 2mm 灰板 → `27.19;精装音乐BB书(线路)`）
+   + 1 款亮灯书（400gsm 封面无灰板 → `27.18;普通音乐BB书(线路)`）+ 2 款揭页发声（→ `27.05;普通揭页BB书`）。
+   一张 ERP 单只有一个 `CPLB`/`ZDFS` → **先问业务整单报还是按结构拆**，别自己挑一个。
+4. **语言数只算「有量」的语言码**：瑞士法语/意大利语段常年是 0，算进去 YYS 就多。款数按标题去重。
+
+**类别口径（书目树 criteria + 语料实证，别凭产品名猜）**
+
+| 客户原文结构 | CPLB | 依据 |
+|---|---|---|
+| `21pcs Puzzle pieces` 打散件 + 书 + `Rigid box` | `29.02;砌图套装` | 树 29.02「打散后的砌图跟其他产品/物料组合而成」；`total: 26.07` 那类「内文有砌图」才是 27.03/27.04 |
+| 内藏 `sound mould` / `light module` + 皮壳（2mm chipboard 面纸） | `27.19;精装音乐BB书(线路)` | 树 27.19「封面有灰板包皮壳 + 内藏软线路音乐器」；外露音乐器才是 27.16 |
+| 内藏发声/灯光但封面无灰板 | `27.18;普通音乐BB书(线路)` | 语料 `YC26061601 渐变亮灯普通BB书`、`YJ25101701 亮灯书` 都落这条 |
+| 揭页 + 发声 | `27.05;普通揭页BB书` | 树 27.05「内文有揭页」 |
+
+`SFYPJ`：发声/灯光模组 → `true`（语料里音乐 BB 书全是「是」）；纯砌图套装 → `false`（`LG26041002` / `XJ23112803` 都是「否」）。
+`ZDFS` 语料：滑卡/亮灯/4-5 音的内藏线路 → `慢线BB书`；砌图 → `快线BB书`/`中线BB书`（两者都有先例，属生产口径，交业务定）。
+
+## 1.11 ★ 邮件线程「其余不变」时，款数/数量在**引文**里（CU26093001-01 / A00152，2026-10-29）
+
+客户回信只写新规格 + `The rest remains as before.`，`6 Titles 6 Language` 和
+`Total QTY: 112,266 cps in total` 都在**被引用的上一轮往来**里。而 `versions_from_email()`
+只读最新一封（那是为了防「引用旧项目串数」），所以会落 `TZS=1 / YYS=0 / CPSL1=0`。
+
+1.0.53 起 `ngv.yaml` 的 `rules.scan` 加了两条兜底（整串一起抓，再交给 `versions.title_pattern` /
+`language_pattern` 各自取数，避免「哪个是款、哪个是语言」搞反）：
+
+```yaml
+- { key: versions, pattern: "(\\d+\\s*titles?\\s*[,+/]?\\s*\\d+\\s*languages?)" }
+- { key: quantity, pattern: "(?i)total\\s*qty\\s*[:：]\\s*(\\d[\\d.,]*)" }
+```
+
+⚠️ 这两处取的是**我们自己上一轮发出去的报价文本**（客户说「其余不变」= 认账）。字段可以这么取，
+但 `CPMS_来源对照.md` 里必须写明出处是「同一线程引文」，不要让审计误以为是我们自己给自己作证。
+
+同批修的两个真 bug：
+
+- **`binding_direction` 必须有 binding 上下文**：邮件里 `specs are mentioned at the bottom left`
+  （说的是 Excel 里规格在左下角）被旧正则 `(?:at|on|along)\s+the\s+(top|bottom|left…)` 当成装订边
+  → `Drop_SJFX` 落「短书脊」。现在要求前面 40 字内出现 `binding|stitch*|Bindung|装订`，且**捕获组只留方向词**
+  （`at the top`），老测试断言的字符串不变。
+- **`safety saddle-stitching`（-ing）不命中 `safety saddle-stitched`（-ed）** → `ZDFS` 空。
+  `binding.map` 已补 `-ing` / `saddle stitch` 三种写法。
+
 ## 2. 怎么认出这是 NGV
 
 - **文件名关键词**：`ngv`
 - **正文特征标签**（`min_signature_hits: 2`）：`enquiry`、`Angebotsfrist`、
-  `VK-Verpackung`、`Sortierung/VE`、`Schutzumschlag`
+  `VK-Verpackung`、`Sortierung/VE`、`Schutzumschlag`、
+  `Overview of Countries, Quantities, and Titles` / `Delivery Time: KW`（Lidl 款量表，
+  2026-10-29 加：Rex 内部转发时发件人是 ghouseproducts，域名线索失效，只能靠表头）
 - **工作表名**：`enquiry`
 
 > ⚠️ **识别必须看正文**（2026-09-24 修的真 bug）：有份附件名 `160x104_Colouring Cards
@@ -580,7 +667,8 @@ NGV 每单固定的第三方检测清单（378 字符，3 份导出逐字相同�
 >
 > CPMS 写法样例：`references/cpms-线圈书水钻贴纸.md`（线圈书 + 水钻贴纸 + 多材料内文，
 > v2 规范 0 error/0 warn，含逐条写法决策表）。
-> 定时任务补写的门禁坑（德式千分位 `60.000` / 料号撞「印色」正则 / 并发写回纪律）：
+> 定时任务补写的门禁坑（德式千分位 `60.000` / 料号撞「印色」正则 / 并发写回纪律 /
+> **§7b xlsx 日期单元格的日号溯源** / **§10 精装 4 款成品 CPMS 样例**）：
 > `references/cpms-backfill-gotchas.md`。
 > 真实 ERP 逐字段差异表：`references/real-erp-diff-BJXQ260704002.md`（Wire-O 类别、CPMC 业务员、
 > CPSL 空值等 8 条口径分歧的来源单据）。
@@ -703,6 +791,13 @@ uv run ./scripts/customer_profile.py --prefs ngv
   `cpms_content_audit --source` **要指具体客户文件，指目录不报错但等于没审**。
   全套命令/样例/v1 遗留产物（41 键那代只补内部字段、别拿 v2 lint 去「修」）见总纲
   `customer-quote-request/references/cpms-backfill-cron-notes.md`。
+- ★ **数量写成「三档」、档案却是 `quantity.mode: single` → `CPSL1~3` 静默全 0**（2026-10-29 实单 `PR-00096460`）：
+  客户 B5 写 `3.000, 5.000, 10.000 cps`（三档报价），`single` 模式只认一个总数 →
+  `parse_single_quantity` 解析不出 → `CPSL1/2/3 = 0/0/0`，而**四道门照样全绿**（0 也「有值」）。
+  判别：`CPSL1=0` 且 B5/邮件里出现多个数量。动作：按「字段 / 现值 / 客户原文 / 应然值」汇报
+  （应然 `CPSL1=3000 CPSL2=5000 CPSL3=10000`），**不许自己改 CPSL**；
+  同时把三档数量**如实写进 CPMS 备注**（`报价三档：3.000/5.000/10.000 cps`）——
+  概要行不含数量，若不写进备注，业务在产物里就完全看不到真实报价档位。
 - ★ **「款数在第二份附件里」是 NGV 的固定失分点**（2026-10-21 A00142）：表单 B6 只写
   `versions: see detailed breakdown`、A5 `quantity` 空，款数/语言/数量全在
   `Titel+Mengen_*.xlsx` → `TZS=1 / YYS=0 / CPSL1=0` 静默落默认值，四道门全过。
@@ -725,16 +820,55 @@ uv run ./scripts/customer_profile.py --prefs ngv
   完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`；
   **同一单出现多个任务目录 / 两个实例并发时怎么判「谁是交付件」、为什么已归档的重复件不许补 CPMS**，
   见总纲 `references/cron-concurrency-and-duplicate-tasks.md`。
+  顺带一条（2026-10-29 实测）：**仓库常被并行的 subagent 同时改**（`patch` 会提示
+  「modified by sibling subagent … but this agent never read it」）。补 CPMS 前后都 `git status` 看一眼，
+  别把别人在途的档案/引擎改动当自己的回滚掉；发现**无关的红测试**（当时是 `lidl_anlage` 策略还没登记进
+  `customer_profile` 白名单与 `test_ngv_profile` 断言）→ **不越界修、如实汇报「既有失败、与本次无关」**，
+  只跑自己改动涉及的测试证明没弄坏东西。
 - ✅ **灰板 `mm → g` 的审计冲突已修（1.0.51）**：客户原文 `boards 2 mm` → 规范要求写
   `1200g灰板`，旧审计按子串匹配判「`1200` 无出处」→ 逼人改回 `2mm`（又吃 `CPMS054`）。
   现在 `cpms_content_audit` 认 `GREYBOARD_G_TO_MM`（600g=1 / 900g=1.5 / 1200g=2 /
   1500g=2.5 / 1800g=3）：**照规范写 g，别为 audit 退让**。
   但仍只有这 5 档换算被认 —— 自己算的日期、其他派生的数字依旧会报「无出处」，那类要写进汇报而不是塞进 CPMS。
+- ✅ **`cm ↔ mm` 换算已认（2026-10-29，IAN 574237/574239）**：Lidl 附表尺寸写 `20 x 20 x 2 cm`、
+  `25 x 25,3 x 2,3 cm`（**小数用逗号**），而规范与 ERP 的 `CD/KD` 都是 mm（`200*200*0` / `250*253*0`）
+  → 旧审计把概要行里的 `200`/`253` 判成「无出处」，逼人删必填行。现在
+  `cpms_content_audit._unit_scale_equivalent()` 认 ×10 / ÷10 换算（只在「原文没有这个数字」时才查，
+  且要求原文出现另一个单位词，离群数量蹭不过去）。回归：
+  `test_客户写cm_CPMS写mm算可溯源` / `test_cm换算是双向核对_编的毫米数仍然报`。
+  **遇到「概要行尺寸被判无出处」，先想单位换算，别删概要行。**
+- ✅ **xlsx 日期单元格的「日号」溯源已修（2026-10-29，PR-00096460 实单）**：`read_source()` 以前
+  `str(datetime)` 得到 `2027-04-30 00:00:00`，`normalize()` 删空白后粘成 `2027-04-3000:00:00`
+  → 日号 `30` 前后都是数字，被判「无出处」，逼人把客户真实交期从 CPMS 里删掉（正是「为过门禁删真信息」）。
+  现在日期读成 `2027-04-30`，单元格之间用 `|` 分隔（换行会被 normalize 删掉，相邻单元格数字仍会粘），
+  `_greyboard_equivalent` 同步认 `2|mm`（数字与单位分处两格）。回归：
+  `test_日期单元格的日号可溯源_不许把日期与时间粘成数字` /
+  `test_灰板数字与mm分处两格仍认灰板换算`。**再遇到「明明原文有、audit 却说无出处」，先查语料读取，别删内容。**
 - ✅ **audit 的 `--source` 已支持多文件 / 整个单元目录（1.0.49）**：一份报价是「规格表单 +
-  `Titel+Mengen` + 补充说明」时，**指单元目录**（或并列多个 `--source`）当一个语料审，
-  否则另一份文件独有的事实（数量、参考单号）会被误报「无出处」，逼人删真信息。
+  `Titel+Mengen` + 补充说明」时，**指单元目录**，或用**一个** `--source` 跟多个文件
+  （`--source a.xlsm b.xlsm`）当一个语料审。
+  ⚠️ **重复写 `--source` 只保留最后一个**（argparse `nargs="+"` 覆盖，2026-10-29 实测：
+   `--source a --source b` 只读了 b → 4 条「无出处」是假警报）。要多个文件就一个 flag 带全部路径。
   仍不支持 `.eml`：**邮件正文里的数字**（`PO#13826` / `2019` / `July 31st`）不能进 CPMS，
   邮件上下文进 `CPMS_来源对照.md` + 汇报，单据号归 `KHDH` 字段。
+- ★ **`.xlsm` 附件会被静默跳过，正文单独成单 → 全字段落默认值**（2026-10-29 实单 IAN 574237/574239）：
+  `ingest_email` 的后缀白名单不含 `.xlsm`（宏工作簿），Lidl/VEMAG 的「Overview of Countries, Quantities,
+  and Titles」附表正好是 `.xlsm` → 记进 `skipped_attachments`、只把邮件正文当任务 → 抽到 **0 个规范键**，
+  `CPLB=32.00;其他`、`TZS=1`、`CPSL1=0`、`CD/KD/GD=0`、`ZDFS` 吃档案默认，**四道门全绿**。
+  判别：`_email_*.json` 的 `skipped_attachments` 非空 + `unit.members` 只有 `.txt`。
+  这类单要么改后缀白名单/`input_unit` 支持 `.xlsm`，要么人工拆件重跑；**不要在 CPMS 里替它圆场**。
+  同批还暴露两件事：① 客户识别在纯正文兜底时会判错（VEMAG 域名本该 → `ngv`，实测落 `igl`）；
+  ② 一封邮件两个 IAN（两个独立产品）只能靠人拆成两份报价 —— 附表形态不是 enquiry 分区表单，
+  引擎抽不出来，`CPMS` 只能由 agent 按附表手写。
+  **附表结构 / 列位 / 材料英译（C1S→单粉、CCNB→粉灰、Artpaper→光粉）/ CPMS 成品取舍**：
+  `references/lidl-overview-tables.md`。
+  ↳ **同日稍后 `lidl_anlage` 抽取策略已落地**（`customers/ngv.yaml` + `extract_fields.py`）：
+  实跑得 `CPLB=27.01;普通BB书` / `TZS=6` / `YYS=25` / `CPSL1=365340` / `CD=KD=200`（报错那套默认值不再出现）。
+  三条必须记住的口径：① `TZS` = **去重标题**（不是 `total:` 那个 `Sortierung×款数`）；
+  ② `YYS` = **去重语言码数**（不是国别数，25/24 就是这么来的）；
+  ③ `packaging units ÷ 数量 = assortiment × 款数`（12 / 10），**这个才是装箱本数**，`M` 列常年空别当数据。
+  多构造多款的 CPMS 分组块写法、`cm→mm` 审计修复、两条遗留字段疑点（`Drop_SJFX` 被门折页误推 /
+  拼图书 `CPLB=32.00;其他`）见同一份 reference 的 **§6~§9**。
 - ★ **单附件邮件在 cron/Web 路径上会丢副档 → `KHDH`/`KHDDH` 静默为空**：`scan_pending.py` 认领时
   只搬文件、不搬 `<附件>.meta.json`，而这两个字段在 `required_empty` 里 → **四道门全绿也看不出来**。
   判别：`pending/` 里还躺着 `<附件>.meta.json`、任务目录里没有。**不要自己改这两个键**，

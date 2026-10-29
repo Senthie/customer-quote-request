@@ -53,7 +53,7 @@ from extract_fields import load_customer_data  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PENDING_DIR = REPO_ROOT / "customer-files" / "pending"
 META_SUFFIX = ".meta.json"
-SUPPORTED_ATTACHMENTS = (".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt")
+SUPPORTED_ATTACHMENTS = (".xlsx", ".xlsm", ".xls", ".csv", ".pdf", ".docx", ".txt")
 
 
 # ── 邮件解析 ─────────────────────────────────────────────────────────────

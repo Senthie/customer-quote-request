@@ -14,7 +14,17 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.52（2026-10-21 **四条口径定案**：①`CPMC` **用我们的中文译名**（真实录入的
+> **版本：** 1.0.53（2026-10-29 **新增 Lidl 款量表形态**：① 第四种输入形态
+> `Anlage_<IAN>` 多国别款量表（`.xlsm`）—— 新布局策略 `lidl_anlage`，一份表里
+> 「一行一款一市场」，数量/语言码/结构/材质全在固定列；实测与客户 Pivot 的
+> Gesamtergebnis 逐格相等（IAN 574237=51,460 / 574239=365,340）。② `.xlsm` 正式算表格：
+> `extract_fields` / `input_unit` / `main`（含**内容探针**）/ `ingest_email` 四处清单都补齐 ——
+> 漏探针会让 Lidl 附件只凭文件名 `Puzzle` 被判成 igl（10 分）。③ `binding_direction`
+> 必须有 binding 上下文（`specs are mentioned at the bottom left` 不再被当装订边）；
+> ④ 装订 `safety saddle-stitching`（-ing）也映射 `骑马钉`；⑤ 邮件线程「其余不变」时
+> 款数/数量在引文里 → `rules.scan` 加 `versions` / `quantity` 两条兜底。
+> 详见 skill `customer-quote-ngv` §1.10 / §1.11）
+> —— 前序 1.0.52（2026-10-21 **四条口径定案**：①`CPMC` **用我们的中文译名**（真实录入的
 > `联系人/说明 类别/原品名(FSC Mix)` 是业务侧旧写法，不改）；②精装封面面纸**信真实录入的
 > `140g光粉`** —— 客户 enquiry 写 128g 属模板复制，140g 来自 2019 旧单 PO#13826 的材质，
 > 落成 `customers/ngv.cpms_accepted.json` 口径白名单（审计 `--accepted` 放行并打印理由）；

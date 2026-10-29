@@ -43,7 +43,7 @@ UNMATCHED_KEY = "__unmatched_labels__"
 TEXT_BLOCKS_KEY = "__text_blocks__"
 LAYOUT_KEY = "__layout__"
 
-ALL_STRATEGIES = ("auto_pairs", "column_pairs", "shifted_pairs", "section_pairs")
+ALL_STRATEGIES = ("auto_pairs", "column_pairs", "shifted_pairs", "section_pairs", "lidl_anlage")
 
 # 说明：表头即标签的整列表格（旧文档里的「纵向格式」）不需要单独策略 ——
 # 引擎统一用 header=None 读表，真正的表头会落在第 0 行，
@@ -468,7 +468,209 @@ def _first_value_to_the_right(cells: list, start: int, profile: CustomerProfile)
     return ""
 
 
-def _extract_rows(rows: list, profile: CustomerProfile, logger=None) -> tuple:
+def _cm_to_mm(text: str) -> str:
+    """`25 x 25,3 x 2,3 cm` → `250 x 253 x 23 mm`（客户用德式小数逗号）。
+
+    只改单位与小数逗号，不重排顺序 —— CD/KD 的落库顺序由 rules.size.order 决定。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    if not re.search(r"\bcm\b", s, re.IGNORECASE):
+        return s
+    body = re.sub(r"\bcm\b", " ", s, flags=re.IGNORECASE)
+    parts = []
+
+    def _num(tok: str) -> str:
+        tok = tok.strip().replace(" ", "")
+        if not tok:
+            return ""
+        if re.fullmatch(r"\d+,\d+", tok):            # 25,3 → 25.3
+            return tok.replace(",", ".")
+        return tok
+
+    for chunk in re.split(r"[x×*]", body):
+        v = _num(chunk)
+        if not v:
+            continue
+        try:
+            parts.append(f"{float(v) * 10:g}")
+        except ValueError:
+            parts.append(v)
+    return " x ".join(parts) + " mm" if parts else ""
+
+
+def _extract_lidl_anlage(rows: list, profile: CustomerProfile, logger=None,
+                         sheet_name: str = "") -> tuple:
+    """Lidl 的 `Anlage_<IAN>` 表（「Overview of Countries, Quantities, and Titles」）。
+
+    形态（2026-10-29 实单 IAN 574237 / 574239，两份 xlsm 逐格一致）：
+
+        H2   IAN 574237 K Motiv Puzzlebücher Overview of Countries, Quantities, and Titles
+        H4   Delivery Time: KW 24 / 2027:   |  all countries
+        r9   A=Griechenland:                ← 国别分区标题（A 列，含结尾冒号）
+        r11  A=ArtNr. | ... | F=article: | H=title /style | J=quantity / title | O=dimension
+        r12  D=5/ | E=28/ | F=574237_A | H=Match it Puzzle Book - DINOSAURS | J=956 ...
+        ...
+        rN   H=total: | I=10 | J=4780        ← 分区合计（不参与累加，用明细分行算总数）
+
+    与 NGV 的 enquiry 表单（`section_pairs`）完全不同的结构：这里**一行一款一市场**，
+    数量在 J 列、语言码在 E 列、结构/材质是长文本（P/R/S 列）。
+
+    产出（规范键）：
+      product_name  = 标题行的项目名（`K Motiv Puzzlebücher`）
+      quantity      = 所有明细分行的数量合计（与 Pivot 表的 Gesamtergebnis 对齐）
+      versions      = `<款数> titles, <语言数> languages`（款=去重标题，语言=去重语言码，只算有量的）
+      size          = 第一个数据行的成品尺寸（cm → mm）
+      specials      = 各款结构说明（去重后拼接，给 CPLB / SFYPJ / CPMS 用）
+      text_material = 各款材质说明（去重后拼接）
+      notes         = 交期行（`Delivery Time: KW 28 / 2027: BE, AT, …`）
+
+    `sheet_prefix` 之外的工作表（Pivot / Tabelle1）一律跳过 —— Pivot 是同一批数据的
+    交叉表，让两个策略都进来会重复计数量。
+    """
+    cfg = profile.rule("layout.lidl_anlage", {}) or {}
+    if not isinstance(cfg, dict) or not cfg.get("enabled", True):
+        return {}, {}, "", []
+    prefix = str(cfg.get("sheet_prefix", "Anlage"))
+    if prefix and not str(sheet_name or "").startswith(prefix):
+        return {}, {}, "", []
+
+    cols = cfg.get("columns") or {}
+
+    def col(name: str, default: int) -> int:
+        try:
+            return int(cols.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    c_pub, c_lang = col("pub", 3), col("lang", 4)
+    c_art, c_title = col("art", 5), col("title", 7)
+    c_qty, c_weight = col("qty", 9), col("weight", 13)
+    c_dim, c_tech = col("dim", 14), col("tech", 15)
+    c_material, c_spec = col("material", 17), col("spec", 18)
+
+    title_re = str(cfg.get("title_pattern") or r"IAN\s*(\d{6})\s*(.*?)\s*Overview")
+    delivery_label = str(cfg.get("delivery_label") or "Delivery Time").lower()
+    art_re = str(cfg.get("article_pattern") or r"^\d{6}_[A-Z]$")
+
+    def cell(r: int, c: int) -> str:
+        if r < 0 or r >= len(rows):
+            return ""
+        row = rows[r]
+        if c < 0 or c >= len(row):
+            return ""
+        return str(row[c] or "").strip()
+
+    ians: list = []
+    product_name = ""
+    for row in rows:
+        text = " ".join(str(c) for c in row if c)
+        m = re.search(title_re, text, re.IGNORECASE)
+        if m:
+            ians.append(m.group(1))
+            product_name = str(m.group(2) or "").strip(" :-–—")
+            break
+
+    delivery: list = []
+    for row in rows:
+        for idx, c in enumerate(row):
+            s = str(c or "").strip()
+            if s and s.lower().startswith(delivery_label):
+                # 同一行的后续格（`Delivery Time: KW 24 / 2027:` + `all countries`）
+                # 是这条交期的适用范围，必须一起带上 —— 只取标签格会丢掉国家清单。
+                rest = [str(x).strip() for x in row[idx + 1:] if str(x or "").strip()]
+                delivery.append(" ".join([s] + rest))
+                break
+
+    def _looks_like_country_heading(s: str) -> bool:
+        if not s or len(s) > 90:
+            return False
+        if s.lower().startswith("artnr") or "total" in s.lower():
+            return False
+        return s.endswith(":") or s.lower().startswith("online shop")
+
+    qty_total = 0
+    titles: list = []
+    langs_with_qty: set = set()
+    structures: list = []
+    materials: list = []
+    first_dim = ""
+    rows_hit = 0
+    in_block = False
+
+    for r in range(len(rows)):
+        head = ""
+        for c in range(0, min(len(rows[r]), max(c_art, c_title) + 1)):
+            v = cell(r, c)
+            if v:
+                head = v
+                break
+        if _looks_like_country_heading(head):
+            in_block = True
+            continue
+        if not in_block:
+            continue
+        art = cell(r, c_art)
+        if not re.match(art_re, art):
+            continue
+        qty_raw = cell(r, c_qty)
+        qty = 0
+        if qty_raw:
+            try:
+                qty = int(float(qty_raw.replace(".", "").replace(",", ".")))
+            except ValueError:
+                qty = 0
+        rows_hit += 1
+        qty_total += qty
+        title = cell(r, c_title)
+        lang = cell(r, c_lang)
+        if title and title not in titles:
+            titles.append(title)
+        if qty and lang:
+            langs_with_qty.add(lang)
+        for bucket, c in ((structures, c_tech), (materials, c_spec)):
+            v = cell(r, c)
+            if v and v not in bucket:
+                bucket.append(v)
+        if not first_dim:
+            first_dim = cell(r, c_dim)
+
+    if not rows_hit:
+        return {}, {}, "", []
+
+    values: dict = {}
+    # 不往 raw_labels 里塞「我们自己造的标签」—— raw_labels 的语义是**客户表上的
+    # 原始标签**，混进 `IAN 标题行` 这类内部键会被 unmatched 统计当成「认不出的标签」
+    # 打到 WARN 里，把真问题淹掉。出处由 merge 的 sources 记录（文件级）负责。
+    labels: dict = {}
+    if product_name:
+        values["product_name"] = product_name
+    if qty_total:
+        values["quantity"] = str(qty_total)
+    if titles:
+        values["versions"] = (f"{len(titles)} titles, {len(langs_with_qty)} languages"
+                              if langs_with_qty else f"{len(titles)} titles")
+    size_mm = _cm_to_mm(first_dim)
+    if size_mm:
+        values["size"] = size_mm
+    if structures:
+        values["specials"] = " || ".join(structures)
+    if materials:
+        values["text_material"] = " || ".join(materials)
+    if delivery:
+        values["notes"] = " ; ".join(delivery)
+
+    layout = f"lidl_anlage×{len(values)}"
+    if logger is not None:
+        logger.info(f"  Lidl Anlage 表: IAN={ians[0] if ians else '?'} "
+                    f"款数={len(titles)} 语言数={len(langs_with_qty)} "
+                    f"明细行={rows_hit} 数量合计={qty_total} 尺寸={size_mm or '?'}")
+    return values, labels, layout, []
+
+
+def _extract_rows(rows: list, profile: CustomerProfile, logger=None,
+                  sheet_name: str = "") -> tuple:
     """对一张表的二维单元格矩阵跑布局策略，返回 (values, raw_labels, layout, unmatched)。
 
     策略按档案 `rules.layout.strategies` 的顺序执行；**先到先得**（不覆盖已有值），
@@ -502,9 +704,29 @@ def _extract_rows(rows: list, profile: CustomerProfile, logger=None) -> tuple:
             raw_labels.setdefault(label_text, str(value).strip())
         return True
 
+    # ── 策略 0a：lidl_anlage（Lidl 的 `Anlage_<IAN>` 多国别款量表）──────────
+    # 比 section_pairs 还「具体」：它只认特定工作表名，别的表直接跳过，
+    # 所以放在最前面也不会抢走 NGV enquiry 表单的活。
+    if "lidl_anlage" in strategies:
+        an_values, an_labels, an_layout, an_unmatched = _extract_lidl_anlage(
+            rows, profile, logger, sheet_name=sheet_name)
+        gained = 0
+        for key, value in an_values.items():
+            if not values.get(key, "").strip():
+                values[key] = value
+                gained += 1
+        for key, value in an_labels.items():
+            raw_labels.setdefault(key, value)
+        unmatched.extend(an_unmatched)
+        if gained:
+            used.append(an_layout or f"lidl_anlage×{gained}")
+
     # ── 策略 0：section_pairs（分区表单：分区列 + 标签列 + 值）──────────
     # 这是最「具体」的策略，所以放最前；档案没写 sections: 时自动跳过。
-    if "section_pairs" in strategies and profile.sections:
+    # Lidl Anlage 表已经命中时不跑 —— 那种表没有「分区/标签」结构，跑它只会
+    # 打一条「分区表未命中任何条目」的 WARN，把真问题淹掉（2026-10-29）。
+    if "section_pairs" in strategies and profile.sections and not any(
+            u.startswith("lidl_anlage") for u in used):
         sec_values, sec_labels, sec_layout, sec_unmatched = _extract_sections(
             rows, profile, logger)
         gained = 0
@@ -601,6 +823,21 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
     else:
         sheets = pd.read_excel(path, sheet_name=None, header=None, dtype=str)
 
+    # ★ Lidl `Anlage_<IAN>` 文件里，Pivot / Tabelle1 是**同一批数据的另一种排布**
+    #   （交叉表 + 平铺表）。若档案声明了 lidl_anlage 且本文件确实有 `Anlage*` 工作表，
+    #   就只认那几张表 —— 否则 Pivot 会被 section_pairs 当普通表单乱抽（实测抽出
+    #   `quantity: 'Spaltenbeschriftungen'`），还会和 Anlage 的数量重复计。
+    lidl_cfg = profile.rule("layout.lidl_anlage", {}) or {}
+    if isinstance(lidl_cfg, dict) and lidl_cfg.get("enabled", True):
+        prefix = str(lidl_cfg.get("sheet_prefix", "Anlage"))
+        hits = {k: v for k, v in sheets.items() if str(k).startswith(prefix)}
+        if hits and len(hits) != len(sheets):
+            log_msg = (f"Lidl Anlage 文件：只抽 {list(hits)}，跳过 "
+                       f"{[k for k in sheets if k not in hits]}（同一批数据的别种排布）")
+            if logger is not None:
+                logger.info(log_msg)
+            sheets = hits
+
     qty_mode = str(profile.rule("quantity.mode", "tiers")).strip().lower()
     wants_tiers = qty_mode != "single"
 
@@ -609,7 +846,8 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
         if df is None or df.empty:
             continue
         rows = _rows_to_matrix(df)
-        values, raw_labels, layout, unmatched = _extract_rows(rows, profile, logger)
+        values, raw_labels, layout, unmatched = _extract_rows(rows, profile, logger,
+                                                              sheet_name=str(name))
         # 档位识别先不逐表打日志（会在错误的表上报 WARN），选定主表后统一打一次
         tiers = extract_quantity_tiers(rows, profile, logger=None) if wants_tiers else []
         blocks = [cell for row in rows for cell in row if cell]
@@ -790,7 +1028,8 @@ def extract_from_text(file_path: str, profile: CustomerProfile, logger=None,
 
 
 # ── 统一入口 ─────────────────────────────────────────────────────────────
-TABLE_SUFFIXES = (".xlsx", ".xls", ".csv")
+# `.xlsm` = xlsx + VBA 宏；读数据时忽略宏（2026-10-29 NGV/Lidl 附件实测）
+TABLE_SUFFIXES = (".xlsx", ".xlsm", ".xls", ".csv")
 TEXT_SUFFIXES = (".pdf", ".docx", ".txt")
 
 

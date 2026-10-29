@@ -551,7 +551,10 @@ class CustomerProfile:
                 problems.append(f"preferences 里 {field_name} 缺少 reason —— 偏好表必须能一眼看出依据")
 
         # 布局策略白名单
-        allowed = {"auto_pairs", "column_pairs", "shifted_pairs", "section_pairs"}
+        # `lidl_anlage`（2026-10-29）：Lidl `Anlage_<IAN>` 多国别款量表的专用策略，
+        # 见 extract_fields._extract_lidl_anlage / customers/ngv.yaml rules.layout.lidl_anlage。
+        allowed = {"auto_pairs", "column_pairs", "shifted_pairs", "section_pairs",
+                   "lidl_anlage"}
         for strategy in self.rule("layout.strategies", []) or []:
             if strategy not in allowed:
                 problems.append(f"未知布局策略 '{strategy}'（可用: {sorted(allowed)}）")
@@ -752,10 +755,17 @@ def resolve_profile(
 def _collect_texts_from_file(path: Path) -> list:
     """把样本文件里的文本/单元格倒出来，供 --detect 使用。"""
     suffix = path.suffix.lower()
-    if suffix in (".xlsx", ".xls", ".csv"):
+    if suffix in (".xlsx", ".xlsm", ".xls", ".csv"):
         import pandas as pd
-        df = pd.read_csv(path) if suffix == ".csv" else pd.read_excel(path)
-        return [str(v) for v in df.astype(str).values.ravel().tolist()]
+        if suffix == ".csv":
+            df = pd.read_csv(path)
+            return [str(v) for v in df.astype(str).values.ravel().tolist()]
+        # 表格样本要按**原始格**倒文本（header=None、全部工作表）——
+        # 默认 header=0 会把表头当列名吃掉，Lidl 那种「标题在第 2 行」的表
+        # 只剩一个块，识别特征全丢（2026-10-29 实测：574237 只抽出 1 个文本块）。
+        sheets = pd.read_excel(path, sheet_name=None, header=None, dtype=str)
+        return [str(v) for df in sheets.values()
+                for v in df.values.ravel().tolist() if str(v) != "nan"]
     if suffix == ".pdf":
         import fitz
         with fitz.open(str(path)) as doc:

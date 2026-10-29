@@ -52,7 +52,8 @@ SAMPLES_DIR = REPO_ROOT / "customer-files" / "samples"
 # 布局/取值兜底常量
 DEFAULT_UNIT = "mm"
 # 单文件通道支持的格式（文件夹/压缩包里的成员由 input_unit 逐个筛，规则一致）
-SUPPORTED_INPUT_SUFFIXES = (".csv", ".xlsx", ".xls", ".docx", ".txt", ".pdf")
+# `.xlsm` = xlsx + VBA 宏（2026-10-29 Lidl/NGV 附件实测，读数据不需要宏）
+SUPPORTED_INPUT_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls", ".docx", ".txt", ".pdf")
 
 # ── 运行基准日期 ─────────────────────────────────────────────────────────
 # 「今天是几号」会影响两类结果：报价截止日期是否过期、WCRQ 的 today_plus_days。
@@ -1975,7 +1976,9 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
         probe_texts = [email_meta.get("subject", ""), email_meta.get("body", "")]
     # 单元：所有成员的正文都参与识别（一份报价里哪份文件写了客户特征都算）
     for probe_member in unit.members:
-        if probe_member.suffix.lower() in (".xlsx", ".xls", ".csv"):
+        # `.xlsm` 也算表格（= xlsx + 宏）：2026-10-29 的 Lidl 附件漏在这里，
+        # 正文没参与打分 → 只凭文件名 "puzzle" 就判成 igl（10 分）。
+        if probe_member.suffix.lower() in (".xlsx", ".xlsm", ".xls", ".csv"):
             try:
                 from customer_profile import collect_probe_texts
                 probe_texts = probe_texts + collect_probe_texts(probe_member)

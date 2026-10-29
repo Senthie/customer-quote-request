@@ -42,7 +42,8 @@ from pathlib import Path
 from typing import Optional
 
 # 与 extract_fields 保持一致：表格类 / 文本类
-TABLE_SUFFIXES = (".xlsx", ".xls", ".csv")
+# `.xlsm` = xlsx + VBA 宏，openpyxl/pandas 读数据不需要宏（2026-10-29 NGV/Lidl 附件实测）
+TABLE_SUFFIXES = (".xlsx", ".xlsm", ".xls", ".csv")
 TEXT_SUFFIXES = (".pdf", ".docx", ".txt")
 SUPPORTED_SUFFIXES = TABLE_SUFFIXES + TEXT_SUFFIXES
 

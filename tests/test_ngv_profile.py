@@ -34,10 +34,18 @@ NGV = load_profile("ngv")
 
 # ── 档案结构 ────────────────────────────────────────────────────────────
 def test_档案已校准且只用分区策略():
+    """旧口径（2026-09-24 ~ 2026-10-28）：NGV 只允许 `section_pairs`。
+
+    2026-10-29 起新增 `lidl_anlage`（Lidl `Anlage_<IAN>` 多国别款量表专用策略），
+    所以断言改成「只允许这两个」：
+      * 仍**禁止** `auto_pairs` / `column_pairs` / `shifted_pairs` —— NGV 的 enquiry
+        表单里 paper/printing/finishing 在 B 列反复出现，平铺策略会抓出一堆错值；
+      * `lidl_anlage` 只在工作表名 `Anlage*` 命中时才动手，对 enquiry 表单无影响。
+    """
     assert NGV.status == "calibrated"
-    assert NGV.rule("layout.strategies") == ["section_pairs"], (
-        "NGV 表里 paper/printing/finishing 在 B 列反复出现，"
-        "加上平铺策略( auto_pairs )会抓出一堆错值"
+    assert NGV.rule("layout.strategies") == ["lidl_anlage", "section_pairs"], (
+        "NGV 只允许 分区表单(section_pairs) + Lidl 款量表(lidl_anlage)；"
+        "平铺策略( auto_pairs )会抓出一堆错值"
     )
     assert NGV.validate() == []
 
@@ -1001,3 +1009,108 @@ def test_决策_是否有配件SFYPJ按关键词推布尔():
     assert sfy({"specials": "extent: (36 pp = 12 pp text + 12 pp sticker)"}) is False
     # 类型必须是布尔（不是「是/否」字符串）
     assert sfy({}) is False
+
+
+# ── Lidl `Anlage_<IAN>` 款量表（2026-10-29 新增策略）─────────────────────
+def _lidl_rows():
+    """IAN 574237 那张表的最小复刻（列位与客户原文一致）。
+
+    两行国别分区（一个正常国别 + 一个 Online Shop）+ 每区两款，用来锁：
+      * 数量 = 明细分行累加（不吃 `total:` 行、也不吃 Pivot 交叉表）
+      * 款数 = 去重标题；语言数 = **有量**的去重语言码
+      * 尺寸 cm → mm（德式小数逗号 `25,3`）
+    """
+    def row(**kw):
+        width = 20
+        cells = [""] * width
+        for letter, value in kw.items():
+            cells["ABCDEFGHIJKLMNOPQRST".index(letter)] = value
+        return cells
+
+    return [
+        row(H="IAN 574237 K Motiv Puzzlebücher Overview of Countries, Quantities, and Titles"),
+        row(H="Delivery Time: KW 24 / 2027:", I="all countries"),
+        row(A="Griechenland:"),
+        row(A="ArtNr.", D="Verlag / Sprache / ArtNr / Zusatz", F="article:",
+            H="title /style", J="quantity / title", O="dimension"),
+        row(D="5/", E="28/", F="574237_A", G="/FSM", H="Match it Puzzle Book - DINOSAURS",
+            J="956", O="25 x 25,3 x 2,3 cm", P="Cover + 5 Spreads + Rigid box + 21pcs Puzzle pieces",
+            S="Cover 350gsm C1S"),
+        row(D="5/", E="28/", F="574237_B", G="/FSM", H="Match it Puzzle Book - FARM",
+            J="956", P="Cover + 5 Spreads + Rigid box + 21pcs Puzzle pieces"),
+        row(H="total:", I=10, J=1912),
+        row(A="Online Shop: Deutschland unmixed"),
+        row(A="ArtNr.", H="Titel", J="Menge/Titel"),
+        row(D="5/", E="20/", F="574237_A", G="/FSM", H="Match it Puzzle Book - DINOSAURS",
+            J="270"),
+        row(D="5/", E="20/", F="574237_B", G="/FSM", H="Match it Puzzle Book - FARM",
+            J="270"),
+        row(A="Online Shop: FR unmixed"),
+        row(A="ArtNr.", H="Titel", J="Menge/Titel"),
+        row(D="5/", E="22/", F="574237_A", G="/FSM", H="Match it Puzzle Book - DINOSAURS",
+            J="0"),
+        row(D="5/", E="22/", F="574237_B", G="/FSM", H="Match it Puzzle Book - FARM",
+            J="0"),
+    ]
+
+
+def test_Lidl款量表_数量按明细累加_款数与语言数去重():
+    """2026-10-29 实单 IAN 574237 / 574239：`Anlage_<IAN>` 表一行一款一市场。
+
+    客户表里 `total:` 行与 Pivot 交叉表都写着同一个合计数，**只能取明细行**——
+    三者混用就会重复计（Pivot 的 Gesamtergebnis 是 51460 / 365340，
+    明细行累加必须与它逐格相等）。
+    """
+    from extract_fields import _extract_lidl_anlage
+
+    values, _, layout, unmatched = _extract_lidl_anlage(
+        _lidl_rows(), NGV, sheet_name="Anlage_574237")
+
+    assert layout.startswith("lidl_anlage×")
+    assert unmatched == []
+    # 956+956（希腊）+ 270+270（DE online shop）+ 0+0（FR）= 2452
+    assert values["quantity"] == "2452", "只累加明细行，不吃 total: 行"
+    assert values["versions"] == "2 titles, 2 languages", "语言数只算有量的（22/ 全 0 不算）"
+    assert values["size"] == "250 x 253 x 23 mm", "德式小数逗号 + cm→mm"
+    assert values["product_name"] == "K Motiv Puzzlebücher"
+    assert values["notes"] == "Delivery Time: KW 24 / 2027: all countries", \
+        "交期的适用范围（all countries）在同一行的右侧格，必须一起带上"
+
+
+def test_Lidl款量表_只认Anlage工作表():
+    """Pivot / Tabelle1 是同一批数据的另一种排布，进来就会和 Anlage 重复计数量。"""
+    from extract_fields import _extract_lidl_anlage
+
+    for sheet in ("Pivot", "Tabelle1", ""):
+        values, _, layout, _ = _extract_lidl_anlage(_lidl_rows(), NGV, sheet_name=sheet)
+        assert values == {} and layout == ""
+
+
+def test_xlsm算表格类文件():
+    """.xlsm = xlsx + 宏。2026-10-29 的两份 Lidl 附件就是 .xlsm，漏了会「不支持的格式」。"""
+    from extract_fields import TABLE_SUFFIXES
+    import main
+    from input_unit import SUPPORTED_SUFFIXES
+
+    for box in (TABLE_SUFFIXES, main.SUPPORTED_INPUT_SUFFIXES, SUPPORTED_SUFFIXES):
+        assert ".xlsm" in box
+
+
+def test_装订方向必须有binding上下文_别把Excel说明当装订边():
+    """A00152 那封邮件写着 `specs are mentioned at the bottom left`（说的是 Excel
+    里规格在左下角）—— 旧正则把它当成装订边，`Drop_SJFX` 就落成「短书脊」。
+    方向词必须挂在 binding/stitch/Bindung/装订 后面才算。
+    """
+    assert "binding_direction" not in scan_values(
+        ["attached you find an urgent enquiry. specs are mentioned at the bottom left."], NGV)
+    # 正常的装订方向照旧抓得到，且捕获值只有方向词本身
+    assert scan_values(["softcover, perfect binding at the top, square back"], NGV)[
+        "binding_direction"] == "at the top"
+
+
+def test_安全骑马钉的ing写法也要映射到骑马钉():
+    """客户写 `safety saddle-stitching`（-ing），旧 map 只有 -ed → ZDFS 落空。"""
+    got = _map({"size": "210 x 280 mm portrait",
+                "binding": "softcover, safety saddle-stitching"})
+    assert got["ZDFS"] == "骑马钉"
+    assert got["CPLB"] == "24.03;贴纸骑钉书"
