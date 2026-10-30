@@ -14,7 +14,16 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.53（2026-10-29 **新增 Lidl 款量表形态**：① 第四种输入形态
+> **版本：** 1.0.55（2026-10-30 **按「报价结构」分组**：一封询价里的多款按装订/尺寸/用纸/
+> 印色/工艺/包装分组 —— 同结构合成一条（`TZS` 记款数），结构不同各一条；数组里放 N 条。
+> 实测 IAN 574239 六款 → 3 条（TZS 3/1/2，CPSL 合计 365,340 与客户 Pivot 相等）。
+> 同时 **查看器改版**：左栏「任务列表」（一行一任务、逐条列出产品），右栏「产品记录 Tab」
+> 可切换（各自带交付状态）；深链接 `?path=…&r=N`。详见 §7.y / §4.10）
+> —— 前序 1.0.54（2026-10-29 **ERP 导出改数组**：业务原话「一个报价文件里可以包含很多个
+> 产品，而多个产品需要开很多的单，这样不方便，所以我们的 ERP 导出的 json 使用数组格式
+> `[]`」—— 顶层永远是 `[{…}]`，读写统一走 `scripts/erp_bundle.py`，全部消费方改逐条，
+> 历史产物用 `scripts/migrate_erp_to_array.py` 一次性迁移。见 §7.x）
+> —— 前序 1.0.53（2026-10-29 **新增 Lidl 款量表形态**：① 第四种输入形态
 > `Anlage_<IAN>` 多国别款量表（`.xlsm`）—— 新布局策略 `lidl_anlage`，一份表里
 > 「一行一款一市场」，数量/语言码/结构/材质全在固定列；实测与客户 Pivot 的
 > Gesamtergebnis 逐格相等（IAN 574237=51,460 / 574239=365,340）。② `.xlsm` 正式算表格：
@@ -509,7 +518,13 @@ email:
 | `column_pairs` | 固定列：标签在 `label_col`、值在 `value_col` | 列位固定的表 |
 | `shifted_pairs` | 只向右扫（纯横向键值对） | 横向键值对布局 |
 | `section_pairs` | **分区表**。A 列分区（向下继承），**按行位置**对齐 `sections:` 声明的条目：`section_value` 取 B 列自身；`label` 取右侧（`value_mode: first`/`run`） | 分区式表单（NGV，见子技能 `customer-quote-ngv`） |
+| `lidl_anlage` | **一门一行一市场**的款量表（`Anlage_<IAN>`）：数量按明细分行累加、款/语言去重、cm→mm；只认工作表名 `Anlage*`，Pivot/Tabelle1 整张跳过。同时产出**逐款条目**（`CustomerData.products`） | Lidl IAN 项目（见子技能 `customer-quote-ngv` §1.10） |
+| `product_table` | **表头一行是标签、下面每行一个产品**的列表式表格：表头命中 ≥`min_columns` 个标签且含 `title_keys` 之一 → 每行一个条目 | 多产品/多款报价表。**默认关闭**（`rules.layout.product_table.enabled`），必须先拿真实样本校准 |
 
+> `lidl_anlage` / `product_table` 是**「只产出逐产品条目」**的策略：整份数据的规范键仍由
+> 其它策略给，条目交给 `scripts/product_groups.py` 按报价结构分组（§7.y）。判定规则见模块
+> docstring，分组签名见 `assets/structure_signature.yaml`。
+>
 > 表头即标签的整列表格不需要单独策略：引擎统一按 `header=None` 读表，
 > 真表头会落在第 0 行，由 `auto_pairs` 按「密集标签行 → 取其下方」处理。
 >
@@ -1144,11 +1159,32 @@ CQR_Web/
 | 接口 | 作用 |
 |------|------|
 | `GET /` | 页面本体（`CQR_Web/templates/index.html`，Jinja 渲染） |
-| `GET /api/exports` | 递归扫描结果（每份产物的摘要，**最新的在前**）+ 当次运行的校验计数与客户档案 |
-| `GET /api/export?path=<相对路径>` | 某一份产物的完整 JSON + **权威取值校验结果**（`validation`）+ **交付闸门**（`incomplete`） |
+| `GET /api/exports` | 递归扫描结果。`exports` = 每份**产物文件**的摘要（兼容老调用方）；`tasks` = 按任务目录聚合的**任务列表**（一个任务 = 一次报价，含 `products` 逐条摘要），页面用的是 `tasks` |
+| `GET /api/export?path=<相对路径>` | 某个任务的完整内容：`records`（数组，N 条产品记录）+ `validation` / **`validation_by_record`** + `incomplete` / **`incomplete_by_record`** |
 | `GET /api/schema` | ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组 |
 | `POST /api/uploads` | 上传客户文件（multipart：`files` 多个 + `group=one\|each`）→ 落 `pending/`（§4.11） |
 | `GET /api/pending` | 还在等抽取的文件（页面排队条用） |
+
+### 列表 = 任务列表，详情 = 产品记录 Tab（2026-10-29）
+
+业务原话：「因为我们的 ERP 的 JSON 变成了数组，所以我们的展示页面的产物列表需要变更为
+任务列表，原先的 ERP 数据展示页，变成多个 Tag 可切换的展示页」。
+
+| 位置 | 以前 | 现在 |
+|------|------|------|
+| 左栏 | 产物列表（一行 = 一个 `ERP_*.json`） | **任务列表**（一行 = 一个 `processed/<task_id>/`）。行上标「N 条产品」并把每条产品列出来（品名 / CPLB / TZS / CPSL1），超过 3 条折成「+N」 |
+| 右栏 | 单条 ERP 的字段 | **本次任务**（原件/任务号/几条产品）→ **产品记录 Tab** → 当前这条的字段。Tab 上带品名 + 类别 + 数量，颜色标这条能不能交付（bad = CPMS 未写/有 error，warn = 有 warn，ok = 过） |
+| 深链接 | `?path=…` | `?path=…&r=2`（带上第几条，刷新/分享回到同一条） |
+| 原始 JSON | 当前那条 | **整个数组**（交付物就是这一个文件），标「数组 · N 条」 |
+
+一条记录的切换只换 `state.current` / `state.validation` / `state.incomplete`，
+渲染函数（`renderGroups` 等）一行都不用改 —— 这是刻意的：判定与渲染仍然只有一份。
+
+> 只有一个产品时**不渲染 Tab 条**，页面与以前完全一样（单产品单不该多出一层）。
+
+**测试**：`CQR_Web/tests/page_harness.js` 用最小 DOM shim 把页面脚本真跑一遍，
+核对「列表是任务列表 / 切 Tab 后标题、闸门、校验错误都跟着换」（16 项）；
+`test_page_logic.py` 是它的 pytest 壳（没有 node 就 skip）。
 
 **列表怎么起名（1.0.46，业务 2026-10-21）**：产物文件名是 `ERP_<32位哈希>_<时间戳>.json`，
 业务拿着哈希没法对号入座，所以列表主标题换成**用户上传时的原始文件名**，哈希降级成悬停提示。
@@ -1644,7 +1680,8 @@ customer-quote-request/
 │   ├── main.py                    # ★ 主入口（档案驱动，不含客户列名）
 │   ├── compare_with_erp.py        # ★ 与权威 ERP 导出逐字段分类对照（1.0.18）
 │   ├── customer_profile.py        # ★ 档案加载 / 校验 / 自动识别（可单独跑 CLI）
-│   ├── extract_fields.py          # ★ 抽取引擎（布局策略 + 数量档位 + 文本解析）
+│   ├── extract_fields.py          # ★ 抽取引擎（布局策略 + 数量档位 + 文本解析 + 逐产品条目）
+│   ├── product_groups.py          # ★ 按「报价结构」把一封询价分成 N 条产品记录（§7.y）
 │   ├── erp_schema.py              # ★ ERP 取值归一化 / 校验（步骤 5b，可单独跑 CLI）
 │   ├── cpms_lint.py               # ★ CPMS 写法校验 / 机械规范化（写 CPMS 后必跑）
 │   ├── internal_fields.py         # ★ 内部导出字段声明加载（ID / CPMC_ZH / Reminder / version）
@@ -1662,6 +1699,8 @@ customer-quote-request/
 │   ├── test_cplb_tree.py          # ★ 产品类别树（与源表一致 / 导航树全覆盖 / 档案映射有效）
 │   ├── test_ngv_profile.py        # ★ NGV 分区表单（section_pairs 机制 + 真实样本回归）
 │   ├── test_ingest_email.py       # 邮件入口
+│   ├── test_product_groups.py     # ★ 报价结构分组（合并/拆分/归一/TZS 重算/Lidl 真实形态）
+│   ├── test_erp_bundle.py         # ★ ERP 数组容器（读写/兼容/逐条消费方）
 │   ├── test_cpms_lint.py          # ★ CPMS 规范（样例自证 + 每条规则码 + --fix 不越界）
 │   ├── test_cpms_doc_samples.py   # ★ CPMS_规范与样例集.md 里的 6 份样例必须零违规（文档即测试）
 │   ├── test_lookup_tables.py      # ★ 三张查询表内联（厚度表 72 行逐行 / 类别表 / 日期写法）
@@ -1712,6 +1751,45 @@ processed/<task_id>/
   `cpms_content_audit --cpms`、`cpms_todo`、`CQR_Web`（列表显示记录数、交付闸门逐条判）、
   `compare_with_erp`。**新写工具时不要再 `json.load()` 当 dict 用** —— 用 `load_bundle`。
 - 回归：`tests/test_erp_bundle.py`（9 项）+ `tests/test_pipeline.py::test_导出文件顶层是数组`。
+
+### 7.y ★ 「按报价结构分组」——数组里到底该有几条（2026-10-29 森西拍板）
+
+数组格式定下来后，业务接着定了**分组口径**：「按报价结构分组」。
+
+- **同一个报价结构**（装订 / 尺寸 / 用纸 / 印色 / 表面工艺 / 包装 全部相同）的几款
+  → 合成**一条**记录，`TZS` 记款数、`CPSL1..10` 落这一组的印刷总量；
+- **任何一项不同** → 拆成**两条**记录。
+
+签名键在 `assets/structure_signature.yaml`（`keys:` 只放影响成本的键；品名/系列名/
+ISBN/出版月份/备注/交期这些元数据**不进**，否则同一个结构会被书名拆成几十条）。
+
+```bash
+# 只看分组结果（不产出 ERP JSON）——改档案/加策略后先跑它核对
+uv run ./scripts/product_groups.py "customer-files/pending/<附件>" --customer ngv
+uv run ./scripts/product_groups.py "<附件>" --customer ngv --json
+```
+
+实测（IAN 574239，`.xlsm` 6 款）：`lidl_anlage` 产出 6 个条目 → 分成 3 组
+（3 款滑动发声 / 1 款亮灯 / 2 款揭页发声），`TZS` = 3 / 1 / 2，
+`CPSL1` = 182,670 + 60,890 + 121,780 = **365,340**，与客户 Pivot 的 `Gesamtergebnis`
+逐格相等。**分组不能加/减总量**——这条每次都核对。
+
+四条硬规矩（都有回归测试）：
+
+1. **单产品询价行为一字不变**：没有 `CustomerData.products` 时就是 1 组，`values` /
+   数量档位 / `versions` 全部原样，产物与改动前逐字节一致。
+2. **款数按组重算**：整份询价是多产品时，**每一组**的 `TZS` 都按组自己的条目算 ——
+   哪怕这组只有 1 款（实测踩过：单款组沿用了整封询价的 `6 titles` → `TZS=6`）。
+3. **写法差异不能造假差异**：`210 x 280 mm` / `210×280mm` / `100 g` / `100g` 由
+   `product_groups.norm()` 归一。归一后仍不同 = 真的不同结构。**归一绝不改含义**
+   （不做单位换算、不猜同义词）。
+4. **整份合计不能漏进每组**：`scanned` 里的 `quantity` / `versions` 是整封询价的，
+   多产品时要清掉，否则每组都拿到同一个总数。
+
+CPMS 也要跟着走：**N 条记录各写一份 CPMS**（脚本仍一律留空）。管道跑完的 stdout
+会逐条列出是哪几组，别只写第一条。
+
+回归：`tests/test_product_groups.py`（26 项，含 Lidl 真实形态复刻）。
 
 ---
 
@@ -1963,6 +2041,8 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.55** | **2026-10-30** | **按「报价结构」分组 + 查看器改任务列表/产品 Tab**：① 新增 `scripts/product_groups.py`（签名见 `assets/structure_signature.yaml`）—— 装订/尺寸/用纸/印色/工艺/包装全同的几款合成一条（`TZS` 记款数），任一不同就拆；实测 IAN 574239 六款 → 3 条（TZS 3/1/2，CPSL 合计 365,340 与客户 Pivot 相等）。② `lidl_anlage` 产出逐款条目；新增 `product_table` 策略（**默认关闭**，须先校准）。③ 新增 `step4b_group_products`，`step6` 逐条断言/逐条内部字段/写数组；`validation.json` 增 `products`（分组摘要）与带 `record` 标号的 issue。④ 查看器：左栏 **任务列表**（一行一任务、标 N 条产品并逐条列出）、右栏 **产品记录 Tab**（可切换，带交付状态色）、深链接 `?path=…&r=N`、原始 JSON 显示整个数组。⑤ 新增 `tests/test_product_groups.py`（26 项）与 `CQR_Web/tests/page_harness.js`（最小 DOM shim 真跑页面脚本，16 项） |
+| **1.0.54** | **2026-10-29** | **ERP 导出改数组**（业务原话：「一个报价文件里可以包含很多个产品，而多个产品需要开很多的单，这样不方便，所以我们的 ERP 导出的 json 使用数组格式 `[]`」）：顶层永远是 `[{…}]`；读写统一走 `scripts/erp_bundle.py`（`load_bundle` / `write_bundle`，向下兼容老的单对象文件）；`erp_schema --check` / `cpms_lint` / `cpms_content_audit` / `cpms_todo` / `compare_with_erp` / `CQR_Web` 全部改成逐条消费；`scripts/migrate_erp_to_array.py` 一次性迁移历史产物（幂等、留 `.prearray.bak`） |
 | **1.0.44** | **2026-10-21** | **定时任务补上 agent 环节**：cron 从 `no_agent` 改 agent 模式，`scripts/cpms_todo.py` 当交接棒（列出 CPMS/CPMC_ZH 仍空着的产物，写完自动消失，`CPMS_TODO: N` 输出契约），空跑静默；**纯文本 enquiry 三处引擎缺陷**（CU26070901 实单）：① `QTY: 60.000 St. in total (20.000 cps/title)` —— `parse_single_quantity` 新增「数字在前 + in total」形态（旧正则只认 `total <数字>`，整条丢成 `CPSL1=0`）② 款数扫描新增 `^(N) titles (` 锚行首规则（不锚会抓到客户疑问句里的 `4 titles`）③ `FSC-Mix` → `FSC Mix` 枚举别名（不归一化报 error）；新增 `tests/test_ngv_text_enquiry.py` 13 项 |
 | **1.0.43** | **2026-10-20** | **上传 → 定时抽取 → 自动刷出产物**：`CQR_Web` 新增 `POST /api/uploads`（落 `customer-files/pending/`，`upload.py` 纯逻辑）与 `GET /api/pending`（排队条）；页面每 **10 秒**静默刷新、新产物自动选中并打「新」徽章；抽取改由 **Hermes 定时任务**（`scripts/scan_pending.py` + `scripts/scan_pending.sh`，每 5 分钟）执行 —— 原子认领 / 失败 3 次进 `failed/_stuck_*` / `flock` 防叠加 / **空 pending 静默**；`--lan` 局域网开放（无认证，业务明确） |
 | **1.0.42** | **2026-10-20** | **查表去子进程**：`select_page_thickness.py` / `product_categories.py` / `string2timestamp.py` / `uuid_utils.py` 内联进 `main.py`（`get_page_thickness` / `parse_product_categories` / `_parse_date_value` / `uuid4`）；新增 `--lookup thickness/category/date` 单点查询；`tests/test_lookup_tables.py` 对着真实表逐行钉住等价（厚度 72 行 / 类别表 / 9 种日期写法），6 份真实产物重构前后**逐字段 0 差异** |

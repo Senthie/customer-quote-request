@@ -55,6 +55,8 @@ from .data import (
     read_config_version,
     resolve_export,
     scan_exports,
+    scan_tasks,
+    validation_per_record,
 )
 from .upload import (
     DEFAULT_PENDING_DIR,
@@ -123,7 +125,11 @@ def create_app(processed_dir: Optional[Path | str] = None,
     def api_exports():
         root_now = current_root()
         items = scan_exports(root_now)
-        return jsonify(root=str(root_now), count=len(items), exports=items)
+        # ★ 2026-10-29：列表页是**任务列表**（一个任务 = 一次报价，可含多个产品）。
+        #   `exports` 仍按文件返回（兼容老页面/脚本），`tasks` 是按任务目录聚合的。
+        tasks = scan_tasks(root_now)
+        return jsonify(root=str(root_now), count=len(items), exports=items,
+                       task_count=len(tasks), tasks=tasks)
 
     # ── 上传（本服务唯一的写入口）────────────────────────────────────────
     @app.post("/api/uploads")
@@ -168,6 +174,9 @@ def create_app(processed_dir: Optional[Path | str] = None,
         except Exception as exc:  # noqa: BLE001
             return jsonify(error=f"解析失败: {type(exc).__name__}: {exc}"), 422
         data: Any = records[0]
+        # 每条记录各自的校验结果（详情页按 Tab 显示，不能把第一条的结论套给别人）
+        per_record_validation = validation_per_record(target, records)
+        incomplete_by_record = [delivery_gates(rec) for rec in records]
         return jsonify(
             relpath=relpath,
             data=data,
@@ -175,9 +184,11 @@ def create_app(processed_dir: Optional[Path | str] = None,
             record_count=len(records),
             # 取值校验用权威实现（erp_schema.validate_result），页面不自己比枚举
             validation=build_validation_payload(target, data),
+            validation_by_record=per_record_validation,
             # 交付闸门同样只在服务端算一份（页面只显示）；多条记录逐条判
             incomplete=[g if len(records) == 1 else f"第{i}条：{g}"
                         for i, rec in enumerate(records, 1) for g in delivery_gates(rec)],
+            incomplete_by_record=incomplete_by_record,
         )
 
     @app.get("/api/schema")

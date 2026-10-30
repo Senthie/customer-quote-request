@@ -217,7 +217,36 @@
 
         main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 
-        /* ── 徽章 ───────────────────────────────────────────── */
+        /* ── 产品记录 Tab（多产品）+ 徽章 ─────────────────────── */
+        /* ★ 2026-10-29 多产品：产物是数组 → 任务详情按「产品记录」分 Tab 切换 */
+        .tabs {
+            display: flex; gap: 6px; flex-wrap: wrap; align-items: stretch;
+            padding: 10px 14px; border-bottom: 1px solid var(--line-2); background: #f7f9fc;
+        }
+        .tabs .tab {
+            display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+            padding: 7px 11px; border: 1px solid var(--line); border-radius: 9px;
+            background: var(--card); cursor: pointer; font: inherit; text-align: left;
+            max-width: 340px;
+        }
+        .tabs .tab:hover { border-color: #9dbbdf; background: #f3f8ff; }
+        .tabs .tab.active { border-color: var(--brand); background: #eaf1fb;
+                            box-shadow: 0 0 0 2px rgba(26,58,111,.10); }
+        .tabs .tab .t1 { display: flex; align-items: center; gap: 6px; font-size: .8rem;
+                         font-weight: 620; color: var(--ink); }
+        .tabs .tab .t2 { font-size: .75rem; color: var(--ink-3); max-width: 320px;
+                         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tabs .tab .idx { font-family: var(--mono); font-size: .72rem; color: #fff;
+                          background: var(--brand); border-radius: 6px; padding: 0 6px; }
+        .tabs .tab.warn .idx { background: var(--warn); }
+        .tabs .tab.bad  .idx { background: var(--bad); }
+        .tabs .tab.ok   .idx { background: var(--ok); }
+        /* 任务列表里的「这条询价有哪几个产品」 */
+        .prod-line { display: flex; gap: 6px; font-size: .77rem; color: var(--ink-2);
+                     margin-top: 3px; line-height: 1.35; }
+        .prod-line .idx2 { font-family: var(--mono); font-size: .7rem; color: var(--ink-3);
+                           min-width: 1.1em; }
+        .prod-line .cplb { color: var(--ink-3); }
         .badge {
             font-size: .7rem; font-weight: 600; padding: 1px 7px; border-radius: 20px;
             border: 1px solid; white-space: nowrap; display: inline-block;
@@ -386,6 +415,13 @@ const state = {
     fresh: new Set(),      // 本轮刷新里「新出现」的产物 relpath（列表打「新」）
     lastScanAt: "",        // 上次自动刷新的时刻
     listFolded: false,     // 产物列表是否收起（浏览器记住选择）
+
+    // ★ 2026-10-29 产物是数组：列表按**任务**聚合，详情按**产品记录**分 Tab
+    tasks: [],             // 任务列表（一个任务 = 一次报价，可含多条产品记录）
+    records: [],           // 当前任务的 N 条产品记录（/api/export 的 records）
+    activeRecord: 0,       // 正在看第几条（0-based）
+    validationByRecord: [],
+    incompleteByRecord: [],
 };
 
 const BASE_TITLE = "ERP · 报价需求单导出查看器";
@@ -473,12 +509,33 @@ async function fetchAll() {
 
 function applyList(list, pend) {
     state.exports = list.exports || [];
+    // 服务端按任务目录聚合好的「任务列表」；老服务端没有 → 前端自己按目录兜一层
+    state.tasks = Array.isArray(list.tasks) ? list.tasks : tasksFromExports(state.exports);
     state.scanRoot = list.root || "";
     state.pending = pend.items || [];
     state.pendingRoot = pend.root || "";
     state.scanOk = true;
     state.scanError = "";
     state.lastScanAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+/** 老服务端（没有 /api/exports 的 tasks 字段）时的兜底：按任务目录把文件聚成任务 */
+function tasksFromExports(items) {
+    const map = new Map();
+    for (const it of items || []) {
+        const key = it.dir || it.task_id || it.relpath;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(it);
+    }
+    return [...map.entries()].map(([key, group]) => {
+        const p = group[0];                      // items 已按 mtime 倒序
+        return Object.assign({}, p, {
+            task_key: key,
+            record_count: p.record_count || (p.products || []).length,
+            products: p.products || [],
+            extra_exports: group.slice(1).map((x) => x.relpath),
+        });
+    }).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
 }
 
 async function loadFromServer() {
@@ -489,18 +546,20 @@ async function loadFromServer() {
         state.schema = await schemaRes.json();
         applyList(list, pend);
 
-        // 支持 ?path=… 深链接；否则自动选最新的一份
-        const want = new URLSearchParams(location.search).get("path");
-        const target = (want && state.exports.find((e) => e.relpath === want))
-            || state.exports.find((e) => !e.superseded)
-            || state.exports[0]
+        // 支持 ?path=…&r=… 深链接；否则自动选最新的一个任务
+        const params = new URLSearchParams(location.search);
+        const want = params.get("path");
+        const target = (want && state.tasks.find((t) => t.relpath === want))
+            || state.tasks.find((t) => !t.superseded)
+            || state.tasks[0]
             || null;
-        if (target) await selectExport(target);
+        if (target) await selectExport(target, Number(params.get("r") || 1) - 1);
         render();
     } catch (err) {
         state.scanOk = false;
         state.scanError = (err && err.message) || String(err);
         state.exports = [];
+        state.tasks = [];
         state.pending = [];
         render();
     }
@@ -519,26 +578,26 @@ async function refreshQuietly() {
     if (state.upload.busy) return;
     try {
         const { list, pend } = await fetchAll();
-        const known = new Set(state.exports.map((e) => e.relpath));
+        const known = new Set(state.tasks.map((e) => e.relpath));
         const pendingBefore = state.pending.length;
-        const sigBefore = state.exports.map((e) => e.relpath + "|" + e.mtime).join(",");
+        const sigBefore = state.tasks.map((e) => e.relpath + "|" + e.mtime).join(",");
 
         applyList(list, pend);
 
-        const fresh = state.exports.filter((e) => !known.has(e.relpath) && !e.superseded);
+        const fresh = state.tasks.filter((e) => !known.has(e.relpath) && !e.superseded);
         for (const e of fresh) state.fresh.add(e.relpath);
 
         if (fresh.length) {
-            await selectExport(fresh[0]);      // 新产物 → 直接看它
+            await selectExport(fresh[0]);      // 新任务 → 直接看它
             return;
         }
-        // 正在看的那份被挪走/删了 → 退到最新一份
+        // 正在看的那个任务被挪走/删了 → 退到最新一个
         const cur = state.currentMeta;
-        if (cur && !cur.manual && !state.exports.some((e) => e.relpath === cur.relpath)) {
-            const fallback = state.exports.find((e) => !e.superseded) || state.exports[0] || null;
+        if (cur && !cur.manual && !state.tasks.some((e) => e.relpath === cur.relpath)) {
+            const fallback = state.tasks.find((e) => !e.superseded) || state.tasks[0] || null;
             if (fallback) { await selectExport(fallback); return; }
         }
-        const sigAfter = state.exports.map((e) => e.relpath + "|" + e.mtime).join(",");
+        const sigAfter = state.tasks.map((e) => e.relpath + "|" + e.mtime).join(",");
         if (sigAfter === sigBefore && state.pending.length === pendingBefore) return;
         render();
     } catch (_) {
@@ -546,7 +605,11 @@ async function refreshQuietly() {
     }
 }
 
-async function selectExport(meta) {
+/**
+ * 选中一个**任务**（= 一个 processed/<task_id>/ 目录），并载入它的 N 条产品记录。
+ * `wantRecord` 从 0 起；越界自动夹到范围内（深链接写错不会白屏）。
+ */
+async function selectExport(meta, wantRecord) {
     try {
         const res = await fetch("api/export?path=" + encodeURIComponent(meta.relpath), { cache: "no-store" });
         if (!res.ok) {
@@ -554,16 +617,19 @@ async function selectExport(meta) {
             throw new Error(body.error || ("HTTP " + res.status));
         }
         const payload = await res.json();
-        state.current = payload.data || {};
-        state.validation = payload.validation || null;
-        state.incomplete = payload.incomplete || [];
+        const records = (payload.records && payload.records.length)
+            ? payload.records : [payload.data || {}];
+        state.records = records;
+        state.validationByRecord = payload.validation_by_record || [];
+        state.incompleteByRecord = payload.incomplete_by_record || [];
+        state.activeRecord = clampIndex(wantRecord, records.length);
         state.currentMeta = meta;
         state.showRaw = false;
         state.openPre = {};
-        try {
-            history.replaceState(null, "", "?path=" + encodeURIComponent(meta.relpath));
-        } catch (_) { /* file:// 下可能不允许，忽略 */ }
+        applyActiveRecord();
+        syncUrl(meta, state.activeRecord);
     } catch (err) {
+        state.records = [];
         state.current = {};
         state.validation = null;
         state.incomplete = null;   // 取不到产物 → 交付状态未知，不瞎标
@@ -573,21 +639,62 @@ async function selectExport(meta) {
     render();
 }
 
-/** 手动导入（没有服务端时唯一的路） */
+function clampIndex(i, total) {
+    const n = Math.max(1, Number(total) || 1);
+    if (!Number.isFinite(Number(i))) return 0;
+    return Math.min(Math.max(0, Math.trunc(Number(i))), n - 1);
+}
+
+/** 把「当前选中的那条记录」的三份数据摆到 state 上（渲染函数只认 state.current）。 */
+function applyActiveRecord() {
+    const rec = state.records[state.activeRecord] || {};
+    state.current = rec;
+    const byRecord = state.validationByRecord;
+    state.validation = byRecord.length ? byRecord[state.activeRecord] : null;
+    const gates = state.incompleteByRecord;
+    state.incomplete = gates.length ? (gates[state.activeRecord] || []) : null;
+}
+
+function setActiveRecord(index) {
+    state.activeRecord = clampIndex(index, state.records.length);
+    state.openPre = {};                 // 换一条记录就不保留上一条的展开状态
+    applyActiveRecord();
+    if (state.currentMeta) syncUrl(state.currentMeta, state.activeRecord);
+    render();
+}
+
+function syncUrl(meta, index) {
+    try {
+        const q = new URLSearchParams();
+        q.set("path", meta.relpath);
+        if (state.records.length > 1) q.set("r", String(index + 1));
+        history.replaceState(null, "", "?" + q.toString());
+    } catch (_) { /* file:// 下可能不允许，忽略 */ }
+}
+
+/** 手动导入（没有服务端时唯一的路）。数组 = 一个任务里的多个产品 → 一样出 Tab。 */
 function importFile(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
         try {
             const data = JSON.parse(e.target.result);
-            state.current = data && typeof data === "object" && !Array.isArray(data) ? data : {};
-            state.validation = null;   // 手动导入没有权威校验结果（页面会说明）
-            state.incomplete = null;   // 交付闸门也只在服务端算 → 手动导入判不了，不瞎标
+            const records = Array.isArray(data) ? data
+                : (data && Array.isArray(data.records) ? data.records : [data]);
+            state.records = records.filter((r) => r && typeof r === "object");
+            state.activeRecord = 0;
+            state.validationByRecord = [];      // 手动导入没有权威校验结果（页面会说明）
+            state.incompleteByRecord = [];      // 交付闸门也只在服务端算 → 判不了
             state.currentMeta = {
                 relpath: file.name, filename: file.name,
                 task_id: "(手动导入)", mtime_iso: new Date(file.lastModified).toLocaleString("sv-SE"),
-                size: file.size, superseded: false, key_count: Object.keys(state.current).length,
+                size: file.size, superseded: false,
+                key_count: Object.keys(state.records[0] || {}).length,
+                record_count: state.records.length,
                 manual: true,
             };
+            applyActiveRecord();
+            state.validation = null;
+            state.incomplete = null;
             state.showRaw = false;
             state.openPre = {};
             render();
@@ -795,7 +902,9 @@ function renderHeader() {
 
     const status = el("span", { class: "status" + (state.scanOk ? "" : " err") });
     if (state.scanOk) {
-        status.textContent = "已扫描 " + state.exports.length + " 份产物"
+        const prodTotal = state.tasks.reduce((n, t) => n + (t.record_count || 0), 0);
+        status.textContent = "已扫描 " + state.tasks.length + " 个任务（"
+            + prodTotal + " 条产品记录）"
             + (state.lastScanAt ? " · 上次刷新 " + state.lastScanAt + "（每 10 秒自动）" : "");
     } else {
         status.textContent = "未连上服务端（" + state.scanError + "）";
@@ -854,11 +963,15 @@ function renderHeader() {
 
     // ★ 未完成 · 不得交付 —— 比下面的「提醒」更严重，放上头
     //   （CPMS / 中文品名这两处脚本刻意不写，管道刚跑完的产物天然是这个状态）
+    //   多产品时这是**当前这条记录**的闸门（按 Tab 切换各看各的）。
     if (Array.isArray(state.incomplete) && state.incomplete.length) {
+        const total = state.records.length;
+        const which = total > 1 ? ("（第 " + (state.activeRecord + 1) + " / " + total
+                                   + " 条产品记录）") : "";
         const gate = el("div", { class: "banner bad" },
             el("div", {},
                 el("b", { text: "❗ 未完成 · 不得交付" }),
-                el("span", { text: " —— 产物里还有必须由 agent 亲自补的地方：" })));
+                el("span", { text: which + " —— 这条记录里还有必须由 agent 亲自补的地方：" })));
         for (const why of state.incomplete) {
             gate.append(el("div", { class: "gate", text: "· " + why }));
         }
@@ -884,11 +997,11 @@ function renderHeader() {
 function renderListRail() {
     return el("aside", { class: "panel list rail", id: "listPanel" },
         el("button", {
-            class: "rail-btn", type: "button", title: "展开产物列表",
+            class: "rail-btn", type: "button", title: "展开任务列表",
             onclick: () => setListFolded(false),
         },
             el("span", { text: "▸" }),
-            el("span", { text: "产物列表 " + state.exports.length }),
+            el("span", { text: "任务列表 " + state.tasks.length }),
         ));
 }
 
@@ -897,22 +1010,43 @@ function setListFolded(folded) {
     writePref("listFolded", state.listFolded ? "1" : "0");
     render();                  // 整页重画：列宽 + 列表要一起变
 }
+
+/** 一条产品记录的摘要行（任务列表里一眼看出这条询价有哪些产品） */
+function productLine(p) {
+    const name = String(p.CPMC_ZH || p.CPMC || "（无产品名称）").trim();
+    const dims = [];
+    if (p.CPLB) dims.push(String(p.CPLB));
+    if (p.TZS !== undefined && p.TZS !== null) dims.push("TZS " + p.TZS);
+    if (p.CPSL1) dims.push(fmtNum(Number(p.CPSL1)) + " cps");
+    return el("div", { class: "prod-line" },
+        el("span", { class: "idx2", text: p.index + "." }),
+        el("span", { text: name, title: name }),
+        dims.length ? el("span", { class: "cplb", text: "· " + dims.join(" · ") }) : null,
+        (p.incomplete && p.incomplete.length)
+            ? el("span", { class: "badge bad", text: "未写完", title: p.incomplete.join("；") })
+            : null,
+    );
+}
+
 function renderList() {
     if (state.listFolded) return renderListRail();
 
     const q = state.filter.trim().toLowerCase();
-    const items = state.exports.filter((it) => {
+    const items = state.tasks.filter((it) => {
         if (!q) return true;
-        return [it.source_name, it.task_id, it.CPMC, it.CPMC_ZH, it.ID, it.relpath,
-                it.KHDH, String(it.version ?? ""), it.mtime_iso]
-            .some((s) => String(s ?? "").toLowerCase().includes(q));
+        const hay = [it.source_name, it.task_id, it.ID, it.relpath, it.mtime_iso,
+                     String(it.version ?? ""), it.customer];
+        for (const p of it.products || []) {
+            hay.push(p.CPMC, p.CPMC_ZH, p.CPLB, p.KHDH);
+        }
+        return hay.some((s) => String(s ?? "").toLowerCase().includes(q));
     });
 
     const head = el("div", { class: "panel-head" },
-        el("h2", { text: "产物列表" }),
-        el("span", { class: "count-badge", text: items.length + " / " + state.exports.length }),
+        el("h2", { text: "任务列表" }),
+        el("span", { class: "count-badge", text: items.length + " / " + state.tasks.length }),
         el("button", {
-            class: "fold-btn", type: "button", title: "收起列表（把宽度还给产物）",
+            class: "fold-btn", type: "button", title: "收起列表（把宽度还给内容）",
             onclick: () => setListFolded(true),
         }, "⟨ 收起"),
     );
@@ -920,13 +1054,20 @@ function renderList() {
     const search = el("div", { style: "padding:8px 10px 0" },
         el("input", {
             type: "search", id: "filterInput",
-            placeholder: "按文件名 / 单号 / CPMC / 版本 过滤…",
+            placeholder: "按文件名 / 单号 / 产品名称 / 版本 过滤…",
             value: state.filter, style: "width:100%",
             oninput: (e) => { state.filter = e.target.value; renderListOnly(); },
         }));
 
+    const totalProducts = items.reduce((n, it) => n + (it.record_count || 0), 0);
+    const sub = el("div", {
+        class: "hint",
+        style: "padding:4px 12px 0;font-size:.74rem;color:var(--ink-3)",
+        text: items.length + " 个任务 · 共 " + totalProducts + " 条产品记录",
+    });
+
     const box = el("div", { class: "items", id: "itemsBox" });
-    if (!state.exports.length) {
+    if (!state.tasks.length) {
         box.append(el("div", { class: "empty-state", style: "padding:22px 12px" },
             el("div", { text: state.scanOk ? "processed/ 下还没有 ERP_*.json" : "未连上服务端" })));
     }
@@ -935,19 +1076,22 @@ function renderList() {
         const badges = el("div", { class: "l3" });
         if (state.fresh.has(it.relpath)) {
             badges.append(el("span", { class: "badge ok", text: "新",
-                                       title: "刚抽出来的产物（10 秒刷新时发现的新文件）" }));
+                                       title: "刚抽出来的任务（10 秒刷新时发现的新产物）" }));
         }
         if (it.broken) {
             badges.append(el("span", { class: "badge bad", text: "文件损坏" }));
         } else {
+            const count = it.record_count || 0;
+            badges.append(el("span", {
+                class: "badge " + (count > 1 ? "v2" : "plain"),
+                text: count > 1 ? count + " 条产品" : "1 条产品",
+                title: count > 1
+                    ? "一个报价文件里有多条产品记录（按报价结构分组）→ 详情页分 Tab 切换"
+                    : "这份询价只有一条产品记录",
+            }));
             badges.append(it.version === undefined
                 ? el("span", { class: "badge old", text: "v1（无 version）" })
                 : el("span", { class: "badge v2", text: "v" + it.version }));
-            badges.append(el("span", {
-                class: "badge " + (it.key_count === 59 ? "plain" : "warn"),
-                text: it.key_count + " 键",
-                title: "当前结构 = 59 ERP + 内部字段",
-            }));
             // 当次运行的校验结果（没有报告就不标，别拿现算的吓人）
             const v = it.validation;
             if (v) {
@@ -969,6 +1113,17 @@ function renderList() {
             }
             if (it.superseded) badges.append(el("span", { class: "badge old", text: "已被取代" }));
         }
+
+        // 产品明细：最多列 3 条，其余折成「+N」
+        const productBox = el("div", { style: "margin-top:2px" });
+        const prods = it.products || [];
+        for (const p of prods.slice(0, 3)) productBox.append(productLine(p));
+        if (prods.length > 3) {
+            productBox.append(el("div", { class: "prod-line" },
+                el("span", { class: "idx2", text: "+" }),
+                el("span", { class: "cplb", text: "还有 " + (prods.length - 3) + " 条，点开看全部" })));
+        }
+
         box.append(el("button", {
             class: "item" + (active ? " active" : ""),
             onclick: () => { state.fresh.delete(it.relpath); selectExport(it); },
@@ -980,17 +1135,17 @@ function renderList() {
             it.source_name
                 ? el("div", {
                     class: "src", text: it.source_name,
-                    title: "原始输入：" + it.source_name + "（task_id " + (it.task_id || "") + "）",
+                    title: "原始输入：" + it.source_name + "（任务 " + (it.task_id || "") + "）",
                   })
                 : el("div", { class: "tid", text: it.task_id || "",
                               title: "找不到原始输入文件 → 只能显示 task_id" }),
-            el("div", { class: "cpmc", text: it.CPMC_ZH || it.CPMC || "（无产品名称）" }),
+            productBox,
             badges,
         ));
     }
 
     const foot = el("div", { class: "foot", text: state.scanRoot || "(未连接服务端)" });
-    return el("aside", { class: "panel list", id: "listPanel" }, head, search, box, foot);
+    return el("aside", { class: "panel list", id: "listPanel" }, head, search, sub, box, foot);
 }
 
 /* 只刷列表，避免每次输入都重建整个页面（会丢焦点） */
@@ -1117,26 +1272,106 @@ function validBadge() {
     });
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   渲染：任务级摘要 + 产品记录 Tab（★ 2026-10-29 产物是数组）
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/** 任务级信息（这条询价是谁发的、什么时候跑的、里面有几条产品记录） */
+function renderTaskSummary() {
+    const m = state.currentMeta || {};
+    const n = state.records.length;
+    const kvs = [
+        ["原始输入", m.source_name || "（找不到原件：可能是手动导入或老产物）"],
+        ["任务ID", m.task_id || "-"],
+        ["产品记录", n + " 条（ERP 导出为数组）" + (n > 1 ? " —— 下方按条切换" : "")],
+        ["产出时间", m.mtime_iso || "-"],
+        ["文件名", m.filename || "-"],
+        ["任务目录", m.dir || "-"],
+    ];
+    const panel = el("section", { class: "panel" },
+        el("div", { class: "panel-head" },
+            el("h2", { text: "本次任务" }),
+            m.superseded ? el("span", { class: "badge old", text: "已被取代" }) : null,
+            m.manual ? el("span", { class: "badge plain", text: "手动导入" }) : null,
+            m.broken ? el("span", { class: "badge bad", text: "文件损坏" }) : null,
+            el("div", { class: "spacer" }),
+            el("span", { class: "badge " + (n > 1 ? "v2" : "plain"),
+                         text: n + " 条产品记录" }),
+        ),
+        el("div", { class: "summary" },
+            el("div", { class: "kv-grid" },
+                kvs.map(([k, v]) => el("div", { class: "kv" },
+                    el("span", { class: "k", text: k }),
+                    el("span", { class: "v", text: v }))))),
+    );
+    // 读取失败的横幅由 renderHeader() 统一显示，这里不重复
+    return panel;
+}
+
+/** Tab 徽章配色：这条记录能不能交付 */
+function recordStatus(rec, index) {
+    const gates = state.incompleteByRecord[index];
+    if (Array.isArray(gates) && gates.length) return "bad";
+    const v = state.validationByRecord[index];
+    if (v && (v.errors || []).length) return "bad";
+    if (v && (v.warnings || []).length) return "warn";
+    if (Array.isArray(gates)) return "ok";
+    return "";
+}
+
+/**
+ * 多条产品记录 → **可切换的 Tab**（业务 2026-10-29：「原先的 ERP 数据展示页，
+ * 变成多个 Tag 可切换的展示页」）。只有 1 条时不渲染 Tab 条，直接显示内容。
+ */
+function renderTabs() {
+    const records = state.records || [];
+    if (records.length <= 1) return el("span", { class: "hidden" });
+
+    const bar = el("div", { class: "tabs" });
+    records.forEach((rec, i) => {
+        const name = String(rec.CPMC_ZH || rec.CPMC || "").trim() || ("产品记录 " + (i + 1));
+        const dims = [];
+        if (rec.CPLB) dims.push(String(rec.CPLB));
+        if (rec.TZS !== undefined && rec.TZS !== null && rec.TZS !== "") dims.push("TZS " + rec.TZS);
+        if (rec.CPSL1) dims.push(fmtNum(Number(rec.CPSL1)) + " cps");
+        const status = recordStatus(rec, i);
+        bar.append(el("button", {
+            class: "tab" + (i === state.activeRecord ? " active" : "") + (status ? " " + status : ""),
+            type: "button",
+            title: name + (dims.length ? "（" + dims.join(" · ") + "）" : ""),
+            onclick: () => setActiveRecord(i),
+        },
+            el("span", { class: "t1" },
+                el("span", { class: "idx", text: String(i + 1) }),
+                el("span", { text: name })),
+            el("span", { class: "t2", text: dims.join(" · ") || "（结构键待补）" }),
+        ));
+    });
+    return el("section", { class: "panel", style: "padding:0;overflow:hidden" }, bar);
+}
+
 function renderSummary() {
     const m = state.currentMeta || {};
     const d = structuralDiff();
     const cur = state.current || {};
+    const n = state.records.length;
+    const idx = state.activeRecord;
     const kvs = [
-        ["原始输入", m.source_name || "（找不到原件：可能是手动导入或老产物）"],
-        ["任务ID", m.task_id || "-"],
+        ["产品名称", String(cur.CPMC_ZH || cur.CPMC || "").trim() || "（空 —— 必须 agent 拟）"],
+        ["产品类别", cur.CPLB === undefined ? "缺" : String(cur.CPLB || "（空）")],
+        ["产品大类", cur.CPDL === undefined ? "缺" : String(cur.CPDL || "（空）")],
+        ["TZS / CPSL1", (cur.TZS ?? "缺") + " 款 / " + (cur.CPSL1 ?? "缺")],
+        ["尺寸 CD×KD×GD", [cur.CD, cur.KD, cur.GD].map((v) => v ?? "缺").join(" × ")],
+        ["客户单号", cur.KHDH === undefined ? "缺" : (cur.KHDH || "（空）")],
+        ["CPMS 字数", (typeof cur.CPMS === "string" && cur.CPMS.trim())
+            ? cur.CPMS.length + " 字" : "未写（agent 必填）"],
         ["配置版本", cur.version === undefined ? "缺（第 1 代产物）" : String(cur.version)],
-        ["文件名", m.filename || "-"],
-        ["产出时间", m.mtime_iso || "-"],
         ["键统计", d.actualCount + " 个（应有 " + d.erpKeys.length + " ERP"
             + (d.internalKeys.length ? " + " + d.internalKeys.length + " 内部" : "") + "）"],
-        ["CPLB", cur.CPLB === undefined ? "缺" : String(cur.CPLB || "（空）")],
-        ["TZS / CPSL1", (cur.TZS ?? "缺") + " 款 / " + (cur.CPSL1 ?? "缺")],
-        ["KHDH", cur.KHDH === undefined ? "缺" : (cur.KHDH || "（空）")],
     ];
     const panel = el("section", { class: "panel" },
-        el("div", { class: "panel-head" }, el("h2", { text: "本份产物" }),
-            m.superseded ? el("span", { class: "badge old", text: "已被取代" }) : null,
-            m.manual ? el("span", { class: "badge plain", text: "手动导入" }) : null,
+        el("div", { class: "panel-head" },
+            el("h2", { text: n > 1 ? ("第 " + (idx + 1) + " / " + n + " 条产品记录") : "本份产物" }),
             m.broken ? el("span", { class: "badge bad", text: "文件损坏" }) : null,
             validBadge(),
         ),
@@ -1237,12 +1472,18 @@ function renderGroups() {
 
 function renderRaw() {
     if (!state.showRaw) return el("span", { class: "hidden" });
-    const json = JSON.stringify(state.current, null, 2);
+    const n = state.records.length;
+    // 多产品时显示**整个数组**（交付物就是一个文件），不是单条 —— 避免误以为只有这一条
+    const payload = n > 1 ? state.records : (state.records[0] || state.current || {});
+    const json = JSON.stringify(payload, null, 2);
     return el("section", { class: "panel" },
         el("div", { class: "panel-head" },
             el("h2", { text: "原始 JSON" }),
+            n > 1 ? el("span", { class: "badge v2", text: "数组 · " + n + " 条" }) : null,
             el("span", { class: "hint", style: "font-size:.78rem;color:var(--ink-3)",
-                         text: "键顺序 = 文件里的实际顺序（前 59 个是 ERP 键，位置不许动）" }),
+                         text: n > 1
+                             ? "整个数组（交付物就是这一个文件；每条记录 59 个 ERP 键，键序不许动）"
+                             : "键顺序 = 文件里的实际顺序（前 59 个是 ERP 键，位置不许动）" }),
         ),
         el("pre", { class: "raw", text: json }),
     );
@@ -1272,8 +1513,12 @@ function syncTitle() {
     const cur = state.current || {};
     const ident = String(cur.CPMC_ZH || cur.CPMC || cur.KHDH || "").trim();
     const stamp = String(m.task_id || "").slice(0, 8);
+    // 多产品：标题带上「第几条」，导出的 PDF 才分得清是哪一条
+    const which = state.records.length > 1
+        ? "第" + (state.activeRecord + 1) + "条/" + state.records.length
+        : "";
     // 文件名里不能有的字符换掉（Windows 更严），太长也截一下
-    document.title = [BASE_TITLE, stamp, ident].filter((s) => s !== "")
+    document.title = [BASE_TITLE, stamp, which, ident].filter((s) => s !== "")
         .join(" · ").replace(/[\\/:*?"<>|\n\r\t]/g, "_").slice(0, 120);
 }
 
@@ -1288,7 +1533,9 @@ function render() {
     const page = document.getElementById("page");
     const main = el("main");
     if (state.currentMeta) {
-        main.append(renderSummary(), renderGroups(), renderRaw());
+        // 任务级摘要 → 产品记录 Tab → 当前这条记录的字段
+        main.append(renderTaskSummary(), renderTabs(), renderSummary(),
+                    renderGroups(), renderRaw());
     } else {
         main.append(renderEmptyState());
     }

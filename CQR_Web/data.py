@@ -384,19 +384,38 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         item["key_count"] = 0
         item["cpms_len"] = 0
         item["record_count"] = 0
+        item["products"] = []
         item["incomplete"] = []   # 读不出来就没法判交付状态（列表上另有「文件损坏」徽章）
         return item
 
     # 多产品文件的交付闸门要**逐条**判（任何一条没写完都不许交付）
     gates: list[str] = []
+    briefs: list[dict[str, Any]] = []
     for ridx, rec in enumerate(records, 1):
-        for g in delivery_gates(rec):
+        rec_gates = delivery_gates(rec)
+        for g in rec_gates:
             gates.append(g if len(records) == 1 else f"第{ridx}条：{g}")
-    cpms_lens = [len(r["CPMS"]) if isinstance(r.get("CPMS"), str) else 0 for r in records]
+        briefs.append({
+            "index": ridx,
+            "CPMC": rec.get("CPMC"),
+            "CPMC_ZH": rec.get("CPMC_ZH"),
+            "CPLB": rec.get("CPLB"),
+            "CPDL": rec.get("CPDL"),
+            "TZS": rec.get("TZS"),
+            "CPSL1": rec.get("CPSL1"),
+            "KHDH": rec.get("KHDH"),
+            "cpms_len": len(rec["CPMS"]) if isinstance(rec.get("CPMS"), str) else 0,
+            # 空列表 = 这条记录可以交付
+            "incomplete": rec_gates,
+        })
+    cpms_lens = [b["cpms_len"] for b in briefs]
 
     item.update({
         "key_count": len(data),
         "record_count": len(records),
+        # ★ 每条产品记录的摘要（2026-10-29 起产物是数组）——
+        #   任务列表要显示「这份询价里有几个产品」，详情页要按它出 Tab。
+        "products": briefs,
         # 内部字段（老产物可能没有 → None，页面上显示「缺」）
         "version": data.get("version"),
         "ID": data.get("ID"),
@@ -416,6 +435,100 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         "incomplete": gates,
     })
     return item
+
+
+def validation_per_record(export_path: Path, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """逐条记录的取值校验结果（详情页每个 Tab 各自显示）。
+
+    * 只有 1 条 → 就是任务级那份，原样返回（行为不变）；
+    * 有当次运行报告 → 按报告里错误/警告上的 `record` 标号过滤
+      （`main.py` 在多产品时会给每条 issue 打 `record`；没有标号的视为全局问题，每条都显示）；
+    * 没有报告 → 对每条记录**现场重算**，不能把第一条的结果套给所有条。
+    """
+    base = build_validation_payload(export_path, records[0])
+    if len(records) <= 1:
+        return [base]
+    if base.get("source") == "run_report":
+        out = []
+        for idx in range(1, len(records) + 1):
+            def pick(items):
+                return [i for i in (items or [])
+                        if i.get("record") in (None, idx, str(idx))]
+            out.append(dict(base, errors=pick(base.get("errors")),
+                            warnings=pick(base.get("warnings"))))
+        return out
+
+    issues_module = _load_module("erp_schema")
+    internal_keys = [f["key"] for f in _load_module("internal_fields").load_internal_fields()]
+    out = []
+    for rec in records:
+        try:
+            issues = issues_module.validate_result(rec, internal_fields=internal_keys)
+            out.append(dict(base,
+                            errors=[i for i in issues if i.get("level") == "error"],
+                            warnings=[i for i in issues if i.get("level") != "error"]))
+        except Exception:  # noqa: BLE001 —— 某条重算失败不该让整页看不了
+            out.append(dict(base, errors=[], warnings=[]))
+    return out
+
+
+def scan_tasks(root: Optional[Path] = None) -> list[dict[str, Any]]:
+    """★ 2026-10-29 起列表页是**任务列表**：一个任务 = 一次报价 = 一个 `processed/<task_id>/`。
+
+    为什么按目录聚合而不是按文件：ERP 导出改成数组后，**一个文件就能装多个产品**，
+    所以「产物（文件）」和「任务（一条询价）」不再一一对应。业务要看的是任务：
+    这条询价进来过几次、里面有几个产品、每条写完了没有。
+
+    一个任务目录里若有多份 `ERP_*.json`（重跑留下的），只认**最新那份**为准，
+    旧的挂到 `extra_exports`（不重复统计数量/产品，否则记录数会翻倍）。
+    """
+    items = scan_exports(root)
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for item in items:
+        key = str(item.get("dir") or item.get("task_id") or item.get("relpath") or "")
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(item)
+
+    tasks: list[dict[str, Any]] = []
+    for key in order:
+        group = buckets[key]                     # scan_exports 已按 mtime 倒序
+        primary = group[0]
+        products = list(primary.get("products") or [])
+        task = {
+            "task_key": key,
+            "dir": primary.get("dir"),
+            "task_id": primary.get("task_id"),
+            "relpath": primary.get("relpath"),
+            "filename": primary.get("filename"),
+            "source_name": primary.get("source_name"),
+            "source_name_from": primary.get("source_name_from"),
+            "mtime": primary.get("mtime"),
+            "mtime_iso": primary.get("mtime_iso"),
+            "size": primary.get("size"),
+            "superseded": primary.get("superseded"),
+            "broken": primary.get("broken"),
+            "customer": primary.get("customer"),
+            "version": primary.get("version"),
+            "ID": primary.get("ID"),
+            "key_count": primary.get("key_count"),
+            "record_count": primary.get("record_count", len(products)),
+            # 任务级汇总：任一产品有问题就算有问题
+            "cpms_len": primary.get("cpms_len"),
+            "cpms_len_min": primary.get("cpms_len_min"),
+            "incomplete": list(primary.get("incomplete") or []),
+            "products": products,
+            "validation": primary.get("validation"),
+            "extra_exports": [it.get("relpath") for it in group[1:]],
+        }
+        # 同一任务目录里多余的那几份也把问题汇总上来（不重复计产品）
+        for extra in group[1:]:
+            task["incomplete"].extend(extra.get("incomplete") or [])
+        tasks.append(task)
+    tasks.sort(key=lambda t: (t.get("mtime") or 0, t.get("relpath") or ""), reverse=True)
+    return tasks
 
 
 def scan_exports(root: Optional[Path] = None) -> list[dict[str, Any]]:

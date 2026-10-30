@@ -808,7 +808,8 @@ def product_name_from_subject(subject: str, strip_pattern: Optional[str] = None)
 
 # ── 字段映射 ─────────────────────────────────────────────────────────────
 def map_fields(customer_data: CustomerData, template: dict, profile: CustomerProfile,
-               logger: Logger, email_meta: Optional[dict] = None) -> dict:
+               logger: Logger, email_meta: Optional[dict] = None,
+               task_id: Optional[str] = None) -> dict:
     """把「规范键 + 客户档案规则 + ERP 模板」映射成 59 字段结果。
 
     赋值来源三类：
@@ -829,7 +830,7 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     logger.info(f"开始映射 {total_fields} 个字段...")
     logger.info(f"客户档案: {profile.id}（{profile.name}）")
 
-    task_id = generate_task_id(logger)
+    task_id = task_id or generate_task_id(logger)
     result["_task_id"] = task_id
 
     def assign(field: str, value: Any, source: str, index: int) -> bool:
@@ -1752,9 +1753,11 @@ def step3_load_erp_template(logger: Logger) -> dict:
 
 
 def step5_map_fields(customer_data: CustomerData, template: dict, profile: CustomerProfile,
-                     logger: Logger, email_meta: dict) -> dict:
+                     logger: Logger, email_meta: dict,
+                     task_id: Optional[str] = None) -> dict:
     logger.section("步骤 5: 字段映射")
-    result = map_fields(customer_data, template, profile, logger, email_meta)
+    result = map_fields(customer_data, template, profile, logger, email_meta,
+                        task_id=task_id)
     logger.info(f"步骤 5 完成，状态: 成功，耗时: {logger.elapsed_time():.1f}s")
     return result
 
@@ -1811,21 +1814,76 @@ def step5b_validate_erp_values(result: dict, logger: Logger,
     return issues
 
 
+def step4b_group_products(customer_data: CustomerData, profile: CustomerProfile,
+                          logger: Logger) -> list:
+    """步骤 4b: 按「报价结构」把一封询价拆成 N 条产品记录的数据。
+
+    业务口径（森西 2026-10-29）：「按报价结构分组」——
+    装订/尺寸/用纸/印色/工艺/包装都相同的几款 = 一条 ERP 记录（TZS 记款数），
+    任何一项不同 = 拆成两条。
+
+    返回 `[product_groups.Group]`；`len == 1` 时下游行为与改动前完全一致。
+    """
+    from product_groups import build as build_groups
+
+    logger.section("步骤 4b: 报价结构分组")
+
+    def resolve_cplb_for(values: dict) -> str:
+        """把「推导出的 CPLB」也拼进分组签名 —— 装订一句之差就换了产品类别。"""
+        try:
+            return str(resolve_cplb(CustomerData(values=values), profile, logger)[0] or "")
+        except Exception:                                # pragma: no cover
+            return ""
+
+    if profile.rule("grouping.enabled", True) is False:
+        logger.info("档案 rules.grouping.enabled=false → 不分组（整份数据 1 条记录）")
+        single = product_groups_single(customer_data)
+        return [single]
+
+    groups = build_groups(customer_data, profile, logger,
+                          cplb_resolver=resolve_cplb_for)
+    for group in groups:
+        logger.info(f"  {group.label}")
+        for note in group.notes:
+            logger.warn(f"    ! {note}")
+    logger.info(f"步骤 4b 完成：{len(groups)} 组 → 将产出 {len(groups)} 条 ERP 记录")
+    return groups
+
+
+def product_groups_single(customer_data: CustomerData):
+    """不分组时用的「单组」包装（等价于改动前的一条记录）。"""
+    from product_groups import Group
+
+    return Group(index=1, signature=(), entries=[], values=dict(customer_data.values),
+                 titles=1, languages=None, quantity=None, quantity_tiers=[],
+                 label="第1组：整份询价（不分组）")
+
+
 def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
                          logger: Logger, customer_data: CustomerData,
                          profile: CustomerProfile, issues: Optional[list] = None,
-                         strip_internal: bool = False) -> dict:
+                         strip_internal: bool = False,
+                         records: Optional[list] = None,
+                         groups: Optional[list] = None) -> dict:
     unit = _as_unit(unit)
     logger.section("步骤 6: 输出结果")
 
     input_path = unit.path
     stem = unit.stem
-    task_id = result.pop("_task_id", "unknown")
-    # 报价截止日期提醒（get 前先弹掉，否则下面的键断言会因为多一个键而失败）
-    deadline_info = result.pop("_deadline", None)
-    # 内部字段的取值（`CPMC_ZH` 等）：由 map_fields 放进下划线键，这里取出、稍后落到内部字段
-    cpmc_zh = str(result.pop("_cpmc_zh", "") or "")
+    # ★ 2026-10-29：一个任务目录 = 一条询价；里面可以有多条**产品记录**（数组）
+    records = list(records) if records is not None else [result]
+    if result not in records:
+        records.insert(0, result)
+    # 所有记录共用一个任务号（同一条询价的 N 个产品属于同一个任务）
+    task_id = records[0].pop("_task_id", "unknown")
+    deadline_info = records[0].pop("_deadline", None)
+    for extra in records[1:]:
+        extra.pop("_task_id", None)
+        extra.pop("_deadline", None)
+    cpmc_zh_by_record = [str(rec.pop("_cpmc_zh", "") or "") for rec in records]
+    cpmc_zh = cpmc_zh_by_record[0] if cpmc_zh_by_record else ""
     logger.info(f"任务ID: {task_id}")
+    logger.info(f"产品记录: {len(records)} 条（ERP 导出为数组，一条产品一行）")
 
     # 给业务的提醒（业务 2026-09-24：「这提醒现在每次跑都会自动出来」→ 固化成一个字段）。
     # 结构化版本进 validation.json 的 reminders；文本版本进内部字段 `Reminder` + stdout 醒目块。
@@ -1840,48 +1898,55 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
         })
     reminder_text = "\n".join(r["message"] for r in reminders)
 
-    # 字段一致性断言：
+    # 字段一致性断言（逐条记录）：
     #   ① 前 59 键必须与 ERP 模板**键集合 + 顺序**完全一致（下游按位置读，一个都不许动）
     #   ② 其后只能跟 assets/internal_export_fields.yaml 声明的内部字段，顺序也要一致
     with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
         tpl_keys = list(json.load(f).keys())
     internal_fields = [] if strip_internal else load_internal_fields()
     internal_keys = [str(f["key"]) for f in internal_fields]
-    out_keys = list(result.keys())
-    erp_part = out_keys[:len(tpl_keys)]
-    if erp_part != tpl_keys:
-        missing = [k for k in tpl_keys if k not in erp_part]
-        extra = [k for k in erp_part if k not in tpl_keys]
-        logger.error(f"字段一致性断言失败: 缺失={missing} 多余={extra}")
-        raise ValueError(f"输出字段与模板不一致: 缺失={missing} 多余={extra}")
-    if out_keys != erp_part:
-        raise ValueError(f"map_fields 多产出了未声明的键: "
-                         f"{out_keys[len(tpl_keys):]}（只有 `_` 前缀的内部键才允许）")
 
-    # 追加内部导出字段（业务 2026-09-24：ID 标注本次执行的任务，方便日志维护）
-    providers = {
+    providers_base = {
         "task_id": task_id,
-        "cpmc_zh": cpmc_zh,
         "reminder": reminder_text,
         # 配置版本：来自客户档案顶层 version（公共默认值在 customers/_defaults.yaml）。
         # 业务 2026-09-24：产物要能一眼看出是哪一代口径跑出来的，方便技能迭代。
         "config_version": profile.version,
     }
-    for spec in internal_fields:
-        key, source = str(spec["key"]), str(spec.get("source", ""))
-        if source not in providers:
-            raise ValueError(f"内部字段 {key} 的 source={source!r} 没有实现"
-                             f"（可用: {sorted(providers)}）—— 见 assets/internal_export_fields.yaml")
-        result[key] = providers[source]
-        logger.info(f"  内部字段 {key}（{spec.get('label', '')}）= "
-                    f"{str(providers[source])[:60]!r}")
 
-    # 追加后再断言一次：键 = ERP 59 键（原序）+ 声明的内部字段（原序）
-    appended = list(result.keys())[len(tpl_keys):]
-    if appended != internal_keys:
-        raise ValueError(f"内部字段与声明不一致: 实际={appended} 声明={internal_keys}"
-                         f"（见 assets/internal_export_fields.yaml）")
-    logger.info(f"字段一致性断言: 通过（ERP {len(erp_part)} 字段顺序与模板一致"
+    for position, record in enumerate(records, start=1):
+        out_keys = list(record.keys())
+        erp_part = out_keys[:len(tpl_keys)]
+        if erp_part != tpl_keys:
+            missing = [k for k in tpl_keys if k not in erp_part]
+            extra = [k for k in erp_part if k not in tpl_keys]
+            logger.error(f"字段一致性断言失败（第 {position} 条）: 缺失={missing} 多余={extra}")
+            raise ValueError(f"输出字段与模板不一致（第 {position} 条）: "
+                             f"缺失={missing} 多余={extra}")
+        if out_keys != erp_part:
+            raise ValueError(f"map_fields 多产出了未声明的键（第 {position} 条）: "
+                             f"{out_keys[len(tpl_keys):]}（只有 `_` 前缀的内部键才允许）")
+
+        # 追加内部导出字段（业务 2026-09-24：ID 标注本次执行的任务，方便日志维护）
+        providers = dict(providers_base)
+        providers["cpmc_zh"] = cpmc_zh_by_record[position - 1]
+        for spec in internal_fields:
+            key, source = str(spec["key"]), str(spec.get("source", ""))
+            if source not in providers:
+                raise ValueError(f"内部字段 {key} 的 source={source!r} 没有实现"
+                                 f"（可用: {sorted(providers)}）—— 见 assets/internal_export_fields.yaml")
+            record[key] = providers[source]
+            logger.info(f"  内部字段 {key}（{spec.get('label', '')}）= "
+                        f"{str(providers[source])[:60]!r}")
+
+        # 追加后再断言一次：键 = ERP 59 键（原序）+ 声明的内部字段（原序）
+        appended = list(record.keys())[len(tpl_keys):]
+        if appended != internal_keys:
+            raise ValueError(f"内部字段与声明不一致（第 {position} 条）: "
+                             f"实际={appended} 声明={internal_keys}"
+                             f"（见 assets/internal_export_fields.yaml）")
+
+    logger.info(f"字段一致性断言: 通过（{len(records)} 条记录 × ERP {len(tpl_keys)} 字段顺序与模板一致"
                 + (f"，其后追加内部字段 {internal_keys}" if internal_keys else
                    "；本次 --strip-internal → 只输出 ERP 字段")
                 + "）")
@@ -1919,14 +1984,21 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
     logger.info("[文件 3/5] ERP JSON")
     output_filename = generate_output_filename(task_id)
     logger.info(f"  文件名: {output_filename}")
-    logger.info(f"  字段数: {len(result)}")
+    logger.info(f"  字段数: {len(records[0])}（每条记录相同）")
     output_path = task_dir / output_filename
     # ★ 2026-10-29 业务口径：导出文件统一为**数组**（一个文件可装多个产品）。
-    #   本次任务只有 1 条产品记录，也照样包成 [{...}] —— 下游不用先判类型；
-    #   多产品询价以后往同一个数组里追加，不必再拆成很多文件/很多单。
+    #   只有 1 条产品记录也照样包成 [{...}] —— 下游不用先判类型。
+    #   多产品询价按「报价结构」分组后，同一结构的多款合成一条（TZS 记款数），
+    #   结构不同的各自一条 —— 见 scripts/product_groups.py。
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump([result], f, ensure_ascii=False, indent=2)
-    logger.info(f"  输出格式: 数组（本次 {1} 条产品记录）")
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    logger.info(f"  输出格式: 数组（本次 {len(records)} 条产品记录）")
+    for position, record in enumerate(records, start=1):
+        logger.info(f"    [{position}/{len(records)}] "
+                    f"{record.get('CPLB') or '(CPLB 空)'} | "
+                    f"CPMC={str(record.get('CPMC') or '')[:40]!r} | "
+                    f"TZS={record.get('TZS')} | CPSL1={record.get('CPSL1')} | "
+                    f"CDxKD={record.get('CD')}x{record.get('KD')}")
     logger.info(f"  输出路径: {output_path}")
     logger.info("  状态: 成功")
     output_files.append(output_path)
@@ -1936,14 +2008,28 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
     logger.info("[文件 4/5] ERP 取值校验报告")
     issues = issues or []
     validation_path = task_dir / f"{stem}.validation.json"
+    all_issues = list(issues)
+    group_summary = []
+    if groups:
+        from product_groups import summarize as summarize_groups
+        group_summary = summarize_groups(groups)
+        for group in groups:
+            if len(records) == 1:
+                break
+            for note in group.notes:
+                all_issues.append({"level": "warn", "field": f"分组{group.index}",
+                                   "message": note, "record": group.index})
     report = {
         "schema": "assets/erp_form_schema.yaml",
         "schema_version": 1,
         "customer": profile.id,
-        "checked_fields": len([k for k in result if not k.startswith("_")]),
-        "errors": [i for i in issues if i["level"] == "error"],
-        "warnings": [i for i in issues if i["level"] == "warn"],
+        "records": len(records),
+        "checked_fields": len([k for k in records[0] if not k.startswith("_")]),
+        "errors": [i for i in all_issues if i["level"] == "error"],
+        "warnings": [i for i in all_issues if i["level"] == "warn"],
         "reminders": reminders,
+        # ★ 多产品：这封询价按「报价结构」分成了几组、每组几款、数量多少
+        "products": group_summary,
         # 输入单元（一份报价由几个文件组成）+ 单元内的取值冲突，交付前必须核对
         "unit": {
             "kind": unit.kind,
@@ -1966,8 +2052,8 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
         "conflicts": customer_data.conflicts,
         "task_id": task_id,
         "summary": {
-            "error": len([i for i in issues if i["level"] == "error"]),
-            "warn": len([i for i in issues if i["level"] == "warn"]),
+            "error": len([i for i in all_issues if i["level"] == "error"]),
+            "warn": len([i for i in all_issues if i["level"] == "warn"]),
         },
     }
     with open(validation_path, "w", encoding="utf-8") as f:
@@ -2035,6 +2121,8 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
         "validation_json": validation_path,
         "deadline": deadline_info,
         "reminders": reminders,
+        "records": len(records),
+        "products": group_summary,
     }
 
 
@@ -2142,11 +2230,44 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
 
     customer_data = step2_load_customer_data(unit, profile, logger)
     template = step3_load_erp_template(logger)
-    result = step5_map_fields(customer_data, template, profile, logger, email_meta)
-    issues = step5b_validate_erp_values(result, logger, profile)
+
+    # ★ 2026-10-29「按报价结构分组」：一封询价可能有好几个产品/好几款。
+    #   结构（装订/尺寸/用纸/印色/工艺/包装）相同的款合成一条记录（TZS 记款数），
+    #   结构不同的各自一条 → 同一个 ERP JSON 数组里放 N 条。
+    groups = step4b_group_products(customer_data, profile, logger)
+    task_id = generate_task_id(logger)
+
+    records: list = []
+    issues: list = []
+    from product_groups import to_customer_data as to_group_customer_data
+    for group in groups:
+        record_data = to_group_customer_data(group, customer_data)
+        if len(groups) > 1:
+            logger.info("")
+            logger.info(f"── 第 {group.index}/{len(groups)} 条记录: {group.label} ──")
+        result = step5_map_fields(record_data, template, profile, logger, email_meta,
+                                  task_id=task_id)
+        record_issues = step5b_validate_erp_values(result, logger, profile)
+        # TZS 兜底：分组算出的款数是硬事实（一组几款就是几款），
+        # map_fields 从客户原文推出来的值若不一致，以分组为准并留痕。
+        if group.aggregated and group.titles:
+            try:
+                mapped_titles = int(result.get("TZS") or 0)
+            except (TypeError, ValueError):
+                mapped_titles = 0
+            if mapped_titles != group.titles:
+                logger.warn(f"  TZS: map_fields 推出 {mapped_titles}，"
+                            f"但分组里本组实有 {group.titles} 款 → 按分组值落库")
+                result["TZS"] = group.titles
+        records.append(result)
+        # 多产品时给每条校验结果打上记录号 —— 详情页各 Tab 才能只显示自己那条的问题
+        if len(groups) > 1:
+            record_issues = [dict(i, record=group.index) for i in record_issues]
+        issues.extend(record_issues)
+
     output_info = step6_output_results(
-        unit, result, processed_dir, logger, customer_data, profile, issues,
-        strip_internal=args.strip_internal)
+        unit, records[0], processed_dir, logger, customer_data, profile, issues,
+        strip_internal=args.strip_internal, records=records, groups=groups)
 
     logger.info("")
     logger.info("========== 任务完成 ==========")
@@ -2162,6 +2283,9 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
     logger.info("")
     logger.info("========== 待 agent 亲自完成 ==========")
     logger.info(f"CPMS（产品描述）当前为空，产物: {erp_json}")
+    if len(records) > 1:
+        logger.info(f"★ 本次是 {len(records)} 条产品记录：**每条都要各写一份 CPMS**"
+                    f"（按数组里的顺序，一条一个产品描述）")
     logger.info("请通读客户原始文件全文 → 翻译成中文 → 按类别分段优化 → 写回 CPMS 字段。")
     logger.info(f"抽取明细（规范键+未识别标签）: {output_info['extracted_json']}")
     logger.info("此环节无法用 Python 统一处理，脚本不生成任何 CPMS 内容。")
@@ -2170,6 +2294,10 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
     print("=" * 64)
     print("!! CPMS 为空 —— 必须由 agent 亲力亲为补写 !!")
     print(f"   产物: {erp_json}")
+    if len(records) > 1:
+        print(f"   ★ 数组里有 {len(records)} 条产品记录，**每条都要写 CPMS**：")
+        for group in groups:
+            print(f"     [{group.index}] {group.label}")
     print(f"   抽取明细: {output_info['extracted_json']}")
     print("   步骤: 通读客户原文 -> 翻译成中文 -> 按类别分段优化 -> 写回 CPMS")
     if customer_data.extras_found:

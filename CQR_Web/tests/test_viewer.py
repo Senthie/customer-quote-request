@@ -127,12 +127,21 @@ def test_什么都没有时source_name为空_页面回落到task_id(tmp_path):
 
 def test_页面列表主标题用source_name且有折叠按钮():
     html = PAGE_PATH.read_text(encoding="utf-8")
-    assert "it.source_name" in html, "列表项要用原始文件名当标题"
-    assert "按文件名 / 单号 / CPMC / 版本 过滤" in html, "搜索提示要跟着改成文件名"
-    assert 'class: "fold-btn"' in html, "产物列表要有收起按钮"
+    assert "it.source_name" in html, "任务项要用原始文件名当标题"
+    assert "按文件名 / 单号 / 产品名称 / 版本 过滤" in html, "搜索提示要跟着改成文件名"
+    assert 'class: "fold-btn"' in html, "任务列表要有收起按钮"
     assert "renderListRail" in html, "收起后要留一条能点开的窄条"
     assert "setListFolded" in html and 'writePref("listFolded"' in html, \
         "折叠状态要记住（下次打开还是收起的）"
+
+
+def test_列表标题是任务列表而不是产物列表():
+    """★ 2026-10-29：产物是数组 → 一个文件可含多个产品，列表按**任务**聚合。"""
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert 'text: "任务列表"' in html, "列表主标题必须是「任务列表」"
+    assert "任务列表 \" + state.tasks.length" in html, "收起后的窄条也要用任务数"
+    assert "state.tasks" in html and "tasksFromExports" in html, \
+        "页面要消费 /api/exports 的 tasks（老服务端才回落到前端聚合）"
 
 
 def test_扫描递归找出全部产物_最新在前(tmp_path):
@@ -718,7 +727,9 @@ def test_JSON口径_不转义中文_不排序键_缩进两格(viewer):
     assert '": ' in body, "要缩进（compact=False），方便人肉核对"
     # 键序按我们构造的顺序（sort_keys=False）—— 默认 provider 会按字母重排
     payload = client.get("/api/export?path=tid1/ERP_tid1_20260924_010203.json").get_json()
-    assert list(payload) == ["relpath", "data", "validation", "incomplete"], list(payload)
+    assert list(payload) == ["relpath", "data", "records", "record_count", "validation",
+                             "validation_by_record", "incomplete",
+                             "incomplete_by_record"], list(payload)
 
 
 def test_模块入口可跑():
@@ -810,3 +821,141 @@ def test_页面标题跟着产物走():
     """浏览器拿 `document.title` 当「另存为 PDF」的默认文件名。"""
     html = PAGE_PATH.read_text(encoding="utf-8")
     assert "function syncTitle" in html and "document.title" in html
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ★ 2026-10-29 产物是数组 → 列表变「任务列表」、详情变「多条产品记录 Tab」
+#
+# 业务原话：「因为我们的 ERP 的 JSON 变成了数组，所以我们的展示页面的产物列表
+# 需要变更为任务列表，原先的 ERP 数据展示页，变成多个 Tag 可切换的展示页」。
+# ═══════════════════════════════════════════════════════════════════════
+
+def _rec(index: int, *, cpms: str = "", cpmc_zh: str = "中文品名",
+         cplb: str = "22.03;假精装书", tzs: int = 1, cpsl1: int = 5000) -> dict:
+    """一条最简产品记录（59 键不必全给 —— 列表/详情只看这几项）。"""
+    return {
+        "CPLB": cplb, "CPMC": f"Product {index}", "CPMC_ZH": cpmc_zh,
+        "CPMS": cpms, "TZS": tzs, "CPSL1": cpsl1, "CD": 200, "KD": 140, "GD": 0,
+        "KHDH": "CU260001", "version": 2, "ID": "tid-multi",
+    }
+
+
+def _make_multi_export(root: Path, task_id: str, records: list[dict], *,
+                       stamp: str = "20261030_010203", rel_dir: str | None = None) -> Path:
+    """写一份**数组**产物（一个文件 = 多条产品记录）。"""
+    d = root / (rel_dir if rel_dir is not None else task_id)
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"ERP_{task_id}_{stamp}.json"
+    p.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_任务列表_一个任务目录一行(tmp_path):
+    """一个任务 = 一次报价 = 一个 `processed/<task_id>/`，不管里面有几条产品。"""
+    _make_multi_export(tmp_path, "multi", [_rec(1), _rec(2), _rec(3)])
+    _make_export(tmp_path, "single", {"CPMC": "乙", "CPMS": "已写"}, mtime=1_700_000_000)
+
+    tasks = ev.scan_tasks(tmp_path)
+
+    assert len(tasks) == 2, [t["task_id"] for t in tasks]
+    multi = next(t for t in tasks if t["task_id"] == "multi")
+    assert multi["record_count"] == 3
+    assert len(multi["products"]) == 3
+    assert [p["index"] for p in multi["products"]] == [1, 2, 3]
+
+
+def test_任务列表_每条产品摘要带类别与数量(tmp_path):
+    """列表上要一眼看出这条询价有哪几个产品、各自什么类别/多少量。"""
+    _make_multi_export(tmp_path, "multi", [
+        _rec(1, cpmc_zh="数独与谜题书", cplb="22.03;假精装书", tzs=2, cpsl1=25000),
+        _rec(2, cpmc_zh="发声书", cplb="27.19;精装音乐BB书(线路)", tzs=1, cpsl1=6000),
+    ])
+    task = ev.scan_tasks(tmp_path)[0]
+    first = task["products"][0]
+    assert first["CPMC_ZH"] == "数独与谜题书"
+    assert first["CPLB"] == "22.03;假精装书"
+    assert first["TZS"] == 2 and first["CPSL1"] == 25000
+
+
+def test_任务列表_同一目录多份产物只按最新那份统计(tmp_path):
+    """重跑会留下旧的 ERP_*.json —— 不能把产品数/闸门重复计一遍。"""
+    _make_multi_export(tmp_path, "tid", [_rec(1), _rec(2)], stamp="20261030_010203")
+    _make_multi_export(tmp_path, "tid", [_rec(1)], stamp="20261030_020304")
+    os.utime(tmp_path / "tid" / "ERP_tid_20261030_020304.json", (1_800_000_200,) * 2)
+    os.utime(tmp_path / "tid" / "ERP_tid_20261030_010203.json", (1_800_000_100,) * 2)
+
+    tasks = ev.scan_tasks(tmp_path)
+
+    assert len(tasks) == 1, "同一个任务目录 → 一行"
+    assert tasks[0]["record_count"] == 1, "只认最新那份，旧的挂 extra_exports"
+    assert tasks[0]["extra_exports"] == ["tid/ERP_tid_20261030_010203.json"]
+
+
+def test_接口_api_exports_带任务列表(tmp_path):
+    _make_multi_export(tmp_path, "multi", [_rec(1), _rec(2)])
+    payload = create_app(processed_dir=tmp_path).test_client().get("/api/exports").get_json()
+
+    assert payload["count"] == 1, "文件数仍是 1（兼容老调用方）"
+    assert payload["task_count"] == 1
+    assert payload["tasks"][0]["record_count"] == 2
+    # 老的 exports 数组也还在，字段没少
+    assert payload["exports"][0]["relpath"] == payload["tasks"][0]["relpath"]
+
+
+def test_接口_api_export_逐条校验与逐条闸门(tmp_path):
+    """详情接口必须给出「每条记录」的校验结果与交付闸门 —— 页面按 Tab 各显示各的。"""
+    _make_multi_export(tmp_path, "multi", [
+        _rec(1, cpms="产品规格：封面 300g…" * 3),      # 第 1 条写完了
+        _rec(2, cpms=""),                              # 第 2 条 CPMS 还空着
+    ])
+    payload = (create_app(processed_dir=tmp_path).test_client()
+               .get("/api/export?path=multi/ERP_multi_20261030_010203.json").get_json())
+
+    assert payload["record_count"] == 2
+    assert len(payload["validation_by_record"]) == 2
+    assert len(payload["incomplete_by_record"]) == 2
+    assert payload["incomplete_by_record"][0] == [], payload["incomplete_by_record"][0]
+    assert payload["incomplete_by_record"][1], "第 2 条 CPMS 未写 → 该条不得交付"
+    # 任务级 incomplete 仍按条标号汇总（任何一条没写完都不许交付）
+    assert any(g.startswith("第2条") for g in payload["incomplete"]), payload["incomplete"]
+
+
+def test_逐条校验按记录的record标号过滤(tmp_path):
+    """运行报告里的 issue 带 `record` 标号 → 只显示给对应的那条记录。"""
+    _make_multi_export(tmp_path, "multi", [_rec(1), _rec(2)])
+    (tmp_path / "multi" / "in.xlsx.validation.json").write_text(json.dumps({
+        "customer": "ngv",
+        "checked_fields": 5,
+        "errors": [{"level": "error", "field": "CPLB", "message": "第2条的问题", "record": 2}],
+        "warnings": [{"level": "warn", "field": "CPMS", "message": "全局提示"}],
+        "reminders": [],
+        "summary": {"error": 1, "warn": 1},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    payload = (create_app(processed_dir=tmp_path).test_client()
+               .get("/api/export?path=multi/ERP_multi_20261030_010203.json").get_json())
+
+    first, second = payload["validation_by_record"]
+    assert first["errors"] == [], "第 1 条不该背第 2 条的错误"
+    assert second["errors"] and second["errors"][0]["message"] == "第2条的问题"
+    # 没有 record 标号的视为全局问题 → 两条都显示
+    assert first["warnings"] and second["warnings"]
+
+
+def test_页面_产品记录Tab可切换():
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "function renderTabs" in html, "详情页要有 Tab 条"
+    assert "function setActiveRecord" in html and "function applyActiveRecord" in html
+    assert 'class: "tabs"' in html and 'class: "tab"' in html
+    assert "activeRecord" in html
+    # 只有一条记录时不渲染 Tab（单产品页面保持原样）
+    assert "records.length <= 1" in html
+    # 深链接带记录号，刷新/分享还能回到同一条
+    assert 'q.set("r"' in html
+
+
+def test_页面_任务列表显示产品条数():
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "条产品" in html, "列表要标出这条询价有几条产品记录"
+    assert "productLine" in html, "列表要把每条产品列出来"
+    assert "record_count" in html

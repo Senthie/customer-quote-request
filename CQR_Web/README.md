@@ -7,6 +7,16 @@
 抽取交给 Hermes 定时任务（`scripts/scan_pending.py`，每 5 分钟扫一次）——本服务
 **不起进程、不管队列、不记事状态**，页面每 10 秒刷新，抽好就自动出现在列表里。
 
+**1.0.55（2026-10-30）起：列表是「任务列表」、详情是「产品记录 Tab」**。ERP 导出改成数组后
+一个文件能装多个产品，所以：
+
+| 位置 | 内容 |
+|---|---|
+| 左栏 | **任务列表**：一行 = 一个 `processed/<task_id>/`（一次报价）。行上标「N 条产品」并把每条产品列出来（品名 / CPLB / TZS / CPSL1），超过 3 条折成「+N」 |
+| 右栏 | **本次任务**（原件 / 任务号 / 几条产品）→ **产品记录 Tab**（可切换，Tab 上带品名+类别+数量、颜色表示这条能不能交付）→ 当前这条的字段 |
+| 深链接 | `?path=<相对路径>&r=<第几条>`；只有 1 条产品时不渲染 Tab 条 |
+| 原始 JSON | 显示**整个数组**（交付物就是这一个文件） |
+
 ## 1. 它是什么、不是什么
 
 | 是 | 不是 |
@@ -50,8 +60,10 @@ CQR_Web/
 ├── app.py                  # 路由 + CLI（create_app / main）
 ├── templates/index.html    # 页面本体（零外部依赖的原生 JS，不引 CDN）
 └── tests/
-    ├── conftest.py         # 把 ../scripts 和仓库根加进 sys.path
-    └── test_viewer.py      # 机制回归：扫描 / 路径穿越 / 分组覆盖 59 字段 / 分层不退化
+    ├── conftest.py          # 把 ../scripts 和仓库根加进 sys.path
+    ├── test_viewer.py       # 机制回归：扫描 / 路径穿越 / 分组覆盖 59 字段 / 分层不退化
+    ├── page_harness.js      # ★ 页面**逻辑**测试：最小 DOM shim 把 index.html 的脚本真跑一遍
+    └── test_page_logic.py   # page_harness.js 的 pytest 壳（没有 node 就 skip）
 ```
 
 分层规矩（别退化）：
@@ -66,8 +78,8 @@ CQR_Web/
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/` | 页面本体 |
-| GET | `/api/exports` | 扫描结果（每份产物摘要，最新在前；`_superseded*` 会被标出） |
-| GET | `/api/export?path=<相对路径>` | 某一份产物的完整 JSON（含 `validation`、`incomplete`） |
+| GET | `/api/exports` | `exports` = 每份**产物文件**摘要（最新在前；`_superseded*` 会被标出）；`tasks` = 按任务目录聚合的**任务列表**（含 `products` 逐条摘要），页面用 `tasks` |
+| GET | `/api/export?path=<相对路径>` | 某任务的全部内容：`records`（数组）+ `validation`/`validation_by_record` + `incomplete`/`incomplete_by_record` |
 | GET | `/api/schema` | ERP 字段字典 + 内部字段 + 展示分组 |
 | POST | `/api/uploads` | 上传客户文件（multipart：`files` 多个、`group=one\|each`） |
 | GET | `/api/pending` | 还在等抽取的文件（页面排队条） |

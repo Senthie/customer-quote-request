@@ -31,6 +31,8 @@ from .data import (
     read_config_version,
     resolve_export,
     scan_exports,
+    scan_tasks,
+    validation_per_record,
 )
 
 __all__ = [
@@ -52,4 +54,6 @@ __all__ = [
     "read_config_version",
     "resolve_export",
     "scan_exports",
+    "scan_tasks",
+    "validation_per_record",
 ]

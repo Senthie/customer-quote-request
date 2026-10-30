@@ -43,7 +43,8 @@ UNMATCHED_KEY = "__unmatched_labels__"
 TEXT_BLOCKS_KEY = "__text_blocks__"
 LAYOUT_KEY = "__layout__"
 
-ALL_STRATEGIES = ("auto_pairs", "column_pairs", "shifted_pairs", "section_pairs", "lidl_anlage")
+ALL_STRATEGIES = ("auto_pairs", "column_pairs", "shifted_pairs", "section_pairs",
+                  "lidl_anlage", "product_table")
 
 # 说明：表头即标签的整列表格（旧文档里的「纵向格式」）不需要单独策略 ——
 # 引擎统一用 header=None 读表，真正的表头会落在第 0 行，
@@ -65,6 +66,12 @@ class CustomerData:
     scan_notes: list = field(default_factory=list)        # 扫描过程中的「为什么没落值」（审计用）
     layout: str = ""                                      # 实际命中的抽取路径（审计用）
     profile_id: str = ""
+    # ── 产品条目（一封询价里可能有好几个产品/好几款，2026-10-29）────────────
+    # 每条 = 一个产品：只放**该产品自己的**结构键（尺寸/用纸/装订/工艺…），
+    # 整份询价共用的部分（品名、交期、邮件抬头）留在 values 里。
+    # 由 `scripts/product_groups.py` 按「报价结构」合并成 N 条 ERP 记录。
+    # 空列表 = 这份文件里没识别出多产品 → 整份数据当 1 个条目（老行为不变）。
+    products: list = field(default_factory=list)
     # ── 输入单元（一份报价 = 单文件 / 文件夹 / 压缩包，2026-10-20）──────────
     unit_kind: str = "file"                               # file | folder | archive
     unit_label: str = ""                                  # 人看的说明（「文件夹（3 个参考文件）」）
@@ -101,6 +108,8 @@ class CustomerData:
             "extras_found": self.extras_found,
         }
         # 单文件保持老结构（下游/测试都按这 8 个键读），单元才追加溯源信息
+        if self.products:
+            out["products"] = self.products
         if self.unit_kind != "file" or self.members:
             out["unit"] = {
                 "kind": self.unit_kind,
@@ -564,7 +573,7 @@ def _cm_to_mm(text: str) -> str:
 
 
 def _extract_lidl_anlage(rows: list, profile: CustomerProfile, logger=None,
-                         sheet_name: str = "") -> tuple:
+                         sheet_name: str = "", entries_out: Optional[list] = None) -> tuple:
     """Lidl 的 `Anlage_<IAN>` 表（「Overview of Countries, Quantities, and Titles」）。
 
     形态（2026-10-29 实单 IAN 574237 / 574239，两份 xlsm 逐格一致）：
@@ -661,6 +670,10 @@ def _extract_lidl_anlage(rows: list, profile: CustomerProfile, logger=None,
     first_dim = ""
     rows_hit = 0
     in_block = False
+    # ★ 2026-10-29 多产品分组：一行一款一市场，所以**逐款**记账。
+    #   同一款出现在多个国别分区里（希腊 + DE online shop）→ 数量累加、
+    #   语言码取并集、结构/材质取该款第一次出现的写法。
+    per_title: dict = {}
 
     for r in range(len(rows)):
         head = ""
@@ -698,6 +711,20 @@ def _extract_lidl_anlage(rows: list, profile: CustomerProfile, logger=None,
                 bucket.append(v)
         if not first_dim:
             first_dim = cell(r, c_dim)
+        if title:
+            slot = per_title.setdefault(title, {
+                "art": art, "quantity": 0, "language_codes": set(),
+                "size": "", "tech": "", "spec": "", "rows": [],
+            })
+            slot["quantity"] += qty
+            if qty and lang:
+                slot["language_codes"].add(lang)
+            # 结构说明一般只写在每款的第一行（后面的国别分区留空）→ 取首个非空
+            for field_name, col_idx in (("size", c_dim), ("tech", c_tech),
+                                        ("spec", c_spec)):
+                if not slot[field_name]:
+                    slot[field_name] = cell(r, col_idx)
+            slot["rows"].append(r + 1)
 
     if not rows_hit:
         return {}, {}, "", []
@@ -724,6 +751,30 @@ def _extract_lidl_anlage(rows: list, profile: CustomerProfile, logger=None,
     if delivery:
         values["notes"] = " ; ".join(delivery)
 
+    # ★ 逐款条目 → 交给 product_groups 按「报价结构」分组
+    #   （IAN 574239 的 6 款就是 3 种结构：3 款滑动发声 / 1 款亮灯 / 2 款揭页发声，
+    #    一张 ERP 单只有一个 CPLB → 必须拆成 3 条记录）
+    if entries_out is not None:
+        for title_text, slot in per_title.items():
+            entry_values: dict = {}
+            title_size = _cm_to_mm(slot["size"])
+            if title_size:
+                entry_values["size"] = title_size
+            if slot["tech"]:
+                entry_values["specials"] = slot["tech"]
+            if slot["spec"]:
+                entry_values["text_material"] = slot["spec"]
+            rows_seen = slot["rows"] or [0]
+            entries_out.append({
+                "label": f"{slot['art']} {title_text}".strip(),
+                "values": entry_values,
+                "quantity": slot["quantity"],
+                "titles": 1,
+                "language_codes": sorted(slot["language_codes"]),
+                "source": (f"{sheet_name or '(csv)'}!A{min(rows_seen)}"
+                           f":J{max(rows_seen)}"),
+            })
+
     layout = f"lidl_anlage×{len(values)}"
     if logger is not None:
         logger.info(f"  Lidl Anlage 表: IAN={ians[0] if ians else '?'} "
@@ -732,12 +783,151 @@ def _extract_lidl_anlage(rows: list, profile: CustomerProfile, logger=None,
     return values, labels, layout, []
 
 
+def _extract_product_table(rows: list, profile: CustomerProfile, logger=None,
+                           sheet_name: str = "",
+                           entries_out: Optional[list] = None) -> tuple:
+    """多产品**列表式**表格：表头一行是标签，下面每行是一个产品/一款。
+
+    形态（客户常见的「多款报价表」）：
+
+        r3   A=Title          B=Binding      C=Size        D=Extent  E=QTY
+        r4   A=Book One       B=Flexcover    C=210x280     D=24      E=5000
+        r5   A=Book Two       B=Flexcover    C=210x280     D=24      E=7500
+        r6   A=Book Three     B=Hardcover    C=170x240     D=32      E=4000
+
+    每行 → 一个产品条目（`CustomerData.products`），由 `product_groups` 按
+    报价结构分组：上例 Book One/Two 结构相同 → 一条记录 TZS=2、CPSL=12500；
+    Book Three 装订/尺寸不同 → 另一条记录。
+
+    ⚠️ **默认关闭**（`layout.product_table.enabled` 必须显式打开）。理由：
+    表头即标签的形态与 NGV enquiry 分区表单、igl 平铺键值对表都可能长得像，
+    没经过真实样本校准就自动开，会把单产品单拆成若干垃圾条目。开之前必须
+    1) 用真实附件跑 `scripts/product_groups.py --json` 逐条核对，
+       2) 把样本钉进 `tests/test_product_groups.py`。
+
+    配置（客户档案 `rules.layout.product_table`）：
+
+        enabled: true
+        title_keys: [product_name, series_name]   # 行标识列（必须命中其中之一）
+        min_columns: 2                            # 表头至少几个可识别标签
+        min_rows: 2                               # 至少几行数据才算多产品表
+        quantity_keys: [quantity]                 # 该列的值进条目的 quantity
+        stop_keys: [notes, specials]              # 认到这些标签 → 表格结束
+    """
+    cfg = profile.rule("layout.product_table", {}) or {}
+    if not isinstance(cfg, dict) or not cfg.get("enabled"):
+        return {}, {}, "", []
+
+    if entries_out is None:
+        # 只做「有没有这张表」的判断（没地方放条目就别动，避免半成品状态）
+        return {}, {}, "", []
+
+    min_cols = int(cfg.get("min_columns", 2))
+    min_rows = int(cfg.get("min_rows", 2))
+    title_keys = {str(k) for k in (cfg.get("title_keys") or ["product_name", "series_name"])}
+    qty_keys = {str(k) for k in (cfg.get("quantity_keys") or ["quantity"])}
+    stop_keys = {str(k) for k in (cfg.get("stop_keys") or [])}
+    skip_keys = {"quantity_tiers"}
+
+    def cell(r: int, c: int) -> str:
+        if r < 0 or r >= len(rows) or c < 0 or c >= len(rows[r]):
+            return ""
+        return str(rows[r][c] or "").strip()
+
+    header_idx = -1
+    columns: dict = {}
+    for r, row in enumerate(rows):
+        matched = {}
+        for c, text in enumerate(row):
+            if not str(text or "").strip():
+                continue
+            key = profile.match_label(str(text))
+            if key and key not in skip_keys and key not in matched.values():
+                matched[c] = key
+        if len(matched) >= min_cols and (set(matched.values()) & title_keys):
+            header_idx, columns = r, matched
+            break
+    if header_idx < 0:
+        return {}, {}, "", []
+
+    entries: list = []
+    blanks = 0
+    for r in range(header_idx + 1, len(rows)):
+        values_by_col = {c: cell(r, c) for c in columns}
+        if not any(values_by_col.values()):
+            blanks += 1
+            if blanks >= 2 or entries:
+                break
+            continue
+        blanks = 0
+        # 又是表头（第二段表/合计行被误认）→ 结束
+        again = sum(1 for c, text in enumerate(rows[r])
+                    if str(text or "").strip() and profile.match_label(str(text)))
+        if again >= min_cols:
+            break
+        entry_values: dict = {}
+        quantity = None
+        title_text = ""
+        for c, key in columns.items():
+            value = values_by_col.get(c, "")
+            if not value:
+                continue
+            if key in stop_keys:
+                continue
+            if key in qty_keys:
+                parsed = _plain_int(value)
+                if parsed is not None:
+                    quantity = parsed
+                continue
+            entry_values[key] = value
+            if key in title_keys and not title_text:
+                title_text = value
+        if not entry_values:
+            continue
+        entries.append({
+            "label": title_text or f"{sheet_name or '(csv)'}!行{r + 1}",
+            "values": entry_values,
+            "quantity": quantity,
+            "titles": 1,
+            "source": f"{sheet_name or '(csv)'}!A{r + 1}",
+        })
+        if len(entries) >= 200:                      # 防御：别把整本账当报价表
+            break
+
+    if len(entries) < min_rows:
+        return {}, {}, "", []
+
+    entries_out.extend(entries)
+    if logger is not None:
+        logger.info(f"  多产品表: 表头在第 {header_idx + 1} 行，"
+                    f"识别 {len(columns)} 列 → {len(entries)} 个产品条目"
+                    f"（分组由 product_groups 按报价结构做）")
+    return {}, {}, f"product_table×{len(entries)}", []
+
+
+def _plain_int(text: str) -> Optional[int]:
+    """表格里的数量：`5.000` / `5,000` / `5000 cps` → 5000；取不到 → None。"""
+    if not text:
+        return None
+    digits = re.sub(r"[^\d]", "", str(text))
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:                                   # pragma: no cover
+        return None
+
+
 def _extract_rows(rows: list, profile: CustomerProfile, logger=None,
-                  sheet_name: str = "") -> tuple:
+                  sheet_name: str = "", products_out: Optional[list] = None) -> tuple:
     """对一张表的二维单元格矩阵跑布局策略，返回 (values, raw_labels, layout, unmatched)。
 
     策略按档案 `rules.layout.strategies` 的顺序执行；**先到先得**（不覆盖已有值），
     这样多个策略可以互补（如 section_pairs 抓分区表单、auto_pairs 抓平铺键值对）。
+
+    `products_out`：传一个 list 进来，多产品表的策略会把**逐产品条目**追加进去
+    （`CustomerData.products`），供 `product_groups` 按报价结构分组。
+    不传 = 老行为（只出整份数据），测试与单产品路径都不受影响。
     """
     def log(msg: str, level: str = "info"):
         if logger is not None:
@@ -772,7 +962,8 @@ def _extract_rows(rows: list, profile: CustomerProfile, logger=None,
     # 所以放在最前面也不会抢走 NGV enquiry 表单的活。
     if "lidl_anlage" in strategies:
         an_values, an_labels, an_layout, an_unmatched = _extract_lidl_anlage(
-            rows, profile, logger, sheet_name=sheet_name)
+            rows, profile, logger, sheet_name=sheet_name,
+            entries_out=products_out)
         gained = 0
         for key, value in an_values.items():
             if not values.get(key, "").strip():
@@ -783,6 +974,22 @@ def _extract_rows(rows: list, profile: CustomerProfile, logger=None,
         unmatched.extend(an_unmatched)
         if gained:
             used.append(an_layout or f"lidl_anlage×{gained}")
+
+    # ── 策略 0b：product_table（多产品列表式表格，默认关闭、按档案开启）──
+    # 与 lidl_anlage 一样是「只产出逐产品条目」的策略：整份数据的规范键仍然由
+    # 其它策略给，分组交给 product_groups 按报价结构做。
+    if "product_table" in strategies and not any(
+            u.startswith("lidl_anlage") for u in used):
+        pt_values, pt_labels, pt_layout, pt_unmatched = _extract_product_table(
+            rows, profile, logger, sheet_name=sheet_name, entries_out=products_out)
+        for key, value in pt_values.items():
+            if not values.get(key, "").strip():
+                values[key] = value
+        for key, value in pt_labels.items():
+            raw_labels.setdefault(key, value)
+        unmatched.extend(pt_unmatched)
+        if pt_layout:
+            used.append(pt_layout)
 
     # ── 策略 0：section_pairs（分区表单：分区列 + 标签列 + 值）──────────
     # 这是最「具体」的策略，所以放最前；档案没写 sections: 时自动跳过。
@@ -909,8 +1116,9 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
         if df is None or df.empty:
             continue
         rows = _rows_to_matrix(df)
-        values, raw_labels, layout, unmatched = _extract_rows(rows, profile, logger,
-                                                              sheet_name=str(name))
+        products: list = []
+        values, raw_labels, layout, unmatched = _extract_rows(
+            rows, profile, logger, sheet_name=str(name), products_out=products)
         # 档位识别先不逐表打日志（会在错误的表上报 WARN），选定主表后统一打一次
         tiers = extract_quantity_tiers(rows, profile, logger=None) if wants_tiers else []
         blocks = [cell for row in rows for cell in row if cell]
@@ -923,13 +1131,14 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
         per_sheet.append({
             "name": str(name), "rows": rows, "values": values,
             "raw_labels": raw_labels, "layout": layout, "tiers": tiers, "blocks": blocks,
-            "unmatched": unmatched, "row_texts": row_texts,
+            "unmatched": unmatched, "row_texts": row_texts, "products": products,
         })
 
     if not per_sheet:
         raise ValueError("文件为空：没有任何可读的工作表/行")
 
-    per_sheet.sort(key=lambda s: len(s["values"]), reverse=True)
+    per_sheet.sort(key=lambda s: (len(s["values"]), len(s.get("products") or [])),
+                   reverse=True)
     primary = per_sheet[0]
     log(f"主工作表: {primary['name']}（识别 {len(primary['values'])} 个规范键，"
         f"布局 {primary['layout'] or '无命中'}）")
@@ -957,6 +1166,14 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
     else:
         log("数量档位识别: 未识别到数量档位行（CPSL1~CPSL10 将保持 0）", "warn")
     blocks = [b for s in per_sheet for b in s["blocks"]]
+    # ★ 多产品条目：只认**主工作表**的（别的表是同一批数据的另一种排布，
+    #   收进来会重复计数量/重复开单）。主表没有就找第一张有的。
+    products: list = list(primary.get("products") or [])
+    if not products:
+        products = next((list(s["products"]) for s in per_sheet if s.get("products")), [])
+    if products:
+        log(f"产品条目: {len(products)} 个（来自 {primary['name']}）→ "
+            f"报价结构分组后可能产出多条 ERP 记录")
 
     # 全表正则扫描：有些值不挂在任何标签上，只在某个角落出现一次
     # （NGV 的 PR-00093270 在页脚、FSC Mix 在纸张行、香港单号在文件名），
@@ -984,6 +1201,7 @@ def extract_from_workbook(file_path: str, profile: CustomerProfile, logger=None,
         scan_notes=scan_notes,
         layout=primary["layout"],
         profile_id=profile.id,
+        products=products,
     )
     return data
 
@@ -1193,6 +1411,26 @@ def merge_customer_data(items: list, profile: CustomerProfile, logger=None,
         for extra in (data.extras_found or []):
             if extra not in merged.extras_found:
                 merged.extras_found.append(extra)
+
+    # ④b 产品条目：多个文件里只有「款量表」那种会产出条目 → 按出处拼起来去重
+    #    （同一款在两个文件里各写一遍时，保留先出现的；分组会按结构再合）
+    seen_entries: set = set()
+    for name, data in ordered:
+        for entry in (getattr(data, "products", None) or []):
+            key = (str(entry.get("label") or "").strip().lower(),
+                   json.dumps(entry.get("values") or {}, sort_keys=True,
+                              ensure_ascii=False, default=str))
+            if key in seen_entries:
+                continue
+            seen_entries.add(key)
+            copied = dict(entry)
+            source = str(copied.get("source") or "").strip()
+            copied["source"] = f"{name}!{source}" if source else name
+            merged.products.append(copied)
+    if merged.products:
+        origins = sorted({str(p.get("source", "")).split("!")[0]
+                          for p in merged.products if p.get("source")})
+        log(f"  产品条目: 合并后 {len(merged.products)} 个，来自 {origins}")
 
     # ⑤ 扫描类（unique 键）：整个单元重跑一次
     notes: list = []

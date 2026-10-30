@@ -1,0 +1,78 @@
+# ═══════════════════════════════════════════════════════════════
+# 报价结构签名：哪些「规范键」一致 → 属于同一个报价结构
+#
+# 业务口径（森西 2026-10-29 拍板：「按报价结构分组」）：
+#   一封询价里可以有很多个产品/很多款。ERP 一个单只能有一个 CPLB/一个尺寸/
+#   一套用纸 → 所以按「怎么生产、怎么报价」把这些款分组：
+#
+#     * 下面 `keys:` 里**任何一个**键不同 → 必须拆成两条 ERP 记录；
+#     * 全部相同 → 合成一条记录，用 `TZS`（款数）记它代表几款，
+#       `CPSL1..10` 落这一组的印刷总量。
+#
+#   `cplb` 是**推导出来**的（main.resolve_cplb 由 binding / specials 等推），
+#   不是抽取引擎的规范键。product_groups 支持把它拼进签名尾部 —— 见
+#   `scripts/product_groups.py::group_entries(cplb_resolver=…)`。
+#   这是最硬的一道：装订不同、类别树不同，价格必然不同。
+#
+# 加/删键的规矩：
+#   1. 只有「影响成本或工艺」的键才进 keys —— 元数据（品名、系列名、ISBN、
+#      出版月份、请求人、备注、交期…）不进，否则同一结构会被书名拆成几十条。
+#   2. 单位/写法差异由 product_groups.norm() 归一（大小写、`210 x 280` vs
+#      `210x280`、首尾标点），不要靠改客户数据来对齐。
+#   3. 改完必须跑 `pytest tests/test_product_groups.py`。
+# ═══════════════════════════════════════════════════════════════
+version: 1
+
+keys:
+  # ── 产品形态 / 装订（直接决定 CPLB、ZDFS、能不能上机器）──────────
+  - binding
+  - binding_instructions
+  - size
+  - format
+  - extent
+  # ── 用纸（克重/纸种不同 = 不同成本）────────────────────────────
+  - text_material
+  - cover_material
+  - ends_material
+  - jacket_material
+  - boards
+  - padding
+  # ── 印刷 / 表面工艺 ──────────────────────────────────────────
+  - text_printing_spec
+  - cover_printing_spec
+  - ends_printing_spec
+  - finishes
+  - back
+  # ── 结构与包装（套装、发声/灯光模组、收缩包装、贴纸…）──────────
+  - specials
+  - primary_packaging
+  - packaging_unit
+  - assortment
+  - sticker
+
+# 合并时用「拼接」而不是「取第一个」的键：同一组里各款写法不同但都属于这一组
+# （例：三款的品名 → `A / B / C`，让报告一眼看到这条记录代表哪几款）。
+join_keys:
+  - product_name
+  - series_name
+  - notes
+
+# 合并时用「求和」的键。
+sum_keys:
+  - quantity
+  - qty_per_title
+  - qty_total
+
+# 合并时**必须一致**、不一致就报警的键（不影响结构，但会让人怀疑分组错了）。
+must_agree:
+  - fsc
+  - offer_deadline
+  - delivery_date
+  - files_to_printer
+
+# 归一化规则（product_groups.norm 实现，这里只做声明，方便审计对照）。
+normalize:
+  casefold: true
+  unify_times: "x"        # 210 x 280 / 210×280 / 210*280 → 210x280
+  collapse_space: true
+  strip_trailing: " ;,."
