@@ -143,6 +143,17 @@ def test_单对象旧文件写回还是单对象(tmp_path: Path):
     assert isinstance(data, dict)
 
 
+def test_结尾换行跟随原文件_不改文件末尾(tmp_path: Path):
+    """原文件末尾有 `\\n` 就保留、没有就不加 —— 人改一行答案不该连带改动文件末尾。"""
+    body = json.dumps([_record()], ensure_ascii=False, indent=2)
+    for keep, text in ((True, body + "\n"), (False, body)):
+        p = tmp_path / f"ERP_tail_{int(keep)}_20261030_000000.json"
+        p.write_text(text, encoding="utf-8")
+        answer_question(p, record_index=1, qid="Q_PACK", answer="12 本/箱")
+        after = p.read_text(encoding="utf-8")
+        assert after.endswith("\n") is keep, f"原文件 keep_newline={keep} 时被改掉了"
+
+
 # ── 拒绝的姿势 ──────────────────────────────────────────────────────────
 def test_v2旧产物拒绝写入(tmp_path: Path):
     rec = _record()

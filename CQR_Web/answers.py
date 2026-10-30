@@ -58,11 +58,22 @@ def _split(raw: Any) -> tuple[list[dict[str, Any]], str]:
 
 
 def _dump(path: Path, payload: Any) -> None:
-    """原子写回：同目录临时文件 → os.replace，缩进 2、中文不转义（与 main.py 一致）。"""
+    """原子写回：同目录临时文件 → os.replace，缩进 2、中文不转义（与 main.py 一致）。
+
+    结尾换行**跟随原文件**：`main.py` 写的产物末尾没有换行，但历史上的产物有的是
+    被别的工具补过 `\\n` 的。人改一行答案不该连带改动文件末尾 —— 保持原样，
+    `git diff` / 校验脚本才只看得到真正变了的那几行。
+    """
+    try:
+        keep_newline = path.read_text(encoding="utf-8").endswith("\n")
+    except OSError:
+        keep_newline = False
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".answer_", suffix=".json.tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+            if keep_newline:
+                f.write("\n")
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
