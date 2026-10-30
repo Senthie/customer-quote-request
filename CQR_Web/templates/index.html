@@ -405,6 +405,13 @@
         .qa-msg.ok { color: var(--ok); }
         .qa-msg.bad { color: var(--bad); }
         .qa-hint { font-size: .76rem; color: var(--muted-ink, #7a8494); }
+
+        /* 清单可折叠：标题行整行可点（默认折叠，2026-10-30 业务要求） */
+        .qa-head { cursor: pointer; user-select: none; }
+        .qa-head:hover { background: #f2f6fc; }
+        .qa-head:focus-visible { outline: 2px solid #9cc4ff; outline-offset: -2px; }
+        .qa-caret { width: .9em; text-align: center; font-size: .8rem; color: var(--muted-ink, #7a8494); }
+        .qa-peek { max-width: 52ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -453,6 +460,12 @@ const state = {
     drafts: {},            // { key: "还没保存的答案" }
     answering: {},         // { key: true }  正在保存
     answerMsg: {},         // { key: {ok, text} }  上一次保存的结果
+
+    // ★ 内部确认清单**默认折叠**（业务 2026-10-30：「内部确认清单 默认是折叠状态」）。
+    //   按「产物#第几条」记展开状态：undefined = 折叠（默认），true = 已展开。
+    //   存在 state 里而不是 DOM 上 —— 10 秒自动刷新重建 DOM 时不会自己合上，
+    //   也不会因为切 Tab 再切回来就丢掉。
+    qaOpen: {},            // { key: true }
 };
 
 const BASE_TITLE = "ERP · 报价需求单导出查看器";
@@ -1500,21 +1513,76 @@ function recordQuestions(cur) {
     return out;
 }
 
+/* ── 清单的折叠状态（默认折叠，2026-10-30 业务要求）──────────────────────
+   为什么记在 state 里而不是用 <details>：页面每 10 秒整体重建 DOM，
+   用 DOM 自带状态会在刷新后弹回默认；`state.qaOpen` 按「产物#第几条」记，
+   重建 / 切 Tab / 保存后重取详情都不会把已经展开的块合上。
+   ──────────────────────────────────────────────────────────────────────── */
+function qaOpenKey(ridx) {
+    const rel = (state.currentMeta && state.currentMeta.relpath) || "";
+    return rel + "#" + (ridx + 1);
+}
+
+function qaIsOpen(ridx) {
+    return !!state.qaOpen[qaOpenKey(ridx)];
+}
+
+/** 折叠时那行提示：第一条还开着的确认项（没有就说明都处理完了） */
+function firstQuestionPeek(items) {
+    for (const it of items) {
+        if (!it || typeof it !== "object") continue;
+        const status = String(it.status || "open").toLowerCase();
+        const answered = String(it.answer == null ? "" : it.answer).trim() !== "";
+        if (status === "waived" || status === "confirmed" || answered) continue;
+        const q = String(it.question || "").trim();
+        if (!q) continue;
+        return (it.id ? it.id + " · " : "") + (q.length > 58 ? q.slice(0, 55) + "…" : q);
+    }
+    return items.length ? "全部已确认 / 已作废" : "（空清单）";
+}
+
+function toggleQuestions(ridx) {
+    const key = qaOpenKey(ridx);
+    state.qaOpen[key] = !state.qaOpen[key];
+    render();
+}
+
 function renderQuestions(cur) {
     if (!cur || cur.question_answers === undefined) return null;   // v2 旧产物
     const items = Array.isArray(cur.question_answers) ? cur.question_answers
         : (cur.question_answers ? [cur.question_answers] : []);
     const sum = recordQuestions(cur);
+    const ridx = state.activeRecord;
+    const open = qaIsOpen(ridx);
 
-    const head = el("div", { class: "panel-head" },
+    const head = el("div", {
+        class: "panel-head qa-head",
+        role: "button",
+        tabindex: "0",
+        "aria-expanded": open ? "true" : "false",
+        title: open ? "点击折叠（答案不会丢）" : "点击展开确认清单",
+        onclick: () => toggleQuestions(ridx),
+        onkeydown: (e) => {
+            if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+                e.preventDefault();
+                toggleQuestions(ridx);
+            }
+        },
+    },
+        el("span", { class: "qa-caret", text: open ? "▾" : "▸" }),
         el("h2", { text: "内部确认清单" }),
         el("span", { class: "badge " + (sum.open_blocking ? "bad" : (sum.open ? "warn" : "ok")),
                      text: sum.open ? (sum.open + " 项未确认"
                          + (sum.open_blocking ? "（" + sum.open_blocking + " 项卡交付）" : ""))
                          : "无未确认项" }),
         el("div", { class: "spacer" }),
-        el("span", { class: "hint", text: "question_answers · 待办只记这里，CPMS 正文只留结论" }),
+        // 折叠时也让人知道里面有什么 —— 徽章不够细，补一句首条问题
+        open ? el("span", { class: "hint", text: "question_answers · 待办只记这里，CPMS 正文只留结论" })
+            : el("span", { class: "hint qa-peek", text: firstQuestionPeek(items) }),
     );
+
+    // 折叠时不构建 body（不是 CSS 隐藏）：块里有 textarea，藏着也占 DOM 与刷新开销
+    if (!open) return el("section", { class: "panel" }, head);
 
     const body = el("div", { style: "padding:0 16px 14px;display:flex;flex-direction:column;gap:8px" });
     if (!items.length) {
@@ -1840,6 +1908,15 @@ loadFromServer();
 
 // 业务 2026-10-20：每 10 秒刷新一次（抽取由定时任务做，页面只管把结果捡回来）
 setInterval(refreshQuietly, 10000);
+
+// 打印时把清单展开：折叠状态下 body 压根没构建，不只印出个标题就糟了。
+// （beforeprint 在 Chrome/Edge/Safari 可靠；不支持的浏览器最多是打印到折叠态）
+window.addEventListener("beforeprint", () => {
+    if (!state.current || state.current.question_answers === undefined) return;
+    if (qaIsOpen(state.activeRecord)) return;
+    state.qaOpen[qaOpenKey(state.activeRecord)] = true;
+    render();
+});
 </script>
 </body>
 </html>

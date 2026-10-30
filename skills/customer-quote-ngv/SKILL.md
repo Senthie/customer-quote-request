@@ -346,6 +346,11 @@ IAN 574239 = 365,340（6 款，25 语言）。
    漏 `main.py` 那处 → 步骤 1 直接「不支持的格式 .xlsm」并把文件搬进 failed/；
    漏 `main.py` 的**内容探针**（`probe_member.suffix in (".xlsx", ".xlsm", …)`）→ 正文不参与识别，
    只凭文件名 `Puzzle` 判成 **igl（10 分）**，整单口径全错。
+   ★ **2026-10-30 复验：内容探针对外仍是漏的** —— 单独喂 `574237_PuzzleBook_Anlage_22102026.xlsm`
+   跑 `-c auto`，日志依旧是 `识别得分偏低（10）—— 只有文件名/主题这类弱证据` +
+   `客户档案: igl（文件名含 'puzzle'）`，`lidl_anlage` 不生效、只抽出 1 个 `isbn: EAN-Nummer`。
+   所以 **Lidl Anlage 文件一律显式 `-c ngv`**（`lidl_anlage` 只在 ngv 档案里），
+   别相信自动识别；重跑出正确产物后旧目录移 `_superseded_<日期>/`。
 2. **客户表的 `ArtNr` 整列可能是别的 IAN**：574237 那张表里，除希腊以外的所有分区都写着
    `574239_A…E`（客户复制了另一份文件只改了标题）。**项目号看 H2 标题行的 IAN，不要拿 F 列当款号**，
    并在汇报里点名这处客户数据缺陷。
@@ -1096,6 +1101,14 @@ uv run ./scripts/customer_profile.py --prefs ngv
       `cpms_todo` 会多报一条 `缺=确认清单(Q_XXX)` —— 卡交付（`blocking=true`）的项没确认完不许交付。
       收尾动作：把业务/客户确认过的事实写进 `answer`（`status` 可不动，填了 answer 就算已确认），
       并**回填到 `field` 指向的字段**；还没确认的保持 `open`。
+      三类判据（2026-10-30 实跑 7 条定下）：① 语料库查到同一单 → `confirmed`，答案写「已出具单号 +
+      日期 + 本目录为重复询价留档」；② 字段本来就该空（`KHDH` 询价阶段）→ `waived` + 写根因；
+      ③ 真业务决策（客户要改数量/换纸）→ **不动**，汇报里点名。
+      写答案用 `CQR_Web.answers.answer_question(...)`（与页面 `POST /api/answer` 同一实现，
+      只改 `question_answers` + `Reminder`）；收尾 `cpms_todo.py` 归 0、`delivery_gates` 为空。
+      ⚠️ `Q_KHDH` 八成是包了层皮的**识别失败**（档案落 `generic`/`igl`，`required_empty` 没生效）——
+      关掉问题只是止血，必须在汇报里给「档案 / 现值 / 原文 / 应然值」。
+      完整剧本：总纲 `references/closing-blocking-questions.md`。
       口径：`ZDFS` 这类「由业务补填、不猜」的项是 `blocking=false`（看得见但不堵路）；
       **CPMS 正文只留结论**，写「待确认」而没有 `field=CPMS` 的条目 → `cpms_lint` 报 CPMS080。
       业务也可以在**查看器详情页**直接填答案（`POST /api/answer`，2026-10-30 起）——

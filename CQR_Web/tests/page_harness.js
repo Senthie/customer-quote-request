@@ -153,7 +153,17 @@ const SCHEMA = {
 const ctx = {
   console,
   document: doc,
-  window: { print() {} },
+  window: {
+    print() {},
+    // beforeprint（打印前展开清单）等钩子：存下来，harness 可以手动触发
+    _listeners: {},
+    addEventListener(name, fn) { (this._listeners[name] = this._listeners[name] || []).push(fn); },
+    removeEventListener(name, fn) {
+      const arr = this._listeners[name] || [];
+      this._listeners[name] = arr.filter((f) => f !== fn);
+    },
+    fire(name) { for (const fn of this._listeners[name] || []) fn({ type: name }); },
+  },
   Node: Node_,
   location: { search: "" },
   history: { replaceState() {} },
@@ -205,7 +215,9 @@ vm.runInContext(
   code + "\n;globalThis.__api = {state, render, renderList, renderTabs," +
          " applyList, selectExport, setActiveRecord," +
          // v3：内部确认清单的渲染函数（render_real.js 要用真实数据看清单）
-         " renderQuestions, recordQuestions, saveAnswer, answerKey, canWriteAnswers};",
+         " renderQuestions, recordQuestions, saveAnswer, answerKey, canWriteAnswers," +
+         // v3：折叠状态（默认折叠，业务 2026-10-30）
+         " qaOpenKey, qaIsOpen, toggleQuestions, firstQuestionPeek};",
   ctx,
 );
 
@@ -251,6 +263,43 @@ vm.runInContext(
   api.setActiveRecord(0);
   api.state.scanOk = true;
   api.render();
+
+  // 先验「默认折叠」（业务 2026-10-30：「内部确认清单 默认是折叠状态」）
+  const countTag = (tag) => {
+    let n = 0;
+    (function walk(node) {
+      for (const c of node.children || []) {
+        if (c && c.tagName === tag) n += 1;
+        if (c && c.children) walk(c);
+      }
+    })(pageEl);
+    return n;
+  };
+  const qaHead = pageEl.find("qa-head")[0];
+  checks.push(
+    ["默认折叠：清单标题还在（能看见有这块）", pageEl.text().includes("内部确认清单")],
+    ["默认折叠：徽章照样报未确认项数", /2 项未确认/.test(pageEl.text())],
+    ["默认折叠：正文没构建（0 个文本框）", countTag("TEXTAREA") === 0],
+    ["默认折叠：标题行 aria-expanded=false", qaHead && qaHead.attrs["aria-expanded"] === "false"],
+    ["默认折叠：标题行可点（role=button + 有 click 监听）",
+      qaHead && qaHead.attrs.role === "button" && typeof qaHead.listeners.click === "function"],
+    ["默认折叠：给出首条未确认项的预览", /Q_ZDFS · 装订方式为空/.test(pageEl.text())],
+    ["默认折叠：折叠状态按「产物#第几条」记",
+      api.qaIsOpen(0) === false && api.qaOpenKey(0) === REL + "#1"],
+  );
+
+  // 点标题行 → 展开
+  qaHead.listeners.click();
+  checks.push(
+    ["点标题行能展开", api.qaIsOpen(0) === true && countTag("TEXTAREA") === 2],
+    ["展开后 aria-expanded=true", pageEl.find("qa-head")[0].attrs["aria-expanded"] === "true"],
+    ["展开后提示语换回「待办只记这里」", pageEl.text().includes("待办只记这里")],
+  );
+
+  // 展开状态要活过 10 秒自动刷新（整体重建 DOM 不能把块合上）
+  api.render();
+  checks.push(["自动刷新重建 DOM 后保持展开", countTag("TEXTAREA") === 2]);
+
   const pageQ = pageEl.text();
   const qaInputs = (() => {
     const hits = [];
@@ -281,10 +330,28 @@ vm.runInContext(
     ["清单不会当普通字段渲染", !pageQ.includes("[object Object]")],
   );
 
+  // 折叠回去 → 文本框消失，但已经打的草稿还在
+  const keyDraft = api.answerKey(0, "Q_PACK");
+  qaInputs[1].listeners.input({ target: { value: "12 本/箱" } });
+  pageEl.find("qa-head")[0].listeners.click();
+  checks.push(
+    ["再点一次折叠回去", api.qaIsOpen(0) === false && countTag("TEXTAREA") === 0],
+    ["折叠不影响已打的草稿", api.state.drafts[keyDraft] === "12 本/箱"],
+  );
+  // 后面还要验打字/保存 → 重新展开
+  pageEl.find("qa-head")[0].listeners.click();
+  checks.push(["重新展开", countTag("TEXTAREA") === 2]);
+
+  // 打印前自动展开：折叠时 body 根本没构建，否则打印出来只有一个标题
+  pageEl.find("qa-head")[0].listeners.click();      // 先折叠
+  ctx.window.fire("beforeprint");
+  checks.push(["打印前自动展开清单", api.qaIsOpen(0) === true && countTag("TEXTAREA") === 2]);
+
   // 没有 question_answers 的旧记录 → 不出现清单块（v2 零噪音）
   api.setActiveRecord(1);
   checks.push(["旧记录（无清单）不显示清单块", !pageEl.text().includes("内部确认清单")]);
   api.setActiveRecord(0);
+  api.render();
 
   // 打字 → 进草稿（自动刷新重建 DOM 时靠它不丢字）
   const key2 = api.answerKey(0, "Q_PACK");
