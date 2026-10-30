@@ -504,6 +504,12 @@ function el(tag, attrs, ...children) {
 
 const isEmptyValue = (v) => v === null || v === undefined || v === "";
 
+/** 「有没有真值」：null / undefined / 空字符串都不算 —— 统计和徽章用它，别看「键在不在」
+ *  （业务 2026-10-30 踩过：`question_answers` 时代之前的老产物 `version` 是 **null**，
+ *   页面只判了 undefined，拼出来就是徽章「vnull」；同理「N / M 有值」拿 `k in cur`
+ *   统计，null 也算有值 → 显示 11/11 有值但每个值都是 null，自相矛盾） */
+const hasValue = (v) => v !== null && v !== undefined && v !== "";
+
 /** 值的展示文本（null / 空 都变成可读文案，不显示 "null" 这种裸值） */
 function describeValue(v) {
     if (v === null) return { text: "null（空值）", cls: "empty" };
@@ -1143,8 +1149,11 @@ function renderList() {
                     ? "一个报价文件里有多条产品记录（按报价结构分组）→ 详情页分 Tab 切换"
                     : "这份询价只有一条产品记录",
             }));
-            badges.append(it.version === undefined
-                ? el("span", { class: "badge old", text: "v1（无 version）" })
+            // 版本徽章：`version` 可能是 **null**（不是 undefined）—— 老产物 JSON 里就是
+            // `"version": null`，只判 undefined 会拼出「vnull」这种脏字（业务报过）
+            badges.append(!hasValue(it.version)
+                ? el("span", { class: "badge old", text: "v1（无 version）",
+                               title: "这份产物没有配置版本（第 1 代口径产物）" })
                 : el("span", { class: "badge v2", text: "v" + it.version }));
             // 当次运行的校验结果（没有报告就不标，别拿现算的吓人）
             const v = it.validation;
@@ -1681,8 +1690,8 @@ function renderSummary() {
         ["客户单号", cur.KHDH === undefined ? "缺" : (cur.KHDH || "（空）")],
         ["CPMS 字数", (typeof cur.CPMS === "string" && cur.CPMS.trim())
             ? cur.CPMS.length + " 字" : "未写（agent 必填）"],
-        ["配置版本", cur.version === undefined ? "缺（第 1 代产物）" : String(cur.version)],
-        ["格式版本", cur.schema_version === undefined
+        ["配置版本", !hasValue(cur.version) ? "缺（第 1 代产物）" : String(cur.version)],
+        ["格式版本", !hasValue(cur.schema_version)
             ? "缺（v2 及更早：无 question_answers）" : "v" + cur.schema_version],
         ["内部确认", cur.question_answers === undefined ? "缺（v2 旧产物）"
             : (qsum.total
@@ -1746,14 +1755,22 @@ function renderGroups() {
     for (const g of [...groups, { name: "其他（未归组）", hint: "字典里有但还没归类的字段", keys: ungrouped }]) {
         const keys = g.keys;
         if (!keys.length) continue;
-        const fieldCount = keys.filter((k) => k in cur).length;
+        // 「有值」= **真有值**，不是「键在不在」：null / 空字符串不算，否则一堆 null
+        // 也会显示「11 / 11 有值」，跟下面每格都写 null 自相矛盾（业务 2026-10-30 报过）
+        const fieldCount = keys.filter((k) => hasValue(cur[k])).length;
+        const presentCount = keys.filter((k) => k in cur).length;
         sections.push(el("section", { class: "panel" },
             el("div", { class: "group-head" },
                 el("h3", { text: g.name }),
                 el("span", { class: "hint", text: g.hint || "" }),
                 el("div", { class: "spacer" }),
                 el("span", { class: "badge " + (fieldCount === keys.length ? "plain" : "warn"),
-                             text: fieldCount + " / " + keys.length + " 有值" }),
+                             text: fieldCount + " / " + keys.length + " 有值",
+                             title: presentCount === fieldCount
+                                 ? "有实际取值的字段数（null / 空字符串不算）"
+                                 : "有实际取值的字段数；另有 "
+                                   + (presentCount - fieldCount)
+                                   + " 个键存在但值为 null/空（ERP 口径：无 → null）" }),
             ),
             el("div", { class: "field-grid" }, keys.map((k) => renderField(k, specOf(k)))),
         ));

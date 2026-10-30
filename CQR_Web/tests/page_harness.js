@@ -374,6 +374,20 @@ vm.runInContext(
     ["保存后徽章变成 1 项未确认", /1 项未确认/.test(pageEl.text())],
   );
 
+  /* ── 版本徽章的 null 安全（业务 2026-10-30 报的「很多的 null」）──────────
+     老产物 JSON 里是 `"version": null`（不是缺键）。页面原来只判 undefined，
+     于是徽章拼成「vnull」—— 列表里几十个任务能看到一串 null。 */
+  const savedVer = TASK.version;
+  TASK.version = null;
+  api.applyList(EXPORTS, { items: [] });
+  const nullVerList = api.renderList().text();
+  TASK.version = savedVer;
+  api.applyList(EXPORTS, { items: [] });
+  checks.push(
+    ["version 为 null 时不再渲染 vnull", !nullVerList.includes("vnull")],
+    ["version 为 null 时标成「v1（无 version）」", nullVerList.includes("v1（无 version）")],
+  );
+
   let failed = 0;
   for (const [name, ok] of checks) {
     console.log((ok ? "  ✓ " : "  ✗ ") + name);
