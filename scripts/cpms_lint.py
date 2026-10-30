@@ -462,13 +462,15 @@ def _iter_json(target: Path, recursive: bool) -> Iterable[Path]:
         yield p
 
 
-def _report(path: Optional[Path], findings: list[Finding], cpms_len: int, as_json: bool) -> dict:
+def _report(path: Optional[Path], findings: list[Finding], cpms_len: int, as_json: bool,
+            label: str = "") -> dict:
     err = [f for f in findings if f.level == "error"]
     warn = [f for f in findings if f.level != "error"]
     if as_json:
-        return {"path": str(path) if path else None, "cpms_len": cpms_len,
+        return {"path": str(path) if path else None, "record": label or None,
+                "cpms_len": cpms_len,
                 "errors": len(err), "warnings": len(warn), "findings": [f.as_dict() for f in findings]}
-    print(f"\n{'=' * 70}\n{path or '<text>'}   CPMS {cpms_len} 字")
+    print(f"\n{'=' * 70}\n{path or '<text>'}{label}   CPMS {cpms_len} 字")
     for f in findings:
         tag = "ERROR" if f.level == "error" else " WARN"
         print(f"  [{tag}] {f.code}  L{f.line or '-':<3} {f.msg}")
@@ -516,22 +518,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     results = []
     for path in _iter_json(target, args.recursive):
         try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            # ★ 2026-10-29：导出文件是数组（一个文件可含多个产品）→ 逐条 lint；
+            #   老的单对象文件照样能读（erp_bundle 向下兼容）。
+            from erp_bundle import load_bundle
+            records = load_bundle(path)
         except Exception as e:                                    # noqa: BLE001
             print(f"跳过（不是合法 JSON）：{path} —— {e}")
             continue
-        cpms = data.get("CPMS") or ""
-        if args.fix and cpms:
-            fixed, changes = normalize_text(cpms, spec)
-            if changes:
-                shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
-                data["CPMS"] = fixed
-                path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                print(f"  🔧 {path.name}：{', '.join(changes)}")
-            cpms = fixed
-        findings = lint_text(cpms, spec, data)
-        results.append(_report(path, findings, len(cpms.strip()), args.json))
-        total_err += sum(1 for f in findings if f.level == "error")
+        for ridx, data in enumerate(records, 1):
+            label = f"  [{ridx}/{len(records)}]" if len(records) > 1 else ""
+            cpms = data.get("CPMS") or ""
+            if args.fix and cpms:
+                fixed, changes = normalize_text(cpms, spec)
+                if changes:
+                    shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+                    data["CPMS"] = fixed
+                    path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n",
+                                    encoding="utf-8")
+                    print(f"  🔧 {path.name}{label}：{', '.join(changes)}")
+                cpms = fixed
+            findings = lint_text(cpms, spec, data)
+            results.append(_report(path, findings, len(cpms.strip()), args.json, label))
+            total_err += sum(1 for f in findings if f.level == "error")
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))

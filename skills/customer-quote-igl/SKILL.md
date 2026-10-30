@@ -29,6 +29,9 @@ metadata:
 > 改口径 = **六处同步**（不是「四处」）：档案 `customers/igl.yaml` → `scripts/main.py` →
 > `tests/test_pipeline.py` 基线（`EXPECTED_VALUES` / `UNTOUCHED`）→ `tests/test_igl_profile.py`
 > + `tests/test_cpms_todo.py` → `assets/erp_form_schema.yaml` 的 `notes` → 本文件 + 总纲 `SKILL.md`。
+>
+> ★ **产物格式 2026-10-29 改为数组**：`ERP_*.json` 顶层是 `[{...}]`（一个报价文件可含多个产品），
+> 读它一律用 `erp_bundle.load_bundle(path)`，别再 `json.load()` 之后当 dict 用。
 > ★ **完整 SOP 见 `customer-quote-request/references/changing-a-field-convention.md`**（口径变更要动的
 > 所有位置清单、找残留旧值的 grep、关能力时的双向测试、外科手术式改已交付件、闸门逐字段查。
 > 类级内容 —— NGV 等其它客户同样适用，别在客户子技能里另抄一份。

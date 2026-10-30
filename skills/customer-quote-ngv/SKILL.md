@@ -22,6 +22,10 @@ metadata:
 > ③ 口径变更必须四处同步（档案 → 脚本 → 测试 → 文档），旧写法标「已作废」。
 > 交付四道门命令也在这页。
 > 改完必须重跑：`uv run pytest` + 本文件第 8 节的对照命令。
+>
+> ★ **产物格式 2026-10-29 改为数组**：`ERP_*.json` 顶层是 `[{...}]`（一个报价文件可含多个产品），
+> 读它一律用 `erp_bundle.load_bundle(path)`；`cpms_lint` / `cpms_content_audit` / `erp_schema`
+> / `cpms_todo` / Web 都已按「逐条记录」改过 —— 自己写小脚本时别再 `json.load()` 当 dict 用。
 
 > ★ **队列纪律（业务 2026-10-29 明确）**：卡在业务口径上（类别拆不拆、配件算不算、品名怎么译）
 > **不许把队列停在那里等人回话**。正确做法是：① 把**能确定的字段全部落成 ERP JSON**、
@@ -529,8 +533,7 @@ width / height / binding / content / content gsm / content paper / printing of c
 | `offer_deadline` | `2026-06-26` | ★ 「offer deadline / Angebotsfrist」那行**有值** —— 该单已**过期 90 天**（基准日 2026-09-24）→ 触发提醒 |
 | `CPMC` | `KM/Aldi Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)` | **英文表达**（1.0.22 起）；业务员 `KM` 由脚本带出 |
 | `CPMC_ZH` | `KM/Aldi 钻石贴纸美甲设计 普通YO书/Basteln&Gestalten Diamantsticker Nageldesign(FSC Mix)` | 内部字段：**中文表达**；中文品名由 agent 补。⚠️ 真实单据里业务员是 `Corinna`、且**不带 `Aldi`**、还带类别与附属件 —— 见 3.2 |
-| `ID` | 本次任务号 | 内部字段：= 产物目录名 = 日志里的「任务ID」 |
-| `Reminder` | `报价截止日期 2026-06-26 已过期 90 天（基准日 2026-09-24） —— 请与业务确认这单是否还要报价` | 内部字段：把提醒固化进产物（1.0.23 起） |
+| `ID` | 本次任务号 | 内部字段：= 产物目录名 = 日志里的「任务ID」 || `Reminder` | `报价截止日期 2026-06-26 已过期 90 天（基准日 2026-09-24） —— 请与业务确认这单是否还要报价` | 内部字段：把提醒固化进产物（1.0.23 起） |
 | `version` | `2` | 内部字段：当前配置的版本（1.0.24 起）；来源 = 档案顶层 `version:`，改口径就 +1 |
 
 本单还暴露了六个问题，均已修复：数量解析（第 9 节）、Wire-O 装订映射、`extras_found`

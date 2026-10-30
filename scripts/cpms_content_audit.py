@@ -363,12 +363,14 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        record = json.loads(Path(args.cpms).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        # ★ 2026-10-29：导出文件是数组（一个文件可含多个产品）→ 逐条审计；
+        #   老的单对象文件照样能读（erp_bundle 向下兼容）。
+        from erp_bundle import load_bundle
+        records = load_bundle(args.cpms)
+    except (OSError, ValueError) as exc:
         print(f"读不了产物 JSON：{args.cpms}（{exc}）", file=sys.stderr)
         return 1
-    cpms = record.get("CPMS") or ""
-    if not cpms.strip():
+    if not any((r.get("CPMS") or "").strip() for r in records):
         print("CPMS 为空 —— 没有可审计的内容", file=sys.stderr)
         return 1
     try:
@@ -387,22 +389,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"读不了口径白名单：{args.accepted}（{exc}）", file=sys.stderr)
             return 1
         accepted = {k: v for k, v in accepted.items() if not str(k).startswith("_")}
-    derived: dict = {}
-    gd = record.get("GD")
-    try:
-        if gd not in (None, "", 0, "0") and float(gd) != 0:
-            derived[f"{float(gd):g}"] = (
-                f"派生字段 GD={float(gd):g}mm：客户没给成品厚度，由内文页数/纸张厚度"
-                f"+皮壳灰板推算（与 ERP GD 字段一致，cpms_lint CPMS011 已校验）")
-    except (TypeError, ValueError):
-        pass
-    result = audit(cpms, source_text, accepted, derived)
+    def _derived_for(record: dict) -> dict:
+        """概要行里的 GD 是派生值（客户文件没有）→ 与产物字段一致才放行。"""
+        derived: dict = {}
+        gd = record.get("GD")
+        try:
+            if gd not in (None, "", 0, "0") and float(gd) != 0:
+                derived[f"{float(gd):g}"] = (
+                    f"派生字段 GD={float(gd):g}mm：客户没给成品厚度，由内文页数/纸张厚度"
+                    f"+皮壳灰板推算（与 ERP GD 字段一致，cpms_lint CPMS011 已校验）")
+        except (TypeError, ValueError):
+            pass
+        return derived
 
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
+    def _report(result: dict, label: str) -> None:
         print("=" * 66)
-        print(f"CPMS 溯源审计：{args.cpms}")
+        print(f"CPMS 溯源审计：{args.cpms}{label}")
         if result["untraced"] or result["untraced_codes"]:
             print("\n!! 无出处（客户文件里找不到）—— 必须删或改 !!")
             for t in result["untraced"]:
@@ -425,7 +427,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  - {t['token']}")
         print(f"\n小结：无出处 {result['summary']['untraced']} / 未写 {result['summary']['missing']}"
               f" / 口径放行 {result['summary']['accepted']}")
-    return result["summary"]["untraced"]
+
+    all_results = []
+    for ridx, record in enumerate(records, 1):
+        label = f"  [{ridx}/{len(records)}]" if len(records) > 1 else ""
+        cpms = record.get("CPMS") or ""
+        if not cpms.strip():
+            print(f"（跳过{label or ' 该记录'}：CPMS 为空）", file=sys.stderr)
+            all_results.append({"label": label, "untraced": 0})
+            continue
+        result = audit(cpms, source_text, accepted, _derived_for(record))
+        result["record"] = ridx
+        all_results.append(result)
+        if args.json:
+            continue
+        _report(result, label)
+
+    if args.json:
+        payload = all_results[0] if len(all_results) == 1 else all_results
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return sum(int((r.get("summary") or {}).get("untraced", 0)) for r in all_results)
 
 
 if __name__ == "__main__":

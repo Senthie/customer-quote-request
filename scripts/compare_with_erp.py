@@ -89,8 +89,10 @@ def _run_pipeline(customer: str, attachment: Path, workdir: Path) -> dict:
         print(proc.stderr[-800:], file=sys.stderr)
         raise SystemExit(2)
 
-    with open(found[-1], encoding="utf-8") as f:
-        result = json.load(f)
+    # ★ 2026-10-29：导出是数组（一个文件可含多个产品）→ 取第一条作对照；
+    #   老的单对象文件同样能读。
+    from erp_bundle import load_bundle
+    result = load_bundle(found[-1])[0]
 
     reports = list(workdir.glob("processed/*/*.validation.json"))
     report = {}

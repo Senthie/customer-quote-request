@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import load_one
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -213,7 +215,7 @@ def test_历史单据的三个真错误能被抓出来():
     3. ~~SFYPJ 存了布尔 false~~ —— **2026-10-21 业务改口径：SFYPJ 就填布尔**，
        这条不再是错误（当年按字符串枚举判，现已改字典）。
     """
-    data = json.loads(HISTORICAL.read_text(encoding="utf-8"))
+    data = load_one(HISTORICAL)      # 产物是数组（2026-10-29 起），取第一条
     errors = {i["field"] for i in validate_result(data) if i["level"] == "error"}
     assert {"ZDFS", "JHRQ", "WCRQ"} <= errors
     assert "SFYPJ" not in errors, "SFYPJ 现在就是布尔（2026-10-21 改口径）"
@@ -221,7 +223,7 @@ def test_历史单据的三个真错误能被抓出来():
 
 @pytest.mark.skipif(not HISTORICAL.exists(), reason="历史单据不在仓库里")
 def test_历史单据的错误值归一化后大部分可救():
-    data = json.loads(HISTORICAL.read_text(encoding="utf-8"))
+    data = load_one(HISTORICAL)
     out, _ = normalize_result({"ZDFS": data["ZDFS"], "SFYPJ": data["SFYPJ"]})
     assert out["ZDFS"] == "胶装/PAD书"
 

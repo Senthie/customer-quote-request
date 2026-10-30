@@ -41,6 +41,26 @@ CPMC_ZH_PLACEHOLDER = "【中文品名待定】"
 EXPORT_NAME_RE = re.compile(r"^ERP_(?P<task_id>.+)_(?P<date>\d{8})_(?P<time>\d{6})\.json$")
 
 
+def load_records(path: Path) -> list[dict[str, Any]]:
+    """读 ERP 导出文件 → 一组产品记录（★ 2026-10-29 起是**数组**）。
+
+    一个报价文件里可以有多个产品，所以列表页/详情页都要按记录循环；
+    老的单对象文件（`{...}`）照样读成 1 条记录（向下兼容）。
+    """
+    with open(path, encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict) and isinstance(data.get("records"), list):
+        records = data["records"]
+    else:
+        records = [data]
+    for i, rec in enumerate(records, 1):
+        if not isinstance(rec, dict):
+            raise ValueError(f"第 {i} 条记录不是对象（{type(rec).__name__}）")
+    return records
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 字段分组（纯展示用）
 #
@@ -168,7 +188,8 @@ def _is_artifact(name: str) -> bool:
         return True
     if name.startswith("CPMS_"):
         return True                                   # agent 写的 CPMS 对照说明
-    return name.endswith((".extracted.json", ".validation.json", ".meta.json"))
+    return name.endswith((".extracted.json", ".validation.json", ".meta.json",
+                          ".bak"))   # `.prearray.bak`（数组迁移的备份）也不是客户原件
 
 
 def original_inputs(task_dir: Path) -> list[Path]:
@@ -354,19 +375,28 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         item["validation"] = None
 
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            raise ValueError(f"顶层不是对象，是 {type(data).__name__}")
+        records = load_records(path)
+        if not records:
+            raise ValueError("数组里没有任何产品记录")
+        data = records[0]                     # 列表页摘要先看第一条
     except Exception as exc:  # noqa: BLE001
         item["broken"] = f"{type(exc).__name__}: {exc}"
         item["key_count"] = 0
         item["cpms_len"] = 0
+        item["record_count"] = 0
         item["incomplete"] = []   # 读不出来就没法判交付状态（列表上另有「文件损坏」徽章）
         return item
 
+    # 多产品文件的交付闸门要**逐条**判（任何一条没写完都不许交付）
+    gates: list[str] = []
+    for ridx, rec in enumerate(records, 1):
+        for g in delivery_gates(rec):
+            gates.append(g if len(records) == 1 else f"第{ridx}条：{g}")
+    cpms_lens = [len(r["CPMS"]) if isinstance(r.get("CPMS"), str) else 0 for r in records]
+
     item.update({
         "key_count": len(data),
+        "record_count": len(records),
         # 内部字段（老产物可能没有 → None，页面上显示「缺」）
         "version": data.get("version"),
         "ID": data.get("ID"),
@@ -380,8 +410,10 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         "CPSL1": data.get("CPSL1"),
         "TZS": data.get("TZS"),
         # ★ 交付闸门（CPMS 未写 / 中文品名还是占位符）—— 空列表 = 可以交付
-        "cpms_len": len(data["CPMS"]) if isinstance(data.get("CPMS"), str) else 0,
-        "incomplete": delivery_gates(data),
+        #   多产品文件：所有记录都过才算过（gates 已按条标号）
+        "cpms_len": cpms_lens[0] if len(cpms_lens) == 1 else sum(cpms_lens),
+        "cpms_len_min": min(cpms_lens) if cpms_lens else 0,
+        "incomplete": gates,
     })
     return item
 

@@ -1681,13 +1681,37 @@ customer-quote-request/
 
 ```
 processed/<task_id>/
-├── ERP_<task_id>_<YYYYMMDD_HHMMSS>.json   # 交付物（CPMS 需 agent 补写）
+├── ERP_<task_id>_<YYYYMMDD_HHMMSS>.json   # 交付物：**数组**（一个文件可含多个产品），CPMS 需 agent 补写
 ├── <原文件名>.extracted.json               # 抽取明细：values / unmatched_labels / extras_found
 ├── <原文件名>.validation.json              # ★ ERP 取值校验报告（步骤 5b：枚举/类型/必填）
 ├── <原文件名>.csv                          # 转换后的 CSV
 ├── <原文件名>.xlsx                         # 原始文件（已从 pending 移出，防重复处理）
 └── <原文件名>.xlsx.meta.json               # 邮件副档（若来自 ingest_email）
 ```
+
+### 7.x ★ ERP 导出是**数组**（2026-10-29 业务拍板）
+
+业务原话：「一个报价文件里可以包含很多个产品，而多个产品需要开很多的单，这样不方便，
+所以我们的 ERP 导出的 json 使用数组格式 `[]`」。
+
+```json
+[
+  { "BDBH": "", "...": "第 1 个产品的 59 个 ERP 键", "ID": "…", "CPMC_ZH": "…", "Reminder": "", "version": 2 },
+  { "BDBH": "", "...": "第 2 个产品（键序完全相同）" }
+]
+```
+
+规则：
+
+- **永远数组**，只有 1 个产品也是 `[{…}]` —— 下游不用先判类型。
+- 数组里每条 = 一条完整产品记录：59 个 ERP 键（键序按模板）+ 内部字段，**互不共享状态**。
+- 读写一律走 `scripts/erp_bundle.py`：`load_bundle(path) -> list[dict]` / `write_bundle()`；
+  **向下兼容**老的单对象文件（读成 1 条），历史产物不必回炉（需要时可跑
+  `scripts/migrate_erp_to_array.py --apply` 一次性升级，幂等、留 `.prearray.bak`）。
+- 所有消费方都已按「逐条记录」改过：`erp_schema --check`、`cpms_lint`、
+  `cpms_content_audit --cpms`、`cpms_todo`、`CQR_Web`（列表显示记录数、交付闸门逐条判）、
+  `compare_with_erp`。**新写工具时不要再 `json.load()` 当 dict 用** —— 用 `load_bundle`。
+- 回归：`tests/test_erp_bundle.py`（9 项）+ `tests/test_pipeline.py::test_导出文件顶层是数组`。
 
 ---
 

@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import load_one
+
 from customer_profile import load_profile
 from extract_fields import CustomerData, extract_from_workbook, scan_values
 from main import map_fields, parse_single_quantity, _de_number, product_name_from_subject
@@ -681,7 +683,7 @@ def test_识别必须看正文_文件名撞车也不许判错(tmp_path):
     erp_files = [p for p in (workdir / "processed").glob("*/*.json")
                  if p.name.startswith("ERP_")]
     assert len(erp_files) == 1, erp_files
-    result = json.loads(erp_files[0].read_text(encoding="utf-8"))
+    result = load_one(erp_files[0])
     # 这些值只有用 ngv 档案才会出现（判成 igl 时全都不对）
     assert result["CPLB"].split(";")[0] == "29.04"
     assert result["SHFS"] == "FOB(NGV)"

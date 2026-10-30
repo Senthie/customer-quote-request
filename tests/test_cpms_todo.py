@@ -21,6 +21,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import cpms_todo  # noqa: E402
+from conftest import load_one  # noqa: E402
 
 
 def _task(root: Path, task_id: str, *, cpms: str, cpmc: str, khdh: str = "CU001",
@@ -29,8 +30,9 @@ def _task(root: Path, task_id: str, *, cpms: str, cpmc: str, khdh: str = "CU001"
     d.mkdir(parents=True)
     payload = {"KHDH": khdh, "CPMS": cpms, "CPMC": cpmc_en, "CPMC_ZH": cpmc,
                "CPLB": "23.01;无线胶装书"}
+    # ★ 2026-10-29：导出统一为数组（这个 fixture 也照新格式写）
     (d / f"ERP_{task_id}_20260101_000000.json").write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        json.dumps([payload], ensure_ascii=False), encoding="utf-8"
     )
     (d / "some_customer_file.extracted.json").write_text("{}", encoding="utf-8")
     return d
@@ -114,7 +116,7 @@ def test_ECPMC一填上就消失(processed: Path):
     d = _task(processed, "ngv2", cpms="完整描述", cpmc="儿童涂色书")
     _with_profile(processed, "ngv2", "ngv")
     erp = next(d.glob("ERP_*.json"))
-    payload = json.loads(erp.read_text(encoding="utf-8"))
+    payload = load_one(erp)
     payload["ECPMC"] = "Malbücher"      # 原始产品名，德文照抄
     erp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     assert cpms_todo.iter_incomplete(processed) == []

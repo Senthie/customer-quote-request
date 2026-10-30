@@ -431,8 +431,11 @@ def _cmd_field(field: str) -> int:
 
 
 def _cmd_check(path: str, customer: Optional[str] = None) -> int:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    # ★ 2026-10-29：导出文件是**数组**（一个文件可含多个产品）；老的单对象文件照样能读。
+    from erp_bundle import load_bundle
+    records = load_bundle(path)
+    if len(records) > 1:
+        print(f"本次文件含 {len(records)} 条产品记录 —— 逐条校验")
     allow_empty: tuple = ()
     allow_values: dict = {}
     internal: tuple = ()
@@ -467,19 +470,27 @@ def _cmd_check(path: str, customer: Optional[str] = None) -> int:
                       f"{ {f: list(v) for f, v in allow_values.items()} }")
         except Exception as exc:                      # 档案缺失/加载失败不阻塞校验
             print(f"（客户档案 {customer} 未能加载，按字典硬校验：{exc}）")
-    issues = validate_result(data, allow_empty=allow_empty, allow_values=allow_values,
-                             internal_fields=internal)
-    if not issues:
-        print(f"✓ {path}：{len(data)} 个字段全部通过（枚举 / 类型 / 必填）")
-        return 0
-    errors = [i for i in issues if i["level"] == "error"]
-    warns = [i for i in issues if i["level"] == "warn"]
-    for i in errors:
-        print(f"✗ [ERROR] {i['field']}: {i['message']}")
-    for i in warns:
-        print(f"! [WARN ] {i['field']}: {i['message']}")
-    print(f"\n合计 {len(issues)} 个问题（error {len(errors)} / warn {len(warns)}）")
-    return 1 if errors else 0
+    total_errors = 0
+    total_warns = 0
+    for idx, data in enumerate(records, 1):
+        tag = f"[{idx}/{len(records)}] " if len(records) > 1 else ""
+        issues = validate_result(data, allow_empty=allow_empty, allow_values=allow_values,
+                                 internal_fields=internal)
+        if not issues:
+            print(f"✓ {tag}{path}：{len(data)} 个字段全部通过（枚举 / 类型 / 必填）")
+            continue
+        errors = [i for i in issues if i["level"] == "error"]
+        warns = [i for i in issues if i["level"] == "warn"]
+        for i in errors:
+            print(f"✗ [ERROR] {tag}{i['field']}: {i['message']}")
+        for i in warns:
+            print(f"! [WARN ] {tag}{i['field']}: {i['message']}")
+        total_errors += len(errors)
+        total_warns += len(warns)
+    if total_errors or total_warns:
+        print(f"\n合计 {total_errors + total_warns} 个问题"
+              f"（error {total_errors} / warn {total_warns}）")
+    return 1 if total_errors else 0
 
 
 def main() -> int:

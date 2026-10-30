@@ -1921,8 +1921,12 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
     logger.info(f"  文件名: {output_filename}")
     logger.info(f"  字段数: {len(result)}")
     output_path = task_dir / output_filename
+    # ★ 2026-10-29 业务口径：导出文件统一为**数组**（一个文件可装多个产品）。
+    #   本次任务只有 1 条产品记录，也照样包成 [{...}] —— 下游不用先判类型；
+    #   多产品询价以后往同一个数组里追加，不必再拆成很多文件/很多单。
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+        json.dump([result], f, ensure_ascii=False, indent=2)
+    logger.info(f"  输出格式: 数组（本次 {1} 条产品记录）")
     logger.info(f"  输出路径: {output_path}")
     logger.info("  状态: 成功")
     output_files.append(output_path)

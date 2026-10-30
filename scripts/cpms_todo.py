@@ -129,27 +129,32 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
         if erp is None:
             continue
         try:
-            data = json.loads(erp.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict):
+            # ★ 2026-10-29：ERP 导出是**数组**（一个文件可含多个产品）→ 逐条记录检查；
+            #   老的单对象文件照样能读。同一条产品记录进一条待办，`record` 标明第几条。
+            from erp_bundle import load_bundle
+            records = load_bundle(erp)
+        except (OSError, ValueError):
             continue
 
-        missing = [f for f in AGENT_FIELDS if _is_blank(data.get(f))]
-        # ECPMC 只对「档案声明了」的客户查（NGV 要求、igl 不产出）
-        if _is_blank(data.get(ECPMC_FIELD)) and _requires_ecpmc(_profile_id(task_dir)):
-            missing.append(ECPMC_FIELD)
-        if not missing:
-            continue
-        out.append({
-            "task_id": task_dir.name,
-            "erp_file": str(erp),
-            "missing": missing,
-            "source": _source_label(task_dir),
-            "khdh": data.get("KHDH") or "",
-            "cplb": data.get("CPLB") or "",
-            "mtime": erp.stat().st_mtime,
-        })
+        profile_id = _profile_id(task_dir)
+        for ridx, data in enumerate(records, 1):
+            missing = [f for f in AGENT_FIELDS if _is_blank(data.get(f))]
+            # ECPMC 只对「档案声明了」的客户查（NGV 要求、igl 不产出）
+            if _is_blank(data.get(ECPMC_FIELD)) and _requires_ecpmc(profile_id):
+                missing.append(ECPMC_FIELD)
+            if not missing:
+                continue
+            out.append({
+                "task_id": task_dir.name,
+                "erp_file": str(erp),
+                "record": ridx,
+                "record_count": len(records),
+                "missing": missing,
+                "source": _source_label(task_dir),
+                "khdh": data.get("KHDH") or "",
+                "cplb": data.get("CPLB") or "",
+                "mtime": erp.stat().st_mtime,
+            })
 
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out
@@ -161,7 +166,10 @@ def format_report(items: Iterable[dict[str, Any]]) -> str:
         return "CPMS_TODO: 0"
     lines = [f"CPMS_TODO: {len(items)}"]
     for it in items:
-        bits = [f"task={it['task_id']}", f"缺={'/'.join(it['missing'])}"]
+        bits = [f"task={it['task_id']}"]
+        if it.get("record_count", 1) > 1:
+            bits.append(f"第{it.get('record', 1)}/{it['record_count']}条")
+        bits.append(f"缺={'/'.join(it['missing'])}")
         if it["khdh"]:
             bits.append(f"单号={it['khdh']}")
         if it["source"]:

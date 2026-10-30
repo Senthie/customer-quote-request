@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import load_one
+
 from extract_fields import CustomerData, merge_customer_data
 from input_unit import finalize_batch, resolve_input_unit, resolve_input_units
 
@@ -180,7 +182,7 @@ def test_端到端_文件夹只产出一份报价(tmp_path):
     assert sorted(validation["unit"]["members"]) == ["01_规格.txt", "02_补充.txt"]
 
     # 合并后的字段确实来自两个文件（装箱那句只写在 02）
-    data = json.loads(erp_files[0].read_text(encoding="utf-8"))
+    data = load_one(erp_files[0])
     # 无线胶装、没冲形状也没 PAD 线索 → 基础节点（不再一律猜 23.06 PAD头书）
     assert data["CPLB"].startswith("23.01"), data["CPLB"]
     assert data["CPSL1"] == 10000
@@ -312,7 +314,7 @@ def test_端到端_两个子目录出两份报价(tmp_path):
     quantities = {}
     for erp in erp_files:
         task_dir = erp.parent
-        data = json.loads(erp.read_text(encoding="utf-8"))
+        data = load_one(erp)
         validation = json.loads(
             next(task_dir.glob("*.validation.json")).read_text(encoding="utf-8"))
         # 每份都归档了自己那个子目录，且 validation 记着角色

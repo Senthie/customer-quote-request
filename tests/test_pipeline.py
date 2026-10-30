@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import load_erp, load_one
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 TEMPLATE = REPO_ROOT / "assets" / "add_customer_quote_request.json"
@@ -81,7 +83,9 @@ def pipeline_run(tmp_path_factory):
     return {
         "workdir": workdir,
         "stdout": result.stdout,
-        "erp": json.loads(erp_files[0].read_text(encoding="utf-8")),
+        # ★ 2026-10-29：导出文件是**数组**（一个文件可含多个产品）
+        "records": load_erp(erp_files[0]),
+        "erp": load_one(erp_files[0]),
         "task_dir": erp_files[0].parent,
     }
 
@@ -104,6 +108,21 @@ def test_键集合与顺序等于模板(pipeline_run):
     assert list(out) == list(template) + internal_keys
     assert list(out)[:59] == list(template), "59 个 ERP 键的位置不许动"
     assert len(out) == 59 + len(internal_keys)
+
+
+def test_导出文件顶层是数组(pipeline_run):
+    """★ 2026-10-29 业务拍板：一个报价文件可含**多个产品**，顶层统一为数组 `[...]`。
+
+    哪怕本次只有 1 条产品记录也要包成数组 —— 下游（Web / lint / audit / todo）
+    不用先判类型；老的单对象文件仍可读（`erp_bundle.load_bundle` 向下兼容）。
+    """
+    files = [p for p in pipeline_run["task_dir"].glob("ERP_*.json")]
+    assert len(files) == 1
+    raw = json.loads(files[0].read_text(encoding="utf-8"))
+    assert isinstance(raw, list), f"顶层必须是数组，实际 {type(raw).__name__}"
+    assert len(raw) == 1 and isinstance(raw[0], dict)
+    assert raw[0] == pipeline_run["erp"], "数组里的记录应与 fixture 读到的一致"
+    assert list(raw[0])[:3] == ["BDBH", "YWY", "KHZL"], "记录内键序仍按 ERP 模板"
 
 
 def test_内部字段_ID_标注本次任务(pipeline_run):
@@ -209,7 +228,10 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
         info = step6_output_results(
             src, result, tmp_path / tag / "processed", Logger(),
             CustomerData(values={}), profile, None, strip_internal=strip)
-        return json.loads(Path(info["erp_json"]).read_text(encoding="utf-8"))
+        # ★ 新格式：数组。[0] 取那条产品记录，同时断言「确实是数组」
+        records = load_erp(Path(info["erp_json"]))
+        assert isinstance(records, list) and len(records) == 1, records
+        return records[0]
 
     # ① 默认：追加内部字段，且不改动 59 键
     erp = _run("with_internal", False, "KM/Aldi 中文品名 普通蛇圈书/Test Book(FSC Mix)",

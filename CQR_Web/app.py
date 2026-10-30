@@ -161,18 +161,23 @@ def create_app(processed_dir: Optional[Path | str] = None,
         except ValueError as exc:
             return jsonify(error=str(exc)), 404
         try:
-            data: Any = json.loads(target.read_text(encoding="utf-8"))
+            # ★ 2026-10-29 起导出文件是**数组**（一个报价文件可含多个产品）：
+            #   详情接口返回 records（数组）+ 兼容字段 data（第一条），页面按条渲染。
+            from CQR_Web.data import load_records
+            records = load_records(target)
         except Exception as exc:  # noqa: BLE001
             return jsonify(error=f"解析失败: {type(exc).__name__}: {exc}"), 422
-        if not isinstance(data, dict):
-            return jsonify(error=f"顶层不是对象（是 {type(data).__name__}），看不了字段"), 422
+        data: Any = records[0]
         return jsonify(
             relpath=relpath,
             data=data,
+            records=records,
+            record_count=len(records),
             # 取值校验用权威实现（erp_schema.validate_result），页面不自己比枚举
             validation=build_validation_payload(target, data),
-            # 交付闸门同样只在服务端算一份（页面只显示）
-            incomplete=delivery_gates(data),
+            # 交付闸门同样只在服务端算一份（页面只显示）；多条记录逐条判
+            incomplete=[g if len(records) == 1 else f"第{i}条：{g}"
+                        for i, rec in enumerate(records, 1) for g in delivery_gates(rec)],
         )
 
     @app.get("/api/schema")
