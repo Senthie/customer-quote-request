@@ -1273,8 +1273,15 @@ function renderValue(key, value, spec) {
     const line = el("div", { class: "line" });
     const text = String(value);
     if (typeof value === "number") {
-        line.append(el("span", { class: "val", text: text }),
-            text.length > 4 ? el("span", { class: "badge plain", text: fmtNum(value) }) : null);
+        line.append(el("span", { class: "val", text: text }));
+        /* ⚠️ 这里**不能**写成 `line.append(a, text.length > 4 ? badge : null)`：
+           浏览器原生 `ParentNode.append()` 不过滤 null，会把它当文本节点插进去 →
+           页面上就是「1null」「0null」（值明明有，后面跟个字面 null）。
+           2026-10-30 业务报的就是这个：短数字（TZS 1 / CPSL 0 / YYS 1）全中招，
+           长数字走徽章分支反而没事。所以条件 append，别把 null 交给 append()。 */
+        if (text.length > 4) {
+            line.append(el("span", { class: "badge plain", text: fmtNum(value) }));
+        }
     } else {
         line.append(el("span", { class: "val plain", text: text }));
     }

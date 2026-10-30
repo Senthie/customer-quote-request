@@ -42,9 +42,12 @@ class Node_ {
   get textContent() { return this._text; }
   set textContent(v) { this._text = String(v); }
   append(...kids) {
-    for (const k of kids.flat(Infinity)) {
-      if (k !== null && k !== undefined && k !== false) this.children.push(k);
-    }
+    /* ⚠️ shim 必须照抄浏览器**原生** ParentNode.append() 的行为：它**不过滤** null /
+       undefined / false，会把它们统统变成文本节点（页面上就出现字面的「null」）。
+       过滤 null 是 el() 的职责 —— el() 在调用 append 之前就筛过了。
+       这里以前做过「跳过 null」，结果页面里 `x.append(a, cond ? b : null)` 这种写法
+       在测试里永远绿、到浏览器里长出「1null」「0null」（2026-10-30 业务报的真 bug）。 */
+    for (const k of kids.flat(Infinity)) this.children.push(k);
   }
   appendChild(k) { this.children.push(k); return k; }
   replaceChildren(...kids) { this.children = kids.flat(Infinity); }
@@ -386,6 +389,25 @@ vm.runInContext(
   checks.push(
     ["version 为 null 时不再渲染 vnull", !nullVerList.includes("vnull")],
     ["version 为 null 时标成「v1（无 version）」", nullVerList.includes("v1（无 version）")],
+  );
+
+  /* ── 数字字段后面不许跟字面 null（业务 2026-10-30：「值明明存在值，还是会出现 null」）
+     根因：`line.append(span, 条件 ? 徽章 : null)` —— 浏览器原生 append() 不过滤 null，
+     会把它当文本节点插进去 → 「1null」「0null」。所以这里直接抠出该字段的值格文本看。 */
+  const numField = (key) => {
+    const f = pageEl.find("field").find((x) => {
+      const lbl = x.find("field-label")[0];
+      return lbl && lbl.text().includes(key);
+    });
+    const v = f && f.find("field-value")[0];
+    return v ? v.text() : "";
+  };
+  const tzsCell = numField("TZS");        // 假数据 TZS=3 → 短数字（≤4 字符）走 null 分支
+  const cpslCell = numField("CPSL1");     // 假数据 CPSL1=182670 → 长数字走千分位徽章分支
+  checks.push(
+    ["短数字字段值后面没有 null（TZS=3）", tzsCell.includes("3") && !/null/i.test(tzsCell)],
+    ["长数字字段值后面没有 null（CPSL1=182670）", /182,670/.test(cpslCell) && !/null/i.test(cpslCell)],
+    ["有值的字段整页不会出现「值+null」", !/\d\s*null/i.test(pageEl.text())],
   );
 
   let failed = 0;
