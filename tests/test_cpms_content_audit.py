@@ -157,3 +157,66 @@ def test_邮件正文算客户原话_副档里的抽取结果不算(tmp_path):
         A.read_source(f) for f in A.expand_sources([str(unit)]))
     r = A.audit("备注：2019 旧单再版；皮壳：1200g灰板", text)
     assert r["summary"]["untraced"] == 0, r["untraced"]
+
+
+def test_日期单元格的日号可溯源_不许把日期与时间粘成数字(tmp_path):
+    """2026-10-29 实测踩坑：`str(datetime)` = "2027-04-30 00:00:00"，
+    `normalize()` 去掉空白后粘成 "2027-04-3000:00:00" —— 日号 `30` 前后都是数字，
+    被判「无出处」，逼人把客户真实交期从 CPMS 里删掉。日期是客户原文事实，不许丢。"""
+    import datetime as dt
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["C3"] = dt.datetime(2027, 4, 30)
+    ws["C4"] = dt.datetime(2027, 9, 3)
+    path = tmp_path / "enquiry.xlsx"
+    wb.save(path)
+
+    text = A.read_source(path)
+    assert "2027-04-30" in text and "00:00:00" not in text, text
+    r = A.audit("备注：文件到印厂 2027-04-30，交期 2027-09-03", text)
+    assert r["summary"]["untraced"] == 0, r["untraced"]
+
+
+def test_灰板数字与mm分处两格仍认灰板换算(tmp_path):
+    """xlsx 里 `2` 与 `mm` 分处两格（C13/D13）—— 读取时用 `|` 分隔，
+    灰板 mm→g 的换算必须照样认（否则规范要求的 `1200g灰板` 反被判无出处）。"""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["B13"] = "boards"
+    ws["C13"] = 2
+    ws["D13"] = "mm"
+    path = tmp_path / "enquiry.xlsx"
+    wb.save(path)
+
+    r = A.audit("皮壳：1200g灰板(FSC)，4C/0C", A.read_source(path))
+    assert r["summary"]["untraced"] == 0, r["untraced"]
+
+
+def test_客户写cm_CPMS写mm算可溯源():
+    """Lidl `Anlage`（2026-10-29）：客户表尺寸写 `20 x 20 x 2 cm`，
+    CPMS 规范与 ERP 的 `CD/KD` 都是 mm（`200*200*0`）—— 机械换算不是编数字。
+    """
+    r = A.audit("书籍方向：【长书脊】产品规格：【200*200*0】", "20 x 20 x 2 cm, 25 x 25,3 x 2,3 cm")
+    tokens = [t["token"] for t in r["untraced"]]
+    assert "200" not in tokens, r["untraced"]
+
+
+def test_cm换算带小数的也认():
+    r = A.audit("产品规格：【250*253*0】", "25 x 25,3 x 2,3 cm")
+    tokens = [t["token"] for t in r["untraced"]]
+    assert "253" not in tokens, r["untraced"]
+
+
+def test_cm换算是双向核对_编的毫米数仍然报():
+    r = A.audit("产品规格：【300*300*0】", "20 x 20 x 2 cm")
+    assert any(t["num"] == "300" for t in r["untraced"]), r["untraced"]
+
+
+def test_原文没有cm时_毫米换算不生效():
+    r = A.audit("产品规格：【200*200*0】", "20 x 20 x 2 mm")
+    assert any(t["num"] == "200" for t in r["untraced"]), r["untraced"]
