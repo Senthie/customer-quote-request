@@ -26,10 +26,11 @@ def test_项目自带pyproject和README和测试():
 
 
 def test_包还是三层且data层不依赖flask():
-    for name in ("__init__.py", "__main__.py", "data.py", "upload.py", "app.py",
-                 "templates/index.html"):
+    for name in ("__init__.py", "__main__.py", "data.py", "upload.py", "answers.py",
+                 "app.py", "templates/index.html"):
         assert (PROJ / name).is_file(), f"缺 {name}"
-    for logic in ("data.py", "upload.py"):
+    # answers.py = 写答案的纯逻辑层（2026-10-30 起页面能写 question_answers）
+    for logic in ("data.py", "upload.py", "answers.py"):
         src = (PROJ / logic).read_text(encoding="utf-8")
         assert "import flask" not in src and "from flask" not in src, \
             f"{logic} 是纯逻辑层，不许 import Flask（要能脱离服务端单独测）"
@@ -61,7 +62,7 @@ def test_web侧不许自己跑抽取():
     这条容易长回去 —— 一旦有人图省事在路由里 subprocess 起 main.py，就会出现
     「长任务卡住 dev server / 队列状态没人管 / 两处都能抽取」的一堆问题。
     """
-    for logic in ("data.py", "upload.py", "app.py"):
+    for logic in ("data.py", "upload.py", "answers.py", "app.py"):
         code = _code_only((PROJ / logic).read_text(encoding="utf-8"))
         assert "subprocess" not in code, f"{logic} 不该起子进程（抽取是 scan_pending.py 的事）"
         assert "main.py" not in code, f"{logic} 不该直接调抽取脚本"

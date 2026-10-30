@@ -21,10 +21,14 @@
     GET /api/exports         → 扫描结果（每份产物的摘要，最新在前）
     GET /api/export?path=…   → 某一份产物的完整 JSON（`path` 是相对扫描根的路径）
     GET /api/schema          → ERP 字段字典（标签/类型/合法取值）+ 内部字段 + 分组
+    POST /api/answer         → 在页面上写一条 `question_answers` 的答案（唯一的内容写入口）
 
 分工（1.0.43，业务 2026-10-20）：
     本服务**只上传 + 只展示**，不抽取、不起进程。抽取由 Hermes 定时任务
     （`scripts/scan_pending.py`，每 5 分钟）负责，所以页面刷新即可看到新产物。
+    2026-10-30 追加一个**收窄的**写入口：`POST /api/answer` 只改产物里的
+    `question_answers`（answer/status/answered_at，顺带重算 `Reminder` 快照），
+    CPMS / 品名 / 59 个 ERP 字段页面一律不许写（那是 agent 通读原文后手写的）。
 
 安全：所有 `path` 参数都在 data.resolve_export() 里做 resolve 后前缀校验，出不了扫描根；
       上传的文件名在 upload.safe_filename() 里净化（挡路径穿越），后缀走白名单，
@@ -47,6 +51,7 @@ from flask import Flask, current_app, jsonify, render_template, request
 from flask.json.provider import DefaultJSONProvider
 from werkzeug.exceptions import HTTPException, NotFound
 
+from .answers import AnswerError, answer_question
 from .data import (
     DEFAULT_PROCESSED_DIR,
     build_schema_payload,
@@ -194,6 +199,49 @@ def create_app(processed_dir: Optional[Path | str] = None,
     @app.get("/api/schema")
     def api_schema():
         return jsonify(build_schema_payload())
+
+    # ── 写答案（v3 内部确认清单；本服务唯一会改产物内容的入口）─────────────
+    @app.post("/api/answer")
+    def api_answer():
+        """给一条 `question_answers` 写答案 / 标作废 / 重开。
+
+        请求体（JSON）：
+            path      产物相对路径（与 /api/export 的 path 同一个）
+            record    第几条产品记录（1 起；单条产物可省略）
+            id        确认项 id（如 `Q_ZDFS`）
+            answer    答案文本；空字符串 = 回到未确认
+            status    可选：confirmed / waived / open（不给就按 answer 推）
+            mtime     可选：页面加载时看到的文件 mtime（乐观锁，防覆盖别人刚写的）
+
+        返回：{item, summary, gates, reminder, mtime} —— 页面据此就地更新徽章。
+        """
+        body = request.get_json(silent=True) or {}
+        relpath = str(body.get("path") or "")
+        try:
+            target = resolve_export(relpath, current_root())
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 404
+
+        try:
+            record_index = int(body.get("record") or 1)
+        except (TypeError, ValueError):
+            return jsonify(error=f"record 必须是整数，收到 {body.get('record')!r}"), 400
+        qid = str(body.get("id") or "").strip()
+        if not qid:
+            return jsonify(error="缺少 id（要写哪一条确认项）"), 400
+
+        try:
+            result = answer_question(
+                target,
+                record_index=record_index,
+                qid=qid,
+                answer=body.get("answer") or "",
+                status=body.get("status") or None,
+                expected_mtime=body.get("mtime"),
+            )
+        except AnswerError as exc:
+            return jsonify(error=str(exc)), exc.status
+        return jsonify(result)
 
     # 上传超限：werkzeug 抛 413，默认页面是英文 HTML —— 换成一句人话
     @app.errorhandler(413)

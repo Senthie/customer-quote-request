@@ -1098,6 +1098,8 @@ uv run ./scripts/customer_profile.py --prefs ngv
       并**回填到 `field` 指向的字段**；还没确认的保持 `open`。
       口径：`ZDFS` 这类「由业务补填、不猜」的项是 `blocking=false`（看得见但不堵路）；
       **CPMS 正文只留结论**，写「待确认」而没有 `field=CPMS` 的条目 → `cpms_lint` 报 CPMS080。
+      业务也可以在**查看器详情页**直接填答案（`POST /api/answer`，2026-10-30 起）——
+      agent 重跑前先重新读一遍页面/产物，别把手填的答案覆盖掉（写入带 mtime 乐观锁）。
       另：`Reminder` 字段现在是「卡交付未确认项」的文本快照，权威来源是 `question_answers`（见根 SKILL §4.8b）
       实测 `CU26070901` 邮件没有 `Title:` 标签 → 脚本取不到 ECPMC（WARN 留空）→ agent 从原文
       照抄 `Malbücher` 补上；igl 没声明 `rules.ecpmc`，空着是对的，清单不会误报。

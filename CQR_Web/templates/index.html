@@ -379,7 +379,32 @@
             .field { break-inside: avoid; page-break-inside: avoid; }
             .banner { break-inside: avoid; }
             pre.long { max-height: none; overflow: visible; background: #fff; }  /* 长文本全量打印 */
+            .qa-actions { display: none !important; }   /* 打印时只要答案文本，不要按钮 */
+            .qa-input { border: 0 !important; padding: 0 !important; resize: none; }
         }
+
+        /* ── 内部确认清单的答案编辑区（2026-10-30 起页面能写答案）────────── */
+        .qa-edit { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+        .qa-input {
+            width: 100%; box-sizing: border-box; padding: 6px 8px;
+            font: inherit; font-size: .86rem; line-height: 1.45;
+            color: var(--ink); background: #fff;
+            border: 1px solid var(--line); border-radius: 6px; resize: vertical;
+        }
+        .qa-input:focus { outline: 2px solid #9cc4ff; outline-offset: -1px; border-color: #9cc4ff; }
+        .qa-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .qa-actions button {
+            font: inherit; font-size: .8rem; padding: 4px 10px; border-radius: 6px;
+            border: 1px solid var(--line); background: #f7f9fc; color: var(--ink); cursor: pointer;
+        }
+        .qa-actions button:hover { background: #eef3fa; }
+        .qa-actions button:disabled { opacity: .55; cursor: default; }
+        .qa-save { background: var(--ok-bg) !important; border-color: #b6e0cd !important; color: var(--ok) !important; }
+        .qa-waive { color: var(--muted-ink, #5b6675); }
+        .qa-msg { font-size: .78rem; }
+        .qa-msg.ok { color: var(--ok); }
+        .qa-msg.bad { color: var(--bad); }
+        .qa-hint { font-size: .76rem; color: var(--muted-ink, #7a8494); }
     </style>
 </head>
 <body>
@@ -422,6 +447,12 @@ const state = {
     activeRecord: 0,       // 正在看第几条（0-based）
     validationByRecord: [],
     incompleteByRecord: [],
+
+    // ★ 2026-10-30 起页面能**写答案**（question_answers）：草稿 / 保存中 / 结果提示
+    //   草稿按「产物#第几条#项 id」存 —— 10 秒自动刷新重建 DOM 时不能把正在打的字冲掉
+    drafts: {},            // { key: "还没保存的答案" }
+    answering: {},         // { key: true }  正在保存
+    answerMsg: {},         // { key: {ok, text} }  上一次保存的结果
 };
 
 const BASE_TITLE = "ERP · 报价需求单导出查看器";
@@ -1376,6 +1407,80 @@ function renderTabs() {
    —— 判定逻辑只在服务端（scripts/question_answers.py），这里只显示。
    v2 旧产物没有这个键 → 返回 null，页面不出现这个块。
    ═══════════════════════════════════════════════════════════════════════ */
+/* ── 写答案（POST /api/answer）────────────────────────────────────────────
+   页面能写的**只有** question_answers 的答案/状态；CPMS、品名、59 个 ERP 字段
+   一律只读 —— 那些是 agent 通读客户原文后手写的，页面上没有编辑部。
+   ──────────────────────────────────────────────────────────────────────── */
+function answerKey(ridx, qid) {
+    const rel = (state.currentMeta && state.currentMeta.relpath) || "";
+    return rel + "#" + (ridx + 1) + "#" + qid;
+}
+
+/** 能不能写：要连服务端、且不是「手动导入的本地文件」 */
+function canWriteAnswers() {
+    return !!(state.scanOk && state.currentMeta && !state.currentMeta.manual);
+}
+
+async function saveAnswer(ridx, item, text, status) {
+    const key = answerKey(ridx, item.id);
+    if (state.answering[key]) return;
+    state.answering[key] = true;
+    state.answerMsg[key] = null;
+    render();
+    try {
+        const res = await fetch("api/answer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                path: state.currentMeta.relpath,
+                record: ridx + 1,
+                id: item.id,
+                answer: text,
+                status: status || null,
+                mtime: state.currentMeta.mtime,
+            }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+        delete state.drafts[key];
+        state.answerMsg[key] = { ok: true,
+            text: "已保存 " + new Date().toLocaleTimeString("sv-SE") };
+        // 服务端回来的 mtime 才是权威值 → 下次保存的乐观锁用它（列表里的可能还没刷新）
+        if (body.mtime) state.currentMeta.mtime = body.mtime;
+        // 服务端已重算 Reminder 快照与闸门 → 重取一次详情（保持当前 Tab）
+        await refreshDetailInPlace();
+    } catch (err) {
+        state.answerMsg[key] = { ok: false, text: "保存失败：" + ((err && err.message) || err) };
+        // 409（文件被别处改过）→ 自动重取，让人看到最新内容再决定改不改
+        if (String((err && err.message) || "").indexOf("改过") >= 0) await refreshDetailInPlace();
+        render();
+    } finally {
+        delete state.answering[key];
+    }
+}
+
+/** 只重取当前任务的详情（不换 Tab、不动草稿）—— 保存答案后刷新闸门/徽章用 */
+async function refreshDetailInPlace() {
+    if (!state.currentMeta || state.currentMeta.manual) return;
+    try {
+        const res = await fetch("api/export?path=" + encodeURIComponent(state.currentMeta.relpath),
+                                { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = await res.json();
+        const records = (payload.records && payload.records.length)
+            ? payload.records : [payload.data || {}];
+        state.records = records;
+        state.validationByRecord = payload.validation_by_record || [];
+        state.incompleteByRecord = payload.incomplete_by_record || [];
+        state.activeRecord = clampIndex(state.activeRecord, records.length);
+        applyActiveRecord();
+        // 列表里的 mtime 可能还没刷新（10 秒轮询）→ 只许往更新的方向走，别把乐观锁退回去
+        const t = state.tasks.find((x) => x.relpath === state.currentMeta.relpath);
+        if (t && t.mtime) state.currentMeta.mtime = Math.max(state.currentMeta.mtime || 0, t.mtime);
+        render();
+    } catch (_) { /* 静默：下一轮 10 秒刷新会补上 */ }
+}
+
 function recordQuestions(cur) {
     const raw = cur ? cur.question_answers : undefined;
     const items = Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? [raw] : []);
@@ -1439,11 +1544,57 @@ function renderQuestions(cur) {
                 it.answered_at ? el("span", { class: "hint", text: "确认 " + it.answered_at }) : null,
             ),
             el("div", { text: it.question || "（没写问题）" }),
-            el("div", { style: "font-size:.82rem;color:var(--muted,#666)",
-                        text: answered ? ("→ " + it.answer) : "→ （还没确认）" }),
+            answerEditor(state.activeRecord, it),
         ));
     }
     return el("section", { class: "panel" }, head, body);
+}
+
+/** 一条确认项的答案编辑区：能写就给文本框 + 保存/作废，不能写就只读显示 */
+function answerEditor(ridx, it) {
+    const key = answerKey(ridx, it.id);
+    const draft = state.drafts[key];
+    const value = draft !== undefined ? draft
+        : (it.answer === null || it.answer === undefined ? "" : String(it.answer));
+    const busy = !!state.answering[key];
+    const msg = state.answerMsg[key];
+
+    if (!canWriteAnswers()) {
+        const why = state.currentMeta && state.currentMeta.manual
+            ? "手动导入的本地文件（没连服务端）→ 只读"
+            : "没连服务端 → 只读";
+        return el("div", { style: "font-size:.82rem;color:var(--muted,#666);display:flex;flex-direction:column;gap:2px" },
+            el("div", { text: value ? ("→ " + value) : "→ （还没确认）" }),
+            el("div", { class: "qa-hint", text: why }));
+    }
+
+    return el("div", { class: "qa-edit" },
+        el("textarea", {
+            id: "qa-" + it.id,
+            class: "qa-input",
+            rows: 2,
+            placeholder: "在这里写确认结果；保存后自动标为已确认，清空再保存 = 回到未确认",
+            oninput: (e) => { state.drafts[key] = e.target.value; },
+        }, value),
+        el("div", { class: "qa-actions" },
+            el("button", {
+                class: "qa-save", type: "button", disabled: busy || undefined,
+                onclick: () => saveAnswer(ridx, it, answerText(key, value), null),
+            }, busy ? "保存中…" : "保存答案"),
+            el("button", {
+                class: "qa-waive", type: "button", disabled: busy || undefined,
+                title: "不用确认了 → 标成作废，不再卡交付",
+                onclick: () => saveAnswer(ridx, it, it.answer || "", "waived"),
+            }, "作废"),
+            msg ? el("span", { class: "qa-msg " + (msg.ok ? "ok" : "bad"), text: msg.text }) : null,
+        ),
+    );
+}
+
+/** 取「当前文本框里真正的内容」：草稿优先（自动刷新重建 DOM 后靠它不丢字） */
+function answerText(key, fallback) {
+    const d = state.drafts[key];
+    return d !== undefined ? d : fallback;
 }
 
 function renderSummary() {

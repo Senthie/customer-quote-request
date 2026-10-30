@@ -14,7 +14,14 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.57（2026-10-30 **产物 schema v3：`question_answers` 内部确认清单**：
+> **版本：** 1.0.58（2026-10-30 **查看器能写答案**：业务「在展示 web 上加入 question_answers
+> 字段，新增一个回答的文本框，这样我们可以在页面上直接编写答案」→ 详情页清单块每条待确认项
+> 带文本框 +「保存答案 / 作废」，走 `POST /api/answer`（`CQR_Web/answers.py`）。边界刻意收窄：
+> 只改 `answer/status/answered_at` 并重算 `Reminder` 快照，`CPMS`/品名/59 个 ERP 字段仍只读；
+> 写盘原子（临时文件 + `os.replace`）、带 mtime 乐观锁（被别人改过 → 409 并自动重取）、
+> 10 秒自动刷新不冲掉没保存的草稿；v2 旧产物直接 409 拒绝。测试：`tests/test_cqr_answers.py`
+> （17 项，含 HTTP 层）+ 页面 harness 新增 15 项断言（共 31 项）。
+> —— 前序 1.0.57（2026-10-30 **产物 schema v3：`question_answers` 内部确认清单**：
 > 森西对「结构加 `[..., question_answers: [...]]`」的 5 条拍板全部落地 —— ①清单放**每条记录内**
 > ②语义是**内部确认**（不是客户问卷）③ERP 自己过滤未知字段 ④格式号另开 `schema_version: 3`
 > （`version` 继续只表示口径）⑤`Reminder` / 字段级 validation warn / CPMS 里的「待确认」**合并**
@@ -1170,8 +1177,23 @@ uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv --strip-i
 - 确认完要回填到 `field` 指向的字段（`ZDFS`/`Drop_SJFX`/`CPMS`…），清单本身不是答案的归宿
 - `Reminder` 字段是**运行时快照**，权威来源是 `question_answers`，别把答案只写进 `Reminder`
 
+**在页面上直接写答案**（2026-10-30 森西：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）
+
+- `CQR_Web` 详情页的清单块里，每条未关闭项带一个文本框 + 「保存答案 / 作废」按钮；
+  保存后该条自动变 `confirmed` 并盖 `answered_at`，`Reminder` 快照与交付闸门当场重算。
+- 走 `POST /api/answer`（`{path, record, id, answer, status?, mtime}`），实现是
+  `CQR_Web/answers.py`（纯逻辑层，不 import Flask）。
+- **只写 `question_answers`**：`answer/status/answered_at` + 重算 `Reminder`。
+  `CPMS`、品名、59 个 ERP 字段页面**仍然只读** —— 那些必须 agent 通读原文后手写。
+- 写盘用「同目录临时文件 + `os.replace`」，缩进/中文/键序与 `main.py` 产出完全一致。
+- 带 `mtime` 乐观锁：页面打开后文件被别人（agent / 同事）改过 → 返回 409 并自动重取，
+  不会把别人刚写的 CPMS 覆盖掉。
+- 10 秒自动刷新重建 DOM 时，没保存的输入存在 `state.drafts` 里（按「产物#第几条#项 id」），
+  不会把正在打的字冲掉。
+
 **兼容性**：v2 旧产物没有这个键 → 读取方一律当 `[]`（不批量迁移、不回头改历史）；
-`--strip-internal` 一并剥掉（此时只剩 59 键）。查看器对旧产物不显示清单块。
+`--strip-internal` 一并剥掉（此时只剩 59 键）。查看器对旧产物不显示清单块，
+`POST /api/answer` 对它直接 409（「v2 格式，需要清单请重跑」）。
 
 ```bash
 # 只看清单（不打开页面）
@@ -1207,6 +1229,12 @@ rules:
 业务 2026-09-24：「有一个旧的展示 ERP JSON 格式的 html，但是我们的导出结构发生了变化，
 需要修改它；让它可以自动扫描 `customer-files/processed` 的导出 ERP 文件」，
 随后：「将 `erp_viewer.py` 创建一个 `erp_view` 文件夹，然后使用 flask 重新编写」。
+
+**1.0.58（2026-10-30）：页面可以写 `question_answers` 的答案**（业务：「新增一个回答的
+文本框，这样我们可以在页面上直接编写答案」）。边界刻意收窄 —— 只改清单的
+`answer/status/answered_at`（顺带重算 `Reminder`），`CPMS`/品名/59 个 ERP 字段仍只读；
+实现 `CQR_Web/answers.py` + `POST /api/answer`，写盘原子、带 mtime 乐观锁、草稿不丢。
+详见 §4.8b。
 
 **1.0.40（2026-10-20）业务**：「我们的 ERP view 只有看，没有上传，把 erp_view 改为 CQR_Web，
 然后在里面开始新的编码任务」→ 已从「技能里的一个包」升级成**独立项目**：
@@ -2148,6 +2176,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.58** | **2026-10-30** | **查看器能写答案**（业务：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）。① 新增 `CQR_Web/answers.py`（纯逻辑，不 import Flask）+ `POST /api/answer`：只改 `question_answers` 的 `answer/status/answered_at`，顺带重算 `Reminder` 快照；有答案 → `confirmed` 并盖 `answered_at`，清空 → 回 `open`，`waived` → 不卡交付；② 详情页清单块每条待确认项带文本框 +「保存答案 / 作废」，未保存草稿存 `state.drafts`（10 秒自动刷新重建 DOM 不丢字，按「产物#第几条#项 id」键）；③ 写盘原子（同目录临时文件 + `os.replace`）、缩进/中文/键序与产出一致；④ **mtime 乐观锁**：页面打开后文件被别人改过 → 409 + 自动重取，不覆盖 agent 刚写的 CPMS；⑤ 拒绝姿势明确：v2 旧产物 409、未知 id/越界记录 404、乱填 status 400、确认但答案空 400；⑥ 页面仍**不许**写 `CPMS`/品名/59 个 ERP 字段；⑦ 新增 `tests/test_cqr_answers.py`（17 项，含 HTTP 层与路径穿越），边界测试把 `answers.py` 也纳入「不许 import Flask / 不许起子进程」 |
 | **1.0.57** | **2026-10-30** | **产物 schema v3：`question_answers` 内部确认清单**（森西 5 条拍板：记录内 / 内部确认 / ERP 自行过滤 / B 方案格式号 / 合并）。① 新增 `scripts/question_answers.py`（唯一实现：9 键条目契约、`effective_status`、`gates`、`normalize` 兼容 v2 与野写法）；② `internal_export_fields.yaml` 加 `schema_version` + `question_answers`（内部字段 4 → 6，追加顺序钉在测试里）；③ `main.py step6` 逐条生成：字段级 validation warn/error + deadline 提醒合并成条目，`Reminder` 降级为卡交付项的文本快照；④ `CQR_Web` 列表/详情/摘要显示「N 项待确认」、交付闸门认 `blocking` 项、`question_answers` 单独成块渲染（不当普通字段）；⑤ `cpms_todo` 把卡交付的开放项算 agent 待办；⑥ `cpms_lint` 新增 **CPMS080**（正文写「待确认」必须落清单）；⑦ 新增 `tests/test_question_answers.py`（18 项，含 ngv 真实样本端到端 + 查看器闸门 + 交接棒 + CPMS080）。v2 旧产物零迁移、零噪音（`question_answers` 缺省 []） |
 | **1.0.55** | **2026-10-30** | **按「报价结构」分组 + 查看器改任务列表/产品 Tab**：① 新增 `scripts/product_groups.py`（签名见 `assets/structure_signature.yaml`）—— 装订/尺寸/用纸/印色/工艺/包装全同的几款合成一条（`TZS` 记款数），任一不同就拆；实测 IAN 574239 六款 → 3 条（TZS 3/1/2，CPSL 合计 365,340 与客户 Pivot 相等）。② `lidl_anlage` 产出逐款条目；新增 `product_table` 策略（**默认关闭**，须先校准）。③ 新增 `step4b_group_products`，`step6` 逐条断言/逐条内部字段/写数组；`validation.json` 增 `products`（分组摘要）与带 `record` 标号的 issue。④ 查看器：左栏 **任务列表**（一行一任务、标 N 条产品并逐条列出）、右栏 **产品记录 Tab**（可切换，带交付状态色）、深链接 `?path=…&r=N`、原始 JSON 显示整个数组。⑤ 新增 `tests/test_product_groups.py`（26 项）与 `CQR_Web/tests/page_harness.js`（最小 DOM shim 真跑页面脚本，16 项） |
 | **1.0.54** | **2026-10-29** | **ERP 导出改数组**（业务原话：「一个报价文件里可以包含很多个产品，而多个产品需要开很多的单，这样不方便，所以我们的 ERP 导出的 json 使用数组格式 `[]`」）：顶层永远是 `[{…}]`；读写统一走 `scripts/erp_bundle.py`（`load_bundle` / `write_bundle`，向下兼容老的单对象文件）；`erp_schema --check` / `cpms_lint` / `cpms_content_audit` / `cpms_todo` / `compare_with_erp` / `CQR_Web` 全部改成逐条消费；`scripts/migrate_erp_to_array.py` 一次性迁移历史产物（幂等、留 `.prearray.bak`） |

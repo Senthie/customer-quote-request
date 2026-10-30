@@ -115,7 +115,9 @@ N.prototype.contains = () => false;
     const cur = api.state.records[i];
     const qPanel = api.renderQuestions(cur);
     const qText = qPanel ? qPanel.text().replace(/\s+/g, " ").slice(0, 220) : "（无清单：v2 旧产物）";
-    console.log(`  [${i + 1}] ${head} | ${cpmc} | ${banner} | Tab.class="${tabEls[i].className}"`);
+    // 单条产物没有 Tab（tabEls 为空）—— 别让辅助脚本自己先炸
+    const tabCls = tabEls[i] ? tabEls[i].className : "(单条无 Tab)";
+    console.log(`  [${i + 1}] ${head} | ${cpmc} | ${banner} | Tab.class="${tabCls}"`);
     console.log(`       确认清单: ${qText}`);
   }
 })().catch((e) => { console.error("渲染失败:", e); process.exit(1); });

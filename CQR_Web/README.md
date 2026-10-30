@@ -23,6 +23,7 @@
 |---|---|
 | 展示层：读产物 JSON、调 `data.py` 算好的结论、渲染页面 | ❌ 不解析客户文件（那是技能 `extract_fields.py` 的事） |
 | 上传口：把客户原始文件安全落到 `pending/`（`upload.py`） | ❌ 不跑抽取（那是定时任务 `scripts/scan_pending.py` 的事） |
+| 写答案：页面里给 `question_answers` 的每条待确认项填答案（`answers.py`，只改 answer/status/answered_at） | ❌ 不改 `CPMS` / 品名 / 59 个 ERP 字段（那是 agent 通读原文后手写的） |
 | 一个独立的可运行项目（自带 `pyproject.toml` / 测试 / README） | ❌ 不自己维护一份 ERP 字段字典（权威在 `../assets/erp_form_schema.yaml`） |
 | 复用技能仓库的 `scripts/erp_schema.py` 做取值校验 | ❌ 不在页面里做任何判定（合法性、交付闸门都算在服务端 `data.py`） |
 
@@ -57,6 +58,7 @@ CQR_Web/
 ├── __main__.py             # `python -m CQR_Web`
 ├── data.py                 # ★ 纯逻辑：扫描 / 路径安全 / 字段分组 / 交付闸门 / 校验（不 import Flask）
 ├── upload.py               # ★ 纯逻辑：上传落盘 / 文件名净化 / 后缀白名单 / 排队清单（不 import Flask）
+├── answers.py              # ★ 纯逻辑：写 question_answers 的答案（原子写 + mtime 乐观锁，不 import Flask）
 ├── app.py                  # 路由 + CLI（create_app / main）
 ├── templates/index.html    # 页面本体（零外部依赖的原生 JS，不引 CDN）
 └── tests/
@@ -82,6 +84,7 @@ CQR_Web/
 | GET | `/api/export?path=<相对路径>` | 某任务的全部内容：`records`（数组）+ `validation`/`validation_by_record` + `incomplete`/`incomplete_by_record` |
 | GET | `/api/schema` | ERP 字段字典 + 内部字段 + 展示分组 |
 | POST | `/api/uploads` | 上传客户文件（multipart：`files` 多个、`group=one\|each`） |
+| POST | `/api/answer` | ★ 写一条 `question_answers` 的答案：`{path, record, id, answer, status?, mtime?}`。返回 `{item, summary, gates, reminder, mtime}`；`mtime` 是乐观锁（文件被别人改过 → 409）；v2 旧产物 → 409 |
 | GET | `/api/pending` | 还在等抽取的文件（页面排队条） |
 
 `/api/exports` 的每一条都带 `source_name` —— **用户上传时的原始文件名**（列表主标题就用它，
@@ -100,6 +103,11 @@ CQR_Web/
 `.eml`（1.0.46）：**只许单独传**（混在 `group=one` 批次里会被拒收，原因写在 `rejected[].reason`）。
 本服务只落盘；展开由定时扫描器调 `scripts/ingest_email.py` 做 —— 正文落 `.txt`、附件落盘
 （≥2 个附件 → 一个单元目录），原 `.eml` 归档到 `customer-files/inbox/<YYYYMMDD>/`。
+
+`/api/answer` 的边界（2026-10-30 加，刻意做窄）：**只改** `question_answers` 的
+`answer` / `status` / `answered_at`，顺带把 `Reminder` 这个文本快照重算一遍；
+`CPMS`、品名、59 个 ERP 字段页面一律不许写。写盘是原子的（同目录临时文件 + `os.replace`），
+缩进/中文/键序与 `main.py` 产出完全一致 —— 下游看不出这份文件被人改过。
 
 安全：`path` 一律经 `data.resolve_export()` 做 resolve + 前缀校验，出不了扫描根；
 上传文件名经 `upload.safe_filename()` 净化（只取 basename、去危险字符、挡 `..`），

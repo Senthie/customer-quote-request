@@ -293,10 +293,17 @@ def test_分组顺序覆盖全部59键_不含内部字段():
 def test_字典载荷_内部字段含version():
     payload = ev.build_schema_payload()
     keys = [f["key"] for f in payload["internal_fields"]]
-    assert keys == ["ID", "CPMC_ZH", "Reminder", "version"]
+    # v3（2026-10-30）：多了格式号与内部确认清单
+    assert keys == ["ID", "CPMC_ZH", "Reminder", "version",
+                    "schema_version", "question_answers"]
     ver = next(f for f in payload["internal_fields"] if f["key"] == "version")
     assert ver["source"] == "config_version", "version 的取数来源必须是档案的配置版本"
     assert ver["label"], "要有中文标签"
+    # question_answers 是**结构化清单**，页面要单独渲染（不能当普通文本字段）
+    qa = next(f for f in payload["internal_fields"] if f["key"] == "question_answers")
+    assert qa["kind"] == "questions"
+    assert all(f.get("kind") == "value" for f in payload["internal_fields"]
+               if f["key"] != "question_answers")
 
 
 def test_字典与erp_schema同源():
@@ -528,7 +535,7 @@ def test_http_schema_含配置版本(viewer):
     payload = json.loads(body)
     assert payload["config_version"] == 2
     assert len(payload["erp_fields"]) == 59
-    assert [f["key"] for f in payload["internal_fields"]][-1] == "version"
+    assert [f["key"] for f in payload["internal_fields"]][-1] == "question_answers"
     assert payload["groups"]
 
 

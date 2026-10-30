@@ -114,6 +114,22 @@ const RECORDS = PRODUCTS.map((p, i) => ({
   CPMS: i === 0 ? "产品规格：封面 300g……".repeat(8) : "",
 }));
 
+/* ★ v3：第 1 条记录带内部确认清单（其余两条故意不带 → 顺带验「旧记录不显示清单块」） */
+const QA_ITEMS = [
+  { id: "Q_ZDFS", field: "ZDFS", question: "装订方式为空（建议填写）", answer: "",
+    status: "open", blocking: false, source: "pipeline",
+    asked_at: "2026-10-30", answered_at: null },
+  { id: "Q_PACK", field: "CPMS", question: "装箱几本一箱？", answer: "",
+    status: "open", blocking: true, source: "agent",
+    asked_at: "2026-10-30", answered_at: null },
+];
+RECORDS[0].schema_version = 3;
+RECORDS[0].Reminder = "装箱几本一箱？";
+RECORDS[0].question_answers = QA_ITEMS;
+
+/* POST /api/answer 收到的请求体（断言「页面到底发了什么」用） */
+let postedAnswer = null;
+
 const SCHEMA = {
   config_version: 2,
   erp_fields: [
@@ -123,7 +139,12 @@ const SCHEMA = {
     { key: "CPSL1", label: "数量1", type: "number" },
     { key: "CPMS", label: "产品描述", type: "text" },
   ],
-  internal_fields: [], config_version_note: "",
+  internal_fields: [
+    { key: "ID", label: "任务ID", source: "task_id", kind: "value" },
+    { key: "question_answers", label: "内部确认清单", source: "question_answers",
+      kind: "questions" },
+  ],
+  config_version_note: "",
   groups: [{ name: "产品信息", hint: "", keys: ["CPLB", "CPMC", "TZS", "CPSL1"] },
            { name: "描述与备注", hint: "", keys: ["CPMS"] }],
   internal_group: { name: "内部", hint: "" },
@@ -142,7 +163,7 @@ const ctx = {
   alert: (m) => { throw new Error("alert: " + m); },
   URLSearchParams, encodeURIComponent, JSON, Number, String, Object, Array,
   Math, Date, Map, Set, Promise,
-  fetch: async (url) => {
+  fetch: async (url, opts) => {
     if (url.startsWith("api/exports")) return { ok: true, json: async () => EXPORTS };
     if (url.startsWith("api/pending")) return { ok: true, json: async () => ({ root: "", items: [] }) };
     if (url.startsWith("api/schema")) return { ok: true, json: async () => SCHEMA };
@@ -159,6 +180,22 @@ const ctx = {
         incomplete_by_record: PRODUCTS.map((p) => p.incomplete),
       }) };
     }
+    if (url.startsWith("api/answer")) {
+      const body = JSON.parse((opts && opts.body) || "{}");
+      postedAnswer = body;
+      const rec = RECORDS[Math.max(0, (body.record || 1) - 1)];
+      const it = (rec.question_answers || []).find((q) => q.id === body.id);
+      if (it) {
+        const answer = String(body.answer || "").trim();
+        it.answer = answer;
+        it.status = body.status || (answer ? "confirmed" : "open");
+        it.answered_at = it.status === "confirmed" ? "2026-11-02" : null;
+      }
+      return { ok: true, json: async () => ({
+        item: it, summary: { total: 2, open: 1, open_blocking: 0, confirmed: 1, waived: 0 },
+        gates: [], reminder: "", mtime: 1_800_000_100,
+      }) };
+    }
     throw new Error("unexpected fetch " + url);
   },
 };
@@ -168,7 +205,7 @@ vm.runInContext(
   code + "\n;globalThis.__api = {state, render, renderList, renderTabs," +
          " applyList, selectExport, setActiveRecord," +
          // v3：内部确认清单的渲染函数（render_real.js 要用真实数据看清单）
-         " renderQuestions, recordQuestions};",
+         " renderQuestions, recordQuestions, saveAnswer, answerKey, canWriteAnswers};",
   ctx,
 );
 
@@ -208,6 +245,66 @@ vm.runInContext(
     ["第 2 条的校验错误只在自己的 Tab 显示", page2.includes("第2条的报错")],
     ["第 2 个 Tab 打上 bad 标记", api.renderTabs().find("tab")[1].className.includes("bad")],
     ["第 1 个 Tab 不再是 active", !api.renderTabs().find("tab")[0].className.includes("active")],
+  );
+
+  /* ── v3：内部确认清单 + 页面上写答案（2026-10-30）────────────────── */
+  api.setActiveRecord(0);
+  api.state.scanOk = true;
+  api.render();
+  const pageQ = pageEl.text();
+  const qaInputs = (() => {
+    const hits = [];
+    (function walk(n) {
+      for (const c of n.children || []) {
+        if (c && c.tagName === "TEXTAREA") hits.push(c);
+        if (c && c.children) walk(c);
+      }
+    })(pageEl);
+    return hits;
+  })();
+  const saveBtns = (() => {
+    const hits = [];
+    (function walk(n) {
+      for (const c of n.children || []) {
+        if (c && String(c.className).includes("qa-save")) hits.push(c);
+        if (c && c.children) walk(c);
+      }
+    })(pageEl);
+    return hits;
+  })();
+
+  checks.push(
+    ["详情页出现内部确认清单块", pageQ.includes("内部确认清单")],
+    ["清单显示未确认项数", /2 项未确认/.test(pageQ)],
+    ["每个确认项都有答案文本框", qaInputs.length === 2],
+    ["每个确认项都有保存按钮", saveBtns.length === 2],
+    ["清单不会当普通字段渲染", !pageQ.includes("[object Object]")],
+  );
+
+  // 没有 question_answers 的旧记录 → 不出现清单块（v2 零噪音）
+  api.setActiveRecord(1);
+  checks.push(["旧记录（无清单）不显示清单块", !pageEl.text().includes("内部确认清单")]);
+  api.setActiveRecord(0);
+
+  // 打字 → 进草稿（自动刷新重建 DOM 时靠它不丢字）
+  const key2 = api.answerKey(0, "Q_PACK");
+  qaInputs[1].listeners.input({ target: { value: "12 本/箱" } });
+  checks.push(["输入答案会存进草稿", api.state.drafts[key2] === "12 本/箱"]);
+
+  // 点保存 → 页面发了什么（path/record/id/answer/mtime 四样都得对）
+  await saveBtns[1].listeners.click();
+  checks.push(
+    ["保存时发的 path 是当前产物", postedAnswer && postedAnswer.path === REL],
+    ["保存时发的 record 从 1 起", postedAnswer && postedAnswer.record === 1],
+    ["保存时发的 id 是正确的确认项", postedAnswer && postedAnswer.id === "Q_PACK"],
+    ["保存时发的 answer 是输入框内容", postedAnswer && postedAnswer.answer === "12 本/箱"],
+    ["保存时带上乐观锁 mtime", postedAnswer && postedAnswer.mtime === 1_800_000_000],
+    ["保存成功后清掉草稿", api.state.drafts[key2] === undefined],
+    ["保存后乐观锁换成服务端的新 mtime", api.state.currentMeta.mtime === 1_800_000_100],
+    ["服务端回写的答案进了页面数据",
+      RECORDS[0].question_answers[1].status === "confirmed"
+      && RECORDS[0].question_answers[1].answer === "12 本/箱"],
+    ["保存后徽章变成 1 项未确认", /1 项未确认/.test(pageEl.text())],
   );
 
   let failed = 0;
