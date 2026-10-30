@@ -23,7 +23,7 @@
 #   ERP 要的字段请写进 assets/add_customer_quote_request.json（那 59 键）+
 #   assets/erp_form_schema.yaml（字典），并同步键序断言。
 # ═══════════════════════════════════════════════════════════════
-version: 1
+version: 2
 
 fields:
   # ── ID：本次执行的任务号 ─────────────────────────────────────────────
@@ -81,3 +81,41 @@ fields:
       当前配置（客户档案）的版本号。业务看产物时靠它判断是哪一代口径，
       不用去翻日志或 git。改口径 → customers/_defaults.yaml 的 version +1。
       --strip-internal 时一起去掉（它也是我方自用字段，ERP 字典里没有）。
+
+  # ── schema_version：产物**格式契约**版本（≠ 上面的口径版本）──────────────
+  # 2026-10-30 森西拍板 B 方案：`version` 继续只表示「跑出这份产物的客户档案
+  # 是哪一代口径」，格式变更另用 schema_version 标，两个号各管一件事。
+  #   v2 = 顶层数组（一个文件可装多条产品记录）
+  #   v3 = 数组 + 每条记录带 question_answers（内部确认清单，见下）
+  # 现有 47 条 v2 产物没有任何口径错误，不该被标成「旧口径」——
+  # 这就是不把格式号塞进 version 的理由。
+  # 实现：`source: schema_version` → main.py 取 question_answers.SCHEMA_VERSION。
+  - key: schema_version
+    label: 格式契约版本
+    source: schema_version
+    notes: >-
+      本条记录的结构版本。v3 起每条记录多一个 question_answers（内部确认清单）。
+      读取方按它判结构：没有该键或 <= 2 → 老产物，question_answers 视为 [].
+
+  # ── question_answers：内部确认清单（2026-10-30 业务口径合并）─────────────
+  # 森西 2026-10-30 的 5 条拍板：①放**每条记录内** ②语义是**内部确认**
+  # ③ERP 导入端自己过滤未知字段 ④格式号走 schema_version ⑤把散在四处的
+  # 「还没确定的事」**合并**到这一处（Reminder / validation warn / CPMS 里的
+  # 「待确认」）。
+  #
+  # 条目 = 固定 9 键的**对象**（id/field/question/answer/status/blocking/
+  # source/asked_at/answered_at），**不允许**拿问题文本当 key —— 同题追问会
+  # 静默覆盖、客户改个措辞就成新问题、也没法统计「平均几天关闭」。
+  # 结构与判据的唯一实现：scripts/question_answers.py（有测试钉着）。
+  #
+  # 闸门口径：只有 blocking=True 且仍 open 的项**卡交付**。业务明确「由业务
+  # 补填、不猜」的字段（如 2026-10-21 拍板的 ZDFS 线路）用 blocking=False：
+  # 看得见，但不堵路。
+  - key: question_answers
+    label: 内部确认清单
+    source: question_answers
+    notes: >-
+      这条产品记录还欠哪些内部确认、已经确认了什么（含出处与日期）。
+      空数组 = 没有待确认项（v2 旧产物没有这个键，读取方一律当 []）。
+      --strip-internal 时一并去掉；ERP 导入端虽会自行过滤未知字段，
+      但「只给 ERP 的干净文件」仍用 --strip-internal 产出。

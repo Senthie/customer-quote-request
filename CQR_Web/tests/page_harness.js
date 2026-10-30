@@ -166,7 +166,9 @@ ctx.globalThis = ctx;
 vm.createContext(ctx);
 vm.runInContext(
   code + "\n;globalThis.__api = {state, render, renderList, renderTabs," +
-         " applyList, selectExport, setActiveRecord};",
+         " applyList, selectExport, setActiveRecord," +
+         // v3：内部确认清单的渲染函数（render_real.js 要用真实数据看清单）
+         " renderQuestions, recordQuestions};",
   ctx,
 );
 

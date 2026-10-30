@@ -337,6 +337,13 @@ def delivery_gates(data: dict[str, Any]) -> list[str]:
     cpmc = data.get("CPMC")
     if isinstance(cpmc, str) and CPMC_ZH_PLACEHOLDER in cpmc:
         gates.append(f"CPMC 仍是占位符 {CPMC_ZH_PLACEHOLDER} —— 产品名称必须 agent 拟")
+
+    # ★ 2026-10-30（schema v3）：内部确认清单里 `blocking` 且仍 open 的项也卡交付。
+    #   这样「Reminder / validation warn / CPMS 里的待确认」合并成一处之后，
+    #   闸门只需要看 question_answers —— 判定逻辑在 scripts/question_answers.py
+    #   （单一实现，页面不自己判），v2 旧产物没有这个键 → normalize 返回 [] → 不拦。
+    from question_answers import gates as qa_gates, normalize as qa_normalize
+    gates.extend(qa_gates(qa_normalize(data.get("question_answers"))))
     return gates
 
 
@@ -391,10 +398,13 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
     # 多产品文件的交付闸门要**逐条**判（任何一条没写完都不许交付）
     gates: list[str] = []
     briefs: list[dict[str, Any]] = []
+    qa_module = _load_module("question_answers")
     for ridx, rec in enumerate(records, 1):
         rec_gates = delivery_gates(rec)
         for g in rec_gates:
             gates.append(g if len(records) == 1 else f"第{ridx}条：{g}")
+        # 内部确认清单摘要（v2 旧产物没有这个键 → 全 0）
+        qa_sum = qa_module.summary(rec.get("question_answers"))
         briefs.append({
             "index": ridx,
             "CPMC": rec.get("CPMC"),
@@ -407,8 +417,14 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
             "cpms_len": len(rec["CPMS"]) if isinstance(rec.get("CPMS"), str) else 0,
             # 空列表 = 这条记录可以交付
             "incomplete": rec_gates,
+            # 待确认几项 / 其中卡交付几项（列表与 Tab 上的徽章用）
+            "questions": qa_sum,
         })
     cpms_lens = [b["cpms_len"] for b in briefs]
+    qa_total = {"total": 0, "open": 0, "open_blocking": 0, "confirmed": 0, "waived": 0}
+    for b in briefs:
+        for k in qa_total:
+            qa_total[k] += int((b.get("questions") or {}).get(k) or 0)
 
     item.update({
         "key_count": len(data),
@@ -428,11 +444,15 @@ def _summarize(path: Path, root: Path) -> dict[str, Any]:
         "KHDH": data.get("KHDH"),
         "CPSL1": data.get("CPSL1"),
         "TZS": data.get("TZS"),
-        # ★ 交付闸门（CPMS 未写 / 中文品名还是占位符）—— 空列表 = 可以交付
+        # ★ 交付闸门（CPMS 未写 / 中文品名还是占位符 / 确认清单还有卡交付的 open 项）
+        #   —— 空列表 = 可以交付
         #   多产品文件：所有记录都过才算过（gates 已按条标号）
         "cpms_len": cpms_lens[0] if len(cpms_lens) == 1 else sum(cpms_lens),
         "cpms_len_min": min(cpms_lens) if cpms_lens else 0,
         "incomplete": gates,
+        # 内部确认清单（v3）：任务级合计 + 每条明细（briefs[].questions）
+        "questions": qa_total,
+        "question_answers": qa_module.normalize(data.get("question_answers")),
     })
     return item
 
@@ -519,6 +539,8 @@ def scan_tasks(root: Optional[Path] = None) -> list[dict[str, Any]]:
             "cpms_len": primary.get("cpms_len"),
             "cpms_len_min": primary.get("cpms_len_min"),
             "incomplete": list(primary.get("incomplete") or []),
+            # 内部确认清单合计（v3）—— 列表页「N 项待确认」徽章用
+            "questions": primary.get("questions") or {},
             "products": products,
             "validation": primary.get("validation"),
             "extra_exports": [it.get("relpath") for it in group[1:]],
@@ -596,7 +618,9 @@ def build_schema_payload() -> dict[str, Any]:
         "erp_fields": fields,
         "internal_fields": [
             {"key": str(f["key"]), "label": str(f.get("label", "")),
-             "source": str(f.get("source", ""))}
+             "source": str(f.get("source", "")),
+             # v3：question_answers 是**结构化清单**，页面要单独渲染（不当普通文本）
+             "kind": ("questions" if str(f["key"]) == "question_answers" else "value")}
             for f in internal_fields.load_internal_fields()
         ],
         "groups": FIELD_GROUPS,

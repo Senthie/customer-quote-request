@@ -14,7 +14,16 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.56（2026-10-30 **多记录交付实跑通**：IAN 574239 重跑 → 新任务
+> **版本：** 1.0.57（2026-10-30 **产物 schema v3：`question_answers` 内部确认清单**：
+> 森西对「结构加 `[..., question_answers: [...]]`」的 5 条拍板全部落地 —— ①清单放**每条记录内**
+> ②语义是**内部确认**（不是客户问卷）③ERP 自己过滤未知字段 ④格式号另开 `schema_version: 3`
+> （`version` 继续只表示口径）⑤`Reminder` / 字段级 validation warn / CPMS 里的「待确认」**合并**
+> 进这一处。条目是**固定 9 键对象**（`id/field/question/answer/status/blocking/source/asked_at/
+> answered_at`），禁止拿问题文本当 key。闸门只拦 `blocking` 且未确认的项；`cpms_todo` 把它
+> 当 agent 待办；`cpms_lint` 新增 **CPMS080**（正文写「待确认」必须有 `field=CPMS` 的条目承接）。
+> 实现 `scripts/question_answers.py`，测试 `tests/test_question_answers.py`（18 项，含真实样本端到端）。
+> 详见 §4.8b）
+> —— 前序 1.0.56（2026-10-30 **多记录交付实跑通**：IAN 574239 重跑 → 新任务
 > `7bd10d32…` 出 3 条记录（`TZS` 3/1/2、`CPSL1` 182,670+60,890+121,780 = 365,340），
 > 三条 `CPMS` 分别 603/433/618 字，四道门全绿，旧产物 `923ac86b…` 归档到
 > `_superseded_20261030/`。agent 侧必须逐条改的字段与三条口径见 skill
@@ -1042,7 +1051,7 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 
 ---
 
-### 4.8 内部导出字段：`ID` / `CPMC_ZH` / `Reminder` / `version`（1.0.22 起）
+### 4.8 内部导出字段：`ID` / `CPMC_ZH` / `Reminder` / `version` / `schema_version` / `question_answers`（1.0.22 起，v3 扩到 6 个）
 
 > **声明文件：** `assets/internal_export_fields.yaml` ｜ **加载：** `scripts/internal_fields.py`
 > **业务背景（2026-09-24）：** 「导出现在缺少一份内部导出字段 `ID`，该字段标注我们的当前执行的任务，
@@ -1056,6 +1065,8 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 | `CPMC_ZH` | 产品名称的中文表达 | `CPMC` 只放英文（业务口径），中文表达落这里 |
 | `Reminder` | 给业务的提醒文本 | 目前是「报价截止日期已过期」；没有待办时为空字符串 |
 | `version` | 当前配置的版本（**现在 = 2**） | 跑出这份产物的那份**客户档案配置**的版本；口径一变就 +1 |
+| `schema_version` | **格式契约**版本（现在 = 3） | 与 `version` 各管一件事：它只说「结构长什么样」。v3 = 数组 + 每条记录带 `question_answers` |
+| `question_answers` | 内部确认清单（对象数组） | 这条记录还欠哪些内部确认 / 已确认了什么（含出处与日期）。见 §4.8b |
 
 **`version` 的取值来源**：客户档案顶层 `version:` —— 公共默认值写在 `customers/_defaults.yaml`（= 2），
 客户档案可覆盖（deep-merge 会带上）。改口径就 +1，判别语义：
@@ -1072,7 +1083,8 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 **机制（四条硬规则）**
 
 1. **位置**：一律追加在 59 个 ERP 键**之后**（ERP 自己的导出也是这么干的：`Remark3` 后面挂 `产品备注`）。
-   59 键的位置一个不动 —— 下游按位置读的解析器不受影响。
+   59 键的位置一个不动 —— 下游按位置读的解析器不受影响。当前追加顺序 = 声明文件顺序 =
+   `ID, CPMC_ZH, Reminder, version, schema_version, question_answers`。
 2. **断言**：`step6` 检查「前 59 键 = 模板（集合 + 顺序）」**且**「其后 = 声明的内部字段（同序）」；
    `map_fields` 多产出任何未声明的键会当场抛错。`tests/test_pipeline.py` 有测试钉着。
 3. **校验**：内部字段**不参与** ERP 字典校验（`ID`/`CPMC_ZH`/`version` 字典里确实没有）——
@@ -1080,7 +1092,7 @@ uv run ./scripts/cplb_tree.py --html assets/cplb_tree.html   # 生成可视化�
 4. **开关**：`--strip-internal` → 只输出 59 键（给「ERP 导入端不收未知字段」兜底）。
 
 ```bash
-# 默认：59 + 4 个内部字段（ID / CPMC_ZH / Reminder / version）
+# 默认：59 + 6 个内部字段（ID / CPMC_ZH / Reminder / version / schema_version / question_answers）
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv
 # 纯净 59 键（导入 ERP 前若被告知「不收未知字段」）
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv --strip-internal
@@ -1089,6 +1101,82 @@ uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" -c ngv --strip-i
 **加新内部字段**：在 `assets/internal_export_fields.yaml` 的 `fields:` 里加一条
 （`key` + `source`），并在 `main.py` 的 `providers` 里补上该 source 的实现（一行）。
 **ERP 要的字段不要往这里加** —— 那属于 59 键模板 + 字典。
+
+---
+
+### 4.8b `question_answers`：内部确认清单（schema **v3**，2026-10-30 业务拍板）
+
+> **实现（唯一真源）：** `scripts/question_answers.py` ｜ **声明：** `assets/internal_export_fields.yaml`
+> **测试：** `tests/test_question_answers.py`（18 条，含真实样本端到端）
+
+森西 2026-10-30 对「产物结构想加 `[..., question_answers: [...]]`」的 5 条拍板：
+
+| # | 问题 | 拍板 | 落地 |
+|---|------|------|------|
+| 1 | 放文件级还是记录级 | **每条记录内** | 数组每项一个 `question_answers`，不做文件级包装层 |
+| 2 | 对外问答 / 内部待办 | **内部确认** | `source` 只标 `pipeline/agent/enquiry/customer/business`，不是客户问卷 |
+| 3 | ERP 导入端收不收 | **ERP 自己会过滤未知字段** | 照常跟着产物走，不必靠 `--strip-internal` 才安全（但仍可剥） |
+| 4 | `version` 升 3 还是另开号 | **B 方案** | `version` 继续 = 口径版本；格式另用 `schema_version: 3` |
+| 5 | 与 `Reminder`/warn/CPMS 里的「待确认」 | **合并** | 全部收敛到 `question_answers`，`Reminder` 降级为文本快照 |
+
+**条目契约（固定 9 键，顺序敏感；禁止拿问题文本当 key）**
+
+```json
+"question_answers": [
+  {
+    "id": "Q_OFFER_DEADLINE",
+    "field": "Reminder",
+    "question": "报价截止日期 2026-06-26 已过期 90 天 —— 请与业务确认这单是否还要报价",
+    "answer": "",
+    "status": "open",
+    "blocking": true,
+    "source": "pipeline",
+    "asked_at": "2026-10-30",
+    "answered_at": null
+  }
+]
+```
+
+| 键 | 用法 |
+|----|------|
+| `id` | 稳定短码，重跑不变：`Q_<字段>`（`Q_ZDFS`）、`Q_OFFER_DEADLINE`、同字段多条加序号 `Q_ZDFS_2` |
+| `field` | **答完要回填哪个字段** —— 没有这一项，答完了没人知道改哪 |
+| `question` / `answer` | 问什么 / 确认结果；`answer` 空 = 没确认 |
+| `status` | `open` / `confirmed` / `waived`（写成 `done`/`n/a` 等别名会自动纠正） |
+| `blocking` | 未确认时是否**卡交付** |
+| `source` | 出处：`pipeline`（脚本生成）/ `agent` / `enquiry`（客户询价原文）/ `customer`（客户回邮）/ `business`（业务拍板） |
+| `asked_at` / `answered_at` | 提出 / 确认日期（`YYYY-MM-DD`） |
+
+**脚本自动合并进来的两类（其余由 agent 手写）**
+
+1. **字段级校验项**：`validation.json` 里 `field` 是真实 ERP 字段的 warn/error（`ZDFS` 空、
+   枚举待确认…）→ 一条 open 项，`level=error` 的 `blocking=true`，`warn` 的 `false`。
+   分组说明、"unit" 说明这类**解释性文字不进清单**（留在 validation.json 给技术看）。
+2. **报价截止过期**（`Reminder` 的来源）→ `Q_OFFER_DEADLINE`，`blocking=true`，
+   **复制到每条记录**（文件级事实，但每条 Tab 都要自包含）。
+
+**闸门与交接棒**
+
+- `CQR_Web` 交付闸门：`delivery_gates()` 多认一条 —— `blocking` 且仍 `open` 的项**卡交付**，
+  列表/详情页显示「N 项待确认」。
+- `cpms_todo.py`：同上，卡交付的项进 agent 待办（`缺=确认清单(Q_PACK)`）；
+  `blocking=false` 的（如 `ZDFS` 由业务补填，2026-10-21 口径）**不进待办**，否则天天误报。
+- `cpms_lint` **CPMS080**：CPMS 正文写了「待确认/待定/TBD」却没有 `field=CPMS` 的未关闭项 → warn。
+  **CPMS 正文只留结论，待办落清单**。
+
+**手写判据（agent 收尾时照这个做）**
+
+- 只填 `answer`、忘了改 `status` → `effective_status()` 按 `confirmed` 算，不会一直卡着
+- 确认完要回填到 `field` 指向的字段（`ZDFS`/`Drop_SJFX`/`CPMS`…），清单本身不是答案的归宿
+- `Reminder` 字段是**运行时快照**，权威来源是 `question_answers`，别把答案只写进 `Reminder`
+
+**兼容性**：v2 旧产物没有这个键 → 读取方一律当 `[]`（不批量迁移、不回头改历史）；
+`--strip-internal` 一并剥掉（此时只剩 59 键）。查看器对旧产物不显示清单块。
+
+```bash
+# 只看清单（不打开页面）
+uv run ./scripts/question_answers.py customer-files/processed/<task>/ERP_*.json
+```
 
 ---
 
@@ -2060,6 +2148,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.38** | **2026-10-20** | **子目录各算一份报价（批次拆分）**：文件夹 / 压缩包里有子目录 → **子目录各算一份**、根下散文件另算一份、没有子目录仍是一份；一份失败不影响其余份；压缩包只归档一次（见下） |
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
+| **1.0.57** | **2026-10-30** | **产物 schema v3：`question_answers` 内部确认清单**（森西 5 条拍板：记录内 / 内部确认 / ERP 自行过滤 / B 方案格式号 / 合并）。① 新增 `scripts/question_answers.py`（唯一实现：9 键条目契约、`effective_status`、`gates`、`normalize` 兼容 v2 与野写法）；② `internal_export_fields.yaml` 加 `schema_version` + `question_answers`（内部字段 4 → 6，追加顺序钉在测试里）；③ `main.py step6` 逐条生成：字段级 validation warn/error + deadline 提醒合并成条目，`Reminder` 降级为卡交付项的文本快照；④ `CQR_Web` 列表/详情/摘要显示「N 项待确认」、交付闸门认 `blocking` 项、`question_answers` 单独成块渲染（不当普通字段）；⑤ `cpms_todo` 把卡交付的开放项算 agent 待办；⑥ `cpms_lint` 新增 **CPMS080**（正文写「待确认」必须落清单）；⑦ 新增 `tests/test_question_answers.py`（18 项，含 ngv 真实样本端到端 + 查看器闸门 + 交接棒 + CPMS080）。v2 旧产物零迁移、零噪音（`question_answers` 缺省 []） |
 | **1.0.55** | **2026-10-30** | **按「报价结构」分组 + 查看器改任务列表/产品 Tab**：① 新增 `scripts/product_groups.py`（签名见 `assets/structure_signature.yaml`）—— 装订/尺寸/用纸/印色/工艺/包装全同的几款合成一条（`TZS` 记款数），任一不同就拆；实测 IAN 574239 六款 → 3 条（TZS 3/1/2，CPSL 合计 365,340 与客户 Pivot 相等）。② `lidl_anlage` 产出逐款条目；新增 `product_table` 策略（**默认关闭**，须先校准）。③ 新增 `step4b_group_products`，`step6` 逐条断言/逐条内部字段/写数组；`validation.json` 增 `products`（分组摘要）与带 `record` 标号的 issue。④ 查看器：左栏 **任务列表**（一行一任务、标 N 条产品并逐条列出）、右栏 **产品记录 Tab**（可切换，带交付状态色）、深链接 `?path=…&r=N`、原始 JSON 显示整个数组。⑤ 新增 `tests/test_product_groups.py`（26 项）与 `CQR_Web/tests/page_harness.js`（最小 DOM shim 真跑页面脚本，16 项） |
 | **1.0.54** | **2026-10-29** | **ERP 导出改数组**（业务原话：「一个报价文件里可以包含很多个产品，而多个产品需要开很多的单，这样不方便，所以我们的 ERP 导出的 json 使用数组格式 `[]`」）：顶层永远是 `[{…}]`；读写统一走 `scripts/erp_bundle.py`（`load_bundle` / `write_bundle`，向下兼容老的单对象文件）；`erp_schema --check` / `cpms_lint` / `cpms_content_audit` / `cpms_todo` / `compare_with_erp` / `CQR_Web` 全部改成逐条消费；`scripts/migrate_erp_to_array.py` 一次性迁移历史产物（幂等、留 `.prearray.bak`） |
 | **1.0.44** | **2026-10-21** | **定时任务补上 agent 环节**：cron 从 `no_agent` 改 agent 模式，`scripts/cpms_todo.py` 当交接棒（列出 CPMS/CPMC_ZH 仍空着的产物，写完自动消失，`CPMS_TODO: N` 输出契约），空跑静默；**纯文本 enquiry 三处引擎缺陷**（CU26070901 实单）：① `QTY: 60.000 St. in total (20.000 cps/title)` —— `parse_single_quantity` 新增「数字在前 + in total」形态（旧正则只认 `total <数字>`，整条丢成 `CPSL1=0`）② 款数扫描新增 `^(N) titles (` 锚行首规则（不锚会抓到客户疑问句里的 `4 titles`）③ `FSC-Mix` → `FSC Mix` 枚举别名（不归一化报 error）；新增 `tests/test_ngv_text_enquiry.py` 13 项 |

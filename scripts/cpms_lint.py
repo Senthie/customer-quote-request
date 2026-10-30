@@ -87,6 +87,8 @@ class Finding:
 
 LABEL_RE = re.compile(r"^(?P<indent>[ ]*)(?P<label>[^\s：:，。；]{1,12})[：:](?P<value>.*)$")
 ITEM_RE = re.compile(r"^[ ]*(?P<num>\d{1,2})\s*[.．、)]\s*(?P<name>\S.*)$")
+# CPMS080 用的待办词：正文里出现就要求有 question_answers 条目承接
+_PENDING_RE = re.compile(r"待确认|待定|待补|TBD|待核实")
 
 
 def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Finding]:
@@ -204,6 +206,26 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
                 "要按客户原文写实际装订方式（如 冲形状无线胶装书 / 无线胶装书 / 骑马钉）")
 
     _check_required(lines, blocks, spec, record, add)
+
+    # ── CPMS080：正文里的「待确认」必须有 question_answers 条目承接 ──
+    # 2026-10-30 森西拍板：把散在四处的「还没确定的事」合并进 question_answers。
+    # CPMS 是成品描述（给客户/ERP 看），不是待办本 —— 只在正文写一句「装箱：待确认」，
+    # 答完了没人知道该回填哪个字段，重跑还会被覆盖。
+    # 判据：正文出现待办词 → 本条记录至少要有一条 field=CPMS 且**未关闭**的确认项。
+    if record is not None and record.get("question_answers") is not None:
+        pending_lines = [i for i, line in enumerate(lines, 1)
+                         if _PENDING_RE.search(line)]
+        if pending_lines:
+            from question_answers import effective_status, normalize as _normalize_qa
+            carriers = [q for q in _normalize_qa(record.get("question_answers"))
+                        if str(q.get("field") or "").strip().upper() == "CPMS"
+                        and effective_status(q) == "open"]
+            if not carriers:
+                add("CPMS080", pending_lines[0],
+                    f"第 {'/'.join(str(n) for n in pending_lines)} 行写了「待确认/待定/TBD」，"
+                    f"但本条记录没有 field=CPMS 的未关闭项 —— 待办要落 question_answers"
+                    f"（答完才知道回填哪里），正文只留结论")
+    # v2 旧产物没有 question_answers 键 → 不判（不回头改历史产物）
 
     if len(text.strip()) < 60:
         add("CPMS070", 0, f"CPMS 过短（{len(text.strip())} 字）—— 是否漏了部件或装箱要求")

@@ -102,7 +102,8 @@ def test_键集合与顺序等于模板(pipeline_run):
     template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
     out = pipeline_run["erp"]
     internal_keys = [str(f["key"]) for f in load_internal_fields()]
-    assert internal_keys == ["ID", "CPMC_ZH", "Reminder", "version"], \
+    assert internal_keys == ["ID", "CPMC_ZH", "Reminder", "version",
+                             "schema_version", "question_answers"], \
         "内部字段的键与顺序由声明文件决定"
 
     assert list(out) == list(template) + internal_keys
@@ -212,7 +213,8 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
 
     template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
     tpl_keys = list(template)
-    internal_keys = ["ID", "CPMC_ZH", "Reminder", "version"]
+    internal_keys = ["ID", "CPMC_ZH", "Reminder", "version",
+                     "schema_version", "question_answers"]
     profile = load_profile("ngv")
 
     def _run(tag: str, strip: bool, cpmc_zh: str, deadline: dict | None = None) -> dict:
@@ -247,6 +249,17 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
     # （业务 2026-09-24「目前设置版本为 2」）。取值来自客户档案顶层 version。
     assert erp["version"] == 2, erp["version"]
     assert erp["version"] == profile.version
+    # ★ 2026-10-30（B 方案）：格式契约版本单独一个号 —— 不跟口径版本混
+    assert erp["schema_version"] == 3, erp["schema_version"]
+    # 内部确认清单：报价已过期 → 一条卡交付的 Q_OFFER_DEADLINE
+    from question_answers import ITEM_KEYS
+    qa = erp["question_answers"]
+    assert isinstance(qa, list) and len(qa) == 1, qa
+    assert list(qa[0]) == list(ITEM_KEYS), "条目必须是固定 9 键（顺序敏感）"
+    assert qa[0]["id"] == "Q_OFFER_DEADLINE" and qa[0]["field"] == "Reminder"
+    assert qa[0]["status"] == "open" and qa[0]["blocking"] is True
+    assert qa[0]["source"] == "pipeline" and qa[0]["answer"] == ""
+    assert qa[0]["answered_at"] is None
     for key in tpl_keys:
         assert key in erp, key
 
@@ -259,6 +272,7 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
     # ③ 没有提醒时 Reminder 是空字符串（不是 null —— null 只留给「值为无」）
     erp3 = _run("no_reminder", False, "")
     assert erp3["Reminder"] == "" and erp3["CPMC_ZH"] == ""
+    assert erp3["question_answers"] == [], "没有待确认项 → 空数组（不是 null）"
 
 
 # ── 业务决策（2026-09-23）在端到端上的表现 ─────────────────────────────

@@ -408,6 +408,7 @@ uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <单元目录>
 | CPMS050~054 | warn | 克重单位 / 尺寸分隔符 / 印色写法 / 表面处理顺序 / 灰板单位 |
 | CPMS060 | warn | 商务要求出现在装箱之前 |
 | CPMS070 | warn | 过长（>4000）或过短（<60） |
+| CPMS080 | warn | 正文写了「待确认/待定/TBD」但本条记录没有 `field=CPMS` 的未关闭确认项（待办要落 `question_answers`，2026-10-30） |
 
 ---
 
@@ -416,7 +417,8 @@ uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <单元目录>
 | 环节 | 做法 |
 |---|---|
 | **agent 写 CPMS** | 按本规范写；写完必须跑 `cpms_lint.py`，error 清零才交付 |
-| 交付闸门 | 查看器「未完成」徽章（`CPMS` 为空 / `CPMC_ZH` 占位符）之外，再加一条 `cpms_lint` 退出码 |
+| 交付闸门 | 查看器「未完成」徽章（`CPMS` 为空 / `CPMC_ZH` 占位符 / `question_answers` 还有卡交付的 open 项）之外，再加一条 `cpms_lint` 退出码 |
+| **待确认事项** | **CPMS 正文只留结论**：还没定的事写进该条记录的 `question_answers`（`field=CPMS`），不要在正文写「待确认」就当交差（CPMS080 会报） |
 | 历史数据 | 不批量回改（ERP 里的老单是已发生的报价记录）。新单一律按新规范；老单只在返单/复用时重写 |
 | 客户原话 | 客户的用词（如 `single wall` / `Aufdruck`）先翻译成词表里的词，客户特殊叫法写进 `备注：客户称「…」` |
 

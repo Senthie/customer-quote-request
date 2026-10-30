@@ -297,3 +297,7 @@ rules:
   CPMS013: {level: warn,  desc: "书本类概要行缺「书籍方向：【长书脊/短书脊】」（非套装且 Drop_SJFX 为空）"}
   CPMS060: {level: warn,  desc: "商务要求（请拆分/请选配/客户目标价）出现在装箱之前"}
   CPMS070: {level: warn,  desc: "CPMS 过短（<60 字）或过长（>4000 字）"}
+  # ★ 2026-10-30（森西拍板「合并」）：正文里写「待确认」不再算数。
+  #   CPMS 是给客户/ERP 看的成品描述，不是我们的待办本 —— 待办要落到
+  #   question_answers（每条记录内的内部确认清单），答完了才知道回填哪里。
+  CPMS080: {level: warn,  desc: "CPMS 正文写了「待确认 / 待定 / TBD」，但本条记录没有 field=CPMS 的未关闭确认项 —— 待办要落 question_answers"}

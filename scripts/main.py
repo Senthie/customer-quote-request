@@ -42,6 +42,9 @@ from ingest_email import newest_message, read_attachment_meta  # noqa: E402
 from input_unit import (InputUnit, finalize_batch, find_unit_meta,  # noqa: E402
                         resolve_input_unit, resolve_input_units)
 from internal_fields import internal_field_keys, load_internal_fields  # noqa: E402
+from question_answers import (SCHEMA_VERSION, build_for_record,  # noqa: E402
+                             summary as questions_summary,
+                             reminder_text as questions_reminder_text)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = REPO_ROOT / "assets" / "add_customer_quote_request.json"
@@ -1887,7 +1890,9 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
 
     # 给业务的提醒（业务 2026-09-24：「这提醒现在每次跑都会自动出来」→ 固化成一个字段）。
     # 结构化版本进 validation.json 的 reminders；文本版本进内部字段 `Reminder` + stdout 醒目块。
-    # 这里就准备好，因为内部字段在下面几行就要用上。
+    # ★ 2026-10-30（森西拍板「合并」）：Reminder 不再是独立一套 —— 它降级为
+    #   「本条记录卡交付的未确认项」的**文本快照**，权威来源是 question_answers。
+    #   所以标题文本在下面的记录循环里从 items 生成，这里只留结构化数据。
     reminders: list[dict] = []
     if deadline_info and deadline_info.get("expired"):
         reminders.append({
@@ -1896,7 +1901,6 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
             "days_over": deadline_info["days"],
             "message": f"{deadline_info['message']} —— 请与业务确认这单是否还要报价",
         })
-    reminder_text = "\n".join(r["message"] for r in reminders)
 
     # 字段一致性断言（逐条记录）：
     #   ① 前 59 键必须与 ERP 模板**键集合 + 顺序**完全一致（下游按位置读，一个都不许动）
@@ -1908,11 +1912,16 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
 
     providers_base = {
         "task_id": task_id,
-        "reminder": reminder_text,
         # 配置版本：来自客户档案顶层 version（公共默认值在 customers/_defaults.yaml）。
         # 业务 2026-09-24：产物要能一眼看出是哪一代口径跑出来的，方便技能迭代。
         "config_version": profile.version,
+        # ★ 格式契约版本（2026-10-30 B 方案）：v3 = 数组 + 每条记录带
+        #   question_answers。和上面的「口径版本」是两个号，各管一件事 ——
+        #   现有 v2 产物没有口径错误，不该被标成旧口径。
+        "schema_version": SCHEMA_VERSION,
     }
+    # 内部确认清单只收「字段级」的校验项（分组说明之类的解释性文字不算待确认）
+    erp_fields = set(tpl_keys)
 
     for position, record in enumerate(records, start=1):
         out_keys = list(record.keys())
@@ -1930,6 +1939,23 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
         # 追加内部导出字段（业务 2026-09-24：ID 标注本次执行的任务，方便日志维护）
         providers = dict(providers_base)
         providers["cpmc_zh"] = cpmc_zh_by_record[position - 1]
+        # ★ 2026-10-30 森西拍板：内部确认清单**放在每条记录内**（问题基本都绑定
+        #   在某个产品上），把 deadline 提醒 + 字段级校验 warn/error 合并进来；
+        #   写成 CPMS 正文里的「待确认」不再算数，必须有对应条目（cpms_lint 卡）。
+        questions = build_for_record(
+            position,
+            issues=issues or [],
+            reminders=reminders,
+            record_fields=erp_fields,
+            today=datetime.now().strftime("%Y-%m-%d"),
+        )
+        providers["question_answers"] = questions
+        # Reminder = 卡交付的未确认项文本快照（权威来源是上面的 question_answers）
+        providers["reminder"] = questions_reminder_text(questions)
+        qsum = questions_summary(questions)
+        if qsum["total"]:
+            logger.info(f"  内部确认清单（第 {position} 条）: 共 {qsum['total']} 项"
+                        f"（未确认 {qsum['open']}，其中卡交付 {qsum['open_blocking']}）")
         for spec in internal_fields:
             key, source = str(spec["key"]), str(spec.get("source", ""))
             if source not in providers:

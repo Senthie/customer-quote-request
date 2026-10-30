@@ -142,6 +142,16 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
             # ECPMC 只对「档案声明了」的客户查（NGV 要求、igl 不产出）
             if _is_blank(data.get(ECPMC_FIELD)) and _requires_ecpmc(profile_id):
                 missing.append(ECPMC_FIELD)
+            # ★ v3（2026-10-30）：内部确认清单里**卡交付**且未确认的项也是待办 ——
+            #   agent 的交接棒不只补 CPMS/品名，还要把卡住的事实确认掉。
+            #   blocking=False 的项（如 ZDFS 由业务补填）不进待办，否则天天报。
+            #   v2 旧产物没有这个键 → gates() 返回 [] → 行为不变。
+            from question_answers import gates as _qa_gates
+            qa_blocking = _qa_gates(data.get("question_answers"))
+            if qa_blocking:
+                ids = [g.split(" ")[0] for g in qa_blocking[:3]]
+                more = "" if len(qa_blocking) <= 3 else f"等{len(qa_blocking)}项"
+                missing.append(f"确认清单({','.join(ids)}{more})")
             if not missing:
                 continue
             out.append({

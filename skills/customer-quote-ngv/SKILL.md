@@ -380,6 +380,9 @@ IAN 574239 = 365,340（6 款，25 语言）。
      要求书本类必须写；语料里 5223 份正方书也是这样写的：字段空、概要行有）。
    - 每条 `CPMS` 只写自己那条结构；`cpms_content_audit` 报的「未写」几乎都是**别的记录**的
      用纸（拆分后必然出现），不是漏抄 —— 别为了消掉它把别组的材料搬过来。
+   > 📎 **多记录单的完整配方**（重跑为什么先拷到 `/tmp`、6 个必改字段、回写脚本骨架与
+   > 允许集、audit「未写」怎么解读、归档要写 `_SUPERSEDED.txt`、来源对照多出的两块、
+   > `render_real.js` 验 Tab）：`references/多记录重跑与逐条补字段.md`。
 4. **语言数只算「有量」的语言码**：瑞士法语/意大利语段常年是 0，算进去 YYS 就多。款数按标题去重。
 
 **类别口径（书目树 criteria + 语料实证，别凭产品名猜）**
@@ -1089,6 +1092,13 @@ uv run ./scripts/customer_profile.py --prefs ngv
       把 `A00152` 切成数字 token `00152` 判「无出处」。
 - [ ] `cpms_todo.py` 现在**四个字段都查**（2026-10-21 补）：`CPMS` 空 / `CPMC`·`CPMC_ZH` 是占位符 /
       档案声明了 `rules.ecpmc.source_keys` 但 `ECPMC` 空 —— `CPMS_TODO: 0` 才是真的写完。
+- [ ] ★ **`question_answers` 内部确认清单**（schema v3，2026-10-30 起）：
+      `cpms_todo` 会多报一条 `缺=确认清单(Q_XXX)` —— 卡交付（`blocking=true`）的项没确认完不许交付。
+      收尾动作：把业务/客户确认过的事实写进 `answer`（`status` 可不动，填了 answer 就算已确认），
+      并**回填到 `field` 指向的字段**；还没确认的保持 `open`。
+      口径：`ZDFS` 这类「由业务补填、不猜」的项是 `blocking=false`（看得见但不堵路）；
+      **CPMS 正文只留结论**，写「待确认」而没有 `field=CPMS` 的条目 → `cpms_lint` 报 CPMS080。
+      另：`Reminder` 字段现在是「卡交付未确认项」的文本快照，权威来源是 `question_answers`（见根 SKILL §4.8b）
       实测 `CU26070901` 邮件没有 `Title:` 标签 → 脚本取不到 ECPMC（WARN 留空）→ agent 从原文
       照抄 `Malbücher` 补上；igl 没声明 `rules.ecpmc`，空着是对的，清单不会误报。
 - [ ] `YWY` = `KM`（业务员在 `YWY`，**不在** `CPMC` 前缀里）
@@ -1120,5 +1130,20 @@ uv run ./scripts/customer_profile.py --prefs ngv
       校验的都是「已经有值的字段」，**整个字段空着照样全绿**。交付前逐字段过一遍
       「本该有值的是否有值」：`CPMC` / `ECPMC` / `CPMC_ZH` / `CPLB` / `ZDFS` / `CPSL1` / `CD` / `KD` / `DWMC` /
       `KHDDH`（可空但要知道为什么空）/ `Remark4`。空着的必须能说出依据，说不出的就是漏项。
+- [ ] ★ **多记录单（数组里 N > 1 条）额外四查**（2026-10-30 实跑 IAN 574239 定下的）：
+      ① `cpms_todo.py --dir <任务目录>` → **`CPMS_TODO: 0`**；
+      ② `cpms_lint` 每条 0 error / 0 warn（输出带 `[k/N]`，别只看最后一条）；
+      ③ `cpms_content_audit` 每条「无出处 0」—— 它报的「未写」是**别的记录**的材料
+      （拆分后必然出现，不许搬过来凑）；
+      ④ 每条 `CPLB` / `ECPMC` 是照**自己那条结构 / 款名**写的（引擎一律给
+      `27.01;普通BB书` + 邮件级品类名 `Sound-Light books`，三张单会长得一模一样）。
+- [ ] ★ **多记录单的字段允许集 = `{CPLB, CPMC, CPMC_ZH, ECPMC, SFYPJ, CPMS}`**
+      （单记录单只有后三个）；写回前备份到 `/tmp`、断言键序不变，写完 20 秒再 `stat` 一次
+      mtime（后台补写任务会改 `CPMS`）。
+- [ ] ★ **页面能切 Tab**（多记录单唯一「肉眼级」证据）：`node CQR_Web/tests/render_real.js
+      CQR_Web/templates/index.html http://127.0.0.1:8765 "<task>/ERP_….json"` → Tab 数 =
+      `record_count`、每条「无未完成横幅」。配方见 `references/多记录重跑与逐条补字段.md`。
+- [ ] ★ 被取代的旧任务目录已 `mv processed/_superseded_<日期>/`，并在里面写了
+      `_SUPERSEDED.txt`（被谁取代 + 为什么）—— 别让一份报价在交付区躺两份。
 - [ ] `ID` = 本次任务号（= 产物目录名；排查问题时拿它对日志）
 - [ ] `compare_with_erp.py` 白名单外差异 0 条

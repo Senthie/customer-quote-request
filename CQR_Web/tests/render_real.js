@@ -111,6 +111,11 @@ N.prototype.contains = () => false;
     const head = (text.match(/第 \d+ \/ \d+ 条产品记录/) || ["（没找到『第 N / M 条』标题）"])[0];
     const banner = text.includes("未完成 · 不得交付") ? "有未完成横幅" : "无未完成横幅";
     const cpmc = (text.match(/产品名称\s*(\S+)/) || ["", "?"])[1];
+    // v3：内部确认清单块（v2 旧产物没有这个键 → 显示「（无清单）」
+    const cur = api.state.records[i];
+    const qPanel = api.renderQuestions(cur);
+    const qText = qPanel ? qPanel.text().replace(/\s+/g, " ").slice(0, 220) : "（无清单：v2 旧产物）";
     console.log(`  [${i + 1}] ${head} | ${cpmc} | ${banner} | Tab.class="${tabEls[i].className}"`);
+    console.log(`       确认清单: ${qText}`);
   }
 })().catch((e) => { console.error("渲染失败:", e); process.exit(1); });
