@@ -506,6 +506,44 @@ def _run(attachment: str) -> dict:
 SET_ORDERS = {"CU26061701", "CU26072301"}   # 这两单的 CPLB 顶层是「套装」
 
 
+def _run_with_profile(attachment: str, tweak) -> dict:
+    """同 _run，但允许先改档案（测「默认值层」的优先级用）。"""
+    profile = load_profile("ngv")
+    data = extract_from_workbook(str(SAMPLES / attachment), profile, filename=attachment)
+    with open(REPO_ROOT / "assets" / "add_customer_quote_request.json", encoding="utf-8") as f:
+        template = json.load(f)
+    tweak(profile)
+
+    class _Quiet:
+        def info(self, *a, **k): pass
+        def warn(self, *a, **k): pass
+        def error(self, *a, **k): pass
+        def field_mapping(self, *a, **k): pass
+
+    return map_fields(data, template, profile, _Quiet())
+
+
+@needs_samples
+def test_默认值只补空_不覆盖推导出来的值():
+    """业务 2026-10-30 原话：「客户写了就听客户的，没写才用默认」。
+
+    构造法：给一个**一定会被推导**的字段（ZDFS 装订方式）塞一个错的默认值 ——
+    产物里必须仍是推导值；同时真正没人填的字段（SHDQ）照旧拿到默认值。
+    这条是「erp_defaults 不许退化成 erp_fixed」的守门测试。
+    """
+    attachment = next(p for p in MANIFEST["pairs"] if p["order"] == "CU26051601-01")["attachment"]
+    base = _run(attachment)
+    assert base["ZDFS"], "基准样本必须能推导出装订方式，否则这条测试没意义"
+
+    poisoned = _run_with_profile(
+        attachment,
+        lambda prof: prof.erp_defaults.update({"ZDFS": "默认值不许覆盖我", "SHDQ": "FOB(NGV)"}),
+    )
+    assert poisoned["ZDFS"] == base["ZDFS"], \
+        f"默认值覆盖了推导值（{base['ZDFS']!r} → {poisoned['ZDFS']!r}）—— 违反「客户写了就听客户的」"
+    assert poisoned["SHDQ"] == "FOB(NGV)", "没人填的字段仍应由默认值补上"
+
+
 @needs_samples
 @pytest.mark.parametrize("order", ["CU26051601-01", "CU26061701", "CU26072301", "CU26072302"])
 def test_真实样本_关键字段(order):
@@ -540,9 +578,19 @@ def test_真实样本_关键字段(order):
     assert result["DWMC"] in ("本", "套")
     assert result["Remark4"], "NGV 的检测清单是客户常量，必须带上"
     assert result["CPMS"] == "", "CPMS 只能由 agent 手写，脚本不许生成"
-    # 业务决定（2026-09-24）：JHRQ / WCRQ 都不落库，ZBLX 默认留空
+    # 业务决定（2026-09-24）：JHRQ / WCRQ 都不落库
     assert result["JHRQ"] == "" and result["WCRQ"] == "", "交货/下单日期不落库"
-    assert result["ZBLX"] == "", "纸板类型不由我们产出（ERP/业务侧填）"
+    # ★ 2026-10-30 业务改口径（11 条常用值 → 默认值层）：
+    #   询价里没提到就用默认值，写明了就听客户的。这 11 条必须真的落进产物 ——
+    #   以前 ZBLX / YSLX 是留空、SHDQ 等 5 个是 null，业务核对时天天手填。
+    assert result["ZBLX"] == "A=B双坑纸板", "纸板类型默认 A=B双坑纸板（枚举 002）"
+    assert result["YSLX"] == "FOB(拼柜)", "运输类型默认 FOB(拼柜)（枚举 015，半角括号）"
+    assert result["ZXLB"] == "普通纸箱" and result["ZXFS"] == "平装", "纸箱类别/装箱方式默认值"
+    assert result["DKMC"] == "B3B坑纸板", "底卡名称默认 B3B坑纸板（DKMC 枚举）"
+    assert result["SHDQ"] == "FOB(NGV)", "送货地区默认 FOB(NGV)"
+    assert result["chkBSYTB"] is True, "不使用台板默认勾选 → JSON true"
+    assert result["SHFS"] == "FOB(NGV)" and result["BZFS"] == "纸箱包装"
+    assert result["TBLX"] == "不打卡板"
     # 业务决定（2026-09-24 第二批）：PXH 显式留空（模板默认 1 必须清掉）；
     # SFYPJ / Remark1 推不出就留空（写死「否」是错的 —— CU26072301 有配件）。
     assert result["PXH"] == "", "排序号显式留空（模板默认 1 必须被清掉）"

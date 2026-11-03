@@ -261,33 +261,26 @@ extras: []
 erp_fixed:
   # ── 客户偏好表（机器读的部分；人看的见 preferences: 段）─────────────
   # 业务拍板 2026-09-24 的第二批口径都在这几条里：
-  #   * BZ    → 我们填「美元」（长期口径）
   #   * PXH   → **显式留空**（模板默认是 1，必须在这里清掉；排序号由 ERP/业务侧填）
   #   * CPDL  → 「书版」是唯一合法值，照填；4 份导出 3 份空是业务核对时补
   #   * SFYPJ / Remark1（是否有配件 / 配件描述）→ 已从偏好表**删除**：
   #     推不出就留空（业务 2026-09-24 拍板），不再写死「否」——
   #     CU26072301 就有配件，写死「否」是错的。
+  # ★ 2026-10-30 业务把这批「常用值」重新定性为**默认值**（见下面 erp_defaults）：
+  #   客户询价里写明了就听客户的，没写才用默认 —— 所以 BZFS / TBLX / SHFS / BZ
+  #   从这一段挪走了（留在 erp_fixed 就等于无条件覆盖，会把客户写明的值盖掉）。
   CPDL: 书版
-  SHFS: FOB(NGV)          # 送货方式：ERP 下拉里就有 FOB(NGV) 这一项
-  BZFS: 纸箱包装
-  TBLX: 不打卡板
   # 业务员（YWY）：业务 2026-10-20 明确 —— **必须填 `KM`**，
   # 「这是我们区分谁生成的单」：KM = 脚本/agent 产出的标记（业务手写的单会带本人姓名，
   # 如「陈纯」）。⚠️ 别当「ERP 自动带出」清空，也别换成业务员姓名（1.0.34 之所以
   # 把 KM 落在这里，就是让它有处可去；2026-10-20 复核确认这是对的）。
   # 同时它**不是** CPMC 的前缀（那是旧口径，已作废）。
   YWY: KM
-  BZ: 美元
   PXH: ""                 # 显式留空（见上）
   # YYS 也显式留空：实际值由 rules.versions 决定（单语言 → 空、提取不到 → 0、
   # 多语言 → 该数字），模板/公共默认的 1 在这里清掉，免得漏掉任何一种情况时
   # 悄悄落成 1（那是错的：这个客户 4 份导出里 YYS 要么空要么是真实语言数）。
   YYS: ""
-  # 纸板类型 ZBLX：业务决定（2026-09-24）**默认留空** —— 附件里推不出来。
-  # 同日业务给出了该下拉的完整 HTML 枚举（6 项：007 特殊(看描述) / 002 A=B双坑纸板 /
-  # 001 A3B单坑纸板 / 003 A=A双坑纸板 / 005 K=K加强芯双坑箱 / 008 K=K加强芯(耐破)），
-  # 与字典一致；4 份导出里的「B3B普通芯」**不在枚举内** → 更确认是 ERP 侧数据，
-  # 不由我们产出（详见 SKILL.md 第 12 节）。
   # NGV 每单固定的第三方检测清单（3 份 v2 导出逐字相同、共 378 字符 → 属该客户常量）
   # ⚠️ 必须**逐字照抄** ERP 原文，包括：
   #    * `monochloroo-` 的双 o（ERP 里的既有错别字 —— 改成单 o 会让每单都产生差异）
@@ -297,6 +290,29 @@ erp_fixed:
   Remark4: |-
     1、氯丙醇化合物1,3-dichloro-2-propanol (DCP) 和 monochloroo-1,2-propanediol (MCPD).Colour Fastness to Perspiration & Saliva 2、EN71:part1,part2,part3 , part9。REACH:Cadmium ,Lead, Phthalates, PAHs,Nickel Release,Organotin compounds,甲醛 ,AZO dyes,REACH SVHC，RoHS，EN62115，EU - TCEP, TCPP & TDCP of 2014/79/EU,DIN 53160 (grade 5),Aniline,Reach Formamide + flame retardants 2014/79/EU for
     foam
+
+# ── ERP 客户默认值（NGV 专属；业务 2026-10-30 拍板的 11 条）──────────
+# 口径（业务原话）：「如果客户的询价文件中没有提到，就使用默认值；客户写了就听客户的」。
+# 与上面 erp_fixed 的区别：这一层**只补空**（main.py step13b，跑在所有推导之后），
+# 客户/上游给了值就保留。取值全部按 assets/erp_form_schema.yaml 的**下拉 label 逐字**
+# 对照过（半角括号、全角字符都不能改）：
+#   ZBLX 002 A=B双坑纸板 / ZXLB 008 普通纸箱 / ZXFS 0 平装 / DKMC 02 B3B坑纸板 /
+#   YSLX 015 FOB(拼柜) / SHFS FOB(NGV) / TBLX 06 不打卡板 / BZ 02 美元
+# ⚠️ SHDQ（送货地区）是**联动下拉**，静态 HTML 抓不到枚举 → 只能靠业务给的值；
+#    写错一个字符 ERP 就不认，改动前先问业务。
+erp_defaults:
+  BZFS: 纸箱包装          # 包装方式（4 份导出逐字相同）
+  TBLX: 不打卡板          # 台板类型（导出里的 code 06）
+  BZ: 美元                # 客户目标价币种（长期口径；询价写别的币种就听客户的）
+  SHFS: FOB(NGV)          # 送货方式（半角括号，ERP 下拉原文）
+  ZXLB: 普通纸箱          # 纸箱类别（导出里是空 → 之前不填，2026-10-30 起补默认）
+  ZBLX: A=B双坑纸板       # 纸板类型（2026-10-30 改口径：选枚举 002；历史导出里的
+                          #   B3B普通芯 不在下拉枚举内，属 ERP 侧旧数据）
+  ZXFS: 平装              # 装箱方式
+  DKMC: B3B坑纸板         # 底卡名称（注意在 DKMC 下拉里，不在 ZBLX）
+  YSLX: FOB(拼柜)         # 运输类型（半角括号；历史导出里是 FOB(底价) 或空）
+  SHDQ: FOB(NGV)          # 送货地区（联动下拉，无静态枚举）
+  chkBSYTB: true          # 不使用台板（勾选框 → JSON true）
 
 # ── 客户偏好表（业务 2026-09-24 提出：长期合作客户有稳定口径，要一眼看全、快速填写）
 # ───────────────────────────────────────────────────────────────────
@@ -309,17 +325,25 @@ erp_fixed:
 # 依据来自权威 ERP 导出（4 份）+ 业务逐条拍板。
 preferences:
   - { field: CPDL,   value: "书版",   reason: "产品大类只有『书版』一个合法值（导出 3 空 1 有是业务核对时补）" }
-  - { field: BZ,     value: "美元",   reason: "该客户报价一律美元（长期口径）" }
+  # ── 以下 11 条 = 业务 2026-10-30 拍板的「常用值」，口径是**默认值**：
+  #    询价文件里没提到才补，客户写明了就听客户的（落库在 erp_defaults 那一段）
+  - { field: BZ,     value: "美元",   reason: "客户目标价一律美元（长期口径）；询价写别的币种就听客户的" }
+  - { field: SHFS,   value: "FOB(NGV)", reason: "送货方式默认 FOB(NGV)（半角括号，ERP 下拉原文）" }
+  - { field: BZFS,   value: "纸箱包装", reason: "包装方式默认纸箱包装（4 份导出逐字相同）" }
+  - { field: TBLX,   value: "不打卡板", reason: "台板类型默认不打卡板（ERP 枚举 code 06）" }
+  - { field: ZXLB,   value: "普通纸箱", reason: "纸箱类别默认普通纸箱（枚举 code 008；历史导出为空）" }
+  - { field: ZBLX,   value: "A=B双坑纸板", reason: "纸板类型默认 A=B双坑纸板（枚举 code 002，2026-10-30 定；历史导出的 B3B普通芯 不在下拉里）" }
+  - { field: ZXFS,   value: "平装",   reason: "装箱方式默认平装（枚举 code 0；历史导出为空）" }
+  - { field: DKMC,   value: "B3B坑纸板", reason: "底卡名称默认 B3B坑纸板（DKMC 枚举 code 02；历史导出为空）" }
+  - { field: YSLX,   value: "FOB(拼柜)", reason: "运输类型默认 FOB(拼柜)（枚举 code 015，2026-10-30 定；历史导出是 FOB(底价) 或空）" }
+  - { field: SHDQ,   value: "FOB(NGV)", reason: "送货地区默认 FOB(NGV)（联动下拉、无静态枚举，取值由业务给定；历史导出为空）" }
+  - { field: chkBSYTB, value: true,   reason: "不使用台板默认勾选（历史导出是 false，2026-10-30 改）" }
+  # ── 以下仍是「留空即正确」的字段（推不出来就不猜）──────────────────
   - { field: PXH,    value: "",       reason: "排序号由 ERP/业务侧填 —— 导出 4 份里 3 空 1 填 1，模板默认 1 必须清掉" }
-  - { field: SHFS,   value: "FOB(NGV)", reason: "送货方式：ERP 下拉里就有 FOB(NGV) 这一项" }
-  - { field: BZFS,   value: "纸箱包装", reason: "4 份导出逐字相同" }
-  - { field: TBLX,   value: "不打卡板", reason: "4 份导出逐字相同" }
-  - { field: YSLX,   value: "",       reason: "运输类型来自邮件语境（底价/拼柜都在邮件里），附件推不出 → 留空" }
   - { field: SFYPJ,  value: "",       reason: "是否有配件：改由 rules.accessories 推导（有 → true，无 → false），档案不再写死空值" }
   - { field: Remark1, value: "",      reason: "配件描述随 SFYPJ；推不出就留空" }
   - { field: Remark3, value: "",      reason: "修改记录：我们产出的是**第一版**报价，不存在修改记录（2026-09-24 拍板）" }
   - { field: FSCMC,  value: "",       reason: "多材质混用时该填哪个推不出来 → 留空（rules.scan 的 fsc 已设 unique: true）" }
-  - { field: ZBLX,   value: "",       reason: "纸板类型由 ERP/业务侧填 —— 导出里的 B3B普通芯 不在下拉枚举内（业务 2026-09-24 给出完整枚举）" }
   - { field: JHRQ,   value: "",       reason: "交货日期报价阶段不落库（4 份导出全空，附件给了 ETA 也不填）" }
   - { field: WCRQ,   value: "",       reason: "预计下单日期不落库（4 份导出全空，不用『今天+10 天』）" }
   - { field: YYS,    value: "",       reason: "单语言不落库；提取不到语言数则落 0（rules.versions.when_missing）" }

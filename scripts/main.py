@@ -816,7 +816,8 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     """把「规范键 + 客户档案规则 + ERP 模板」映射成 59 字段结果。
 
     赋值来源三类：
-      1. 档案 erp_fixed        —— 该客户/业务层的固定值
+      1. 档案 erp_fixed        —— 该客户/业务层的固定值（**无条件覆盖**）
+      1b. 档案 erp_defaults    —— 客户默认值（**只补空**，step13b 在最后跑）
       2. 由规范键推导          —— CPLB / CPMC / CD / KD / GD / Drop_SJFX / JHRQ …
       3. 模板默认值            —— 其余字段（见 SKILL.md 5.2）
     本函数**读不到客户列名**，只读规范键 —— 这是多客户解耦的关键。
@@ -1514,6 +1515,42 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     logger.warn("  CPMS 留空 —— 脚本不生成产品描述，必须由 agent 亲自补写（全文翻译 + 分类分段）")
     logger.info("  来源: 无（等待 agent 亲力亲为）")
     default_count += 1
+
+    # ── 13b. 客户默认值 erp_defaults —— **只补空，不覆盖** ──────────────
+    # 业务 2026-10-30 拍板（NGV 11 条）：「如果客户的询价文件中没有提到，就使用默认值；
+    # 客户写了就听客户的」。与 step 1 的 erp_fixed 是两种口径，别混：
+    #   erp_fixed    → 无条件覆盖（YWY=KM 生成标记、PXH 显式留空、Remark4 常量）
+    #   erp_defaults → 兜底补空（BZFS 纸箱包装 / SHFS FOB(NGV) / ZBLX A=B双坑纸板 …）
+    # ⚠️ 放在**所有推导之后**是刻意的：这样 `assigned` 才真实反映「有没有来源给过值」，
+    #    `skipped_defaults` 那条日志也才有意义（能证明「客户写了 → 没被覆盖」）。
+    #    若放在最前面，默认值会先把自己标进 `assigned`，判断就自相矛盾了。
+    # 判定用 `assigned`（有没有任何来源真的给过这个字段），**不要**用「值是不是空」：
+    #   chkBSYTB 这类勾选框的模板默认是 False，值是「非空」但那是没人填过 ——
+    #   拿空值判断会让「不使用台板=true」永远落不下去。
+    filled_defaults: list = []
+    skipped_defaults: list = []
+    for field, value in profile.erp_default_values().items():
+        if field not in template:
+            continue
+        if field in assigned:
+            current = result.get(field)
+            if str(current) != str(value):
+                skipped_defaults.append(f"{field}={current!r}")
+            continue
+        result[field] = value
+        assigned.append(field)
+        success_count += 1
+        index = list(template.keys()).index(field) + 1
+        logger.field_mapping(field, index, total_fields)
+        logger.info(f"  来源: 客户默认值（{profile.id}）—— 询价未提到 → 补空")
+        logger.info(f"  映射值: {value}")
+        logger.info("  状态: 成功（客户若写明则保留客户值，见下条日志）")
+        filled_defaults.append(field)
+    if filled_defaults:
+        logger.info(f"  客户默认值补空 {len(filled_defaults)} 个: {' '.join(filled_defaults)}")
+    if skipped_defaults:
+        # 这条日志是「客户写了就听客户的」的证据：业务核对时能看出差异从哪来
+        logger.info(f"  客户默认值**未覆盖**（已有来源给了不同的值）: {' '.join(skipped_defaults)}")
 
     # ── 14. 业务口径：值为「无」的字段一律落 JSON null ──────────
     # 业务 2026-09-24：「CPSX 或者其他值的『无』使用 json 里的 null 填充」。

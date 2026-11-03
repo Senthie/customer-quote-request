@@ -28,9 +28,12 @@ def test_列表里包含_igl_与兜底档案():
 
 def test_深合并_客户档案继承公共默认值():
     igl = load_profile("igl")
-    # BZ / YYS 只在 _defaults.yaml 里定义，igl.yaml 没有重复声明
-    assert igl.erp_fixed_values()["BZ"] == "美元"
+    # YYS 只在 _defaults.yaml 的 erp_fixed 里定义，igl.yaml 没有重复声明
     assert igl.erp_fixed_values()["YYS"] == 1
+    # BZ 在**默认值层**（业务 2026-10-30：客户写了币种就听客户的）——
+    # 落库值仍是「美元」，但语义从「无条件覆盖」变成「补空」
+    assert igl.erp_default_values()["BZ"] == "美元"
+    assert "BZ" not in igl.erp_fixed_values(), "BZ 属于默认值层，别再写回 erp_fixed"
     # igl 自己声明的值也在
     assert igl.erp_fixed_values()["CPDL"] == "书版"
 
@@ -217,14 +220,50 @@ def test_偏好表_拦住文档与落库值不一致(tmp_path, monkeypatch):
 
 
 def test_偏好表_NGV_显式留空的字段确实为空():
-    """业务 2026-09-24 第二批口径：PXH / YSLX / SFYPJ / Remark1 / Remark3 / FSCMC / ZBLX
-    一律留空（推不出不猜），BZ / CPDL 我们填。"""
+    """一批字段「推不出来就留空不猜」（2026-09-24 口径，2026-10-30 复核后保留）。
+
+    注意 YSLX / ZBLX 已在 2026-10-30 **移出**这个名单 —— 业务给了默认值
+    （FOB(拼柜) / A=B双坑纸板），口径从「留空」改成「没提到才用默认」。
+    """
     ngv = load_profile("ngv")
     prefs = {r["field"]: r["value"] for r in ngv.preference_table()}
-    for field in ("PXH", "YSLX", "SFYPJ", "Remark1", "Remark3", "FSCMC", "ZBLX", "JHRQ", "WCRQ"):
+    for field in ("PXH", "SFYPJ", "Remark1", "Remark3", "FSCMC", "JHRQ", "WCRQ", "YYS"):
         assert prefs[field] == "", f"{field} 应为显式留空"
     assert prefs["BZ"] == "美元" and prefs["CPDL"] == "书版"
     assert ngv.erp_fixed_values()["PXH"] == "", "PXH 必须在 erp_fixed 里显式清空"
+
+
+def test_偏好表_NGV_业务给的默认值落在默认值层():
+    """业务 2026-10-30 拍板的 11 条常用值 —— 必须是 erp_defaults（只补空），
+    不许落 erp_fixed（那会无条件覆盖客户写明的值）。"""
+    ngv = load_profile("ngv")
+    expect = {
+        "BZFS": "纸箱包装", "TBLX": "不打卡板", "BZ": "美元", "SHFS": "FOB(NGV)",
+        "ZXLB": "普通纸箱", "ZBLX": "A=B双坑纸板", "ZXFS": "平装",
+        "DKMC": "B3B坑纸板", "YSLX": "FOB(拼柜)", "SHDQ": "FOB(NGV)",
+        "chkBSYTB": True,
+    }
+    defaults = ngv.erp_default_values()
+    fixed = ngv.erp_fixed_values()
+    for field, value in expect.items():
+        assert defaults.get(field) == value, f"{field} 默认值应为 {value!r}"
+        assert field not in fixed, f"{field} 属默认值层，不许同时写进 erp_fixed"
+    # 偏好表（人看的）必须与落库口径逐条一致 —— 防止文档说留空、代码里填了值
+    prefs = {r["field"]: r["value"] for r in ngv.preference_table() if r["ok"] is False}
+    assert prefs == {}, f"偏好表与落库口径不一致: {prefs}"
+
+
+def test_偏好表_NGV_枚举写法逐字对齐ERP下拉():
+    """半角括号 / 全角的坑：ERP 下拉原文是 FOB(NGV)、FOB(拼柜)（半角）。
+    写成全角括号 ERP 不认，且每单都会产生差异 —— 这里钉死字符。"""
+    ngv = load_profile("ngv")
+    defaults = ngv.erp_default_values()
+    assert defaults["SHFS"] == "FOB(NGV)"
+    assert defaults["YSLX"] == "FOB(拼柜)"
+    assert defaults["SHDQ"] == "FOB(NGV)"
+    for field in ("SHFS", "YSLX", "SHDQ"):
+        assert "（" not in defaults[field] and "）" not in defaults[field], \
+            f"{field} 用了全角括号，ERP 下拉是半角"
 
 
 def test_偏好表_命令行可打印():

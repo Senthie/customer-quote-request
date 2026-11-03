@@ -192,6 +192,14 @@ class CustomerProfile:
     detect: dict
     fields: dict
     erp_fixed: dict
+    # 客户默认值（业务 2026-10-30 拍板 NGV）：**只补空、不覆盖**。
+    # 与 erp_fixed 的分工（别混，这是两种完全不同的口径）：
+    #   erp_fixed    = 无条件覆盖。业务/系统口径字段（YWY=KM 生成标记、PXH 显式留空、
+    #                  Remark4 常量、CPDL 书版）：客户写什么都以档案为准。
+    #   erp_defaults = 兜底填。询价文件里**没提到**才用它；客户明确写了不同的值就
+    #                  保留客户的（NGV 的 BZFS/SHFS/SHDQ/ZBLX… 共 11 条属这类）。
+    # 优先级（低 → 高）：模板默认值 < erp_defaults < 由规范键推导 < erp_fixed。
+    erp_defaults: dict
     rules: dict
     email: dict
     notes: str
@@ -219,6 +227,7 @@ class CustomerProfile:
             detect=raw.get("detect") or {},
             fields=raw.get("fields") or {},
             erp_fixed=raw.get("erp_fixed") or {},
+            erp_defaults=raw.get("erp_defaults") or {},
             rules=raw.get("rules") or {},
             email=raw.get("email") or {},
             notes=str(raw.get("notes", "")).strip(),
@@ -379,6 +388,21 @@ class CustomerProfile:
             if not isinstance(v, (dict, list))
         }
 
+    def erp_default_values(self) -> dict:
+        """客户默认值（只补空、不覆盖；只保留值是标量的项）。
+
+        与 `erp_fixed_values()` 的区别见 dataclass 里 `erp_defaults` 的注释：
+        固定值是**无条件**落库，默认值是**兜底补空** —— 客户在询价里写了值就听客户的。
+
+        ⚠️ 布尔字段（`chkBSYTB` 这类勾选框）也算标量：`False` 是「未勾选」这个真实取值，
+        不是空值。所以默认值只在「没有任何来源给过这个字段」时才生效（见 main.py step13b
+        用 `assigned` 判定），不要靠「值是不是空」判断。
+        """
+        return {
+            k: v for k, v in (self.erp_defaults or {}).items()
+            if not isinstance(v, (dict, list))
+        }
+
     # ---- 客户偏好表 ----
     def preference_table(self) -> list:
         """客户偏好表：`[{field, value, reason, effective, ok}]`。
@@ -393,7 +417,7 @@ class CustomerProfile:
         两者的一致性由 `validate()` 与 `tests/test_customer_profile.py` 保证，
         避免「文档说留空、代码里还填着 1」这类漂移。
         """
-        effective = self.erp_fixed_values()
+        effective = {**self.erp_default_values(), **self.erp_fixed_values()}
         rows = []
         for entry in self.preferences or []:
             if not isinstance(entry, dict):
@@ -416,7 +440,8 @@ class CustomerProfile:
         """把客户偏好表打成给人看的表（`--prefs`）。"""
         rows = self.preference_table()
         lines = [f"客户偏好表: {self.id}（{self.name}）",
-                 "  口径: 写了值就直接落库；值为空 = 该字段就该空着（推不出来不猜）",
+                 "  口径: 写了值就直接落库（`erp_defaults` 里的值是**默认值** —— "
+                 "询价没提到才填，客户写明了就听客户的）；值为空 = 该字段就该空着（推不出来不猜）",
                  ""]
         if not rows:
             lines.append("  （未声明 preferences 段 —— 该客户没有固定口径）")
@@ -513,7 +538,7 @@ class CustomerProfile:
                     f"（可用键见 customer_profile.CANONICAL_KEYS）"
                 )
 
-        # erp_fixed 的键必须是 ERP 模板里的字段
+        # erp_fixed / erp_defaults 的键必须是 ERP 模板里的字段
         tpl_path = profiles_dir().parent / "assets" / "add_customer_quote_request.json"
         tpl_keys: set = set()
         if tpl_path.exists():
@@ -522,11 +547,22 @@ class CustomerProfile:
             for key in self.erp_fixed:
                 if key not in tpl_keys:
                     problems.append(f"erp_fixed 里有模板不存在的 ERP 字段 '{key}'")
+            for key in (self.erp_defaults or {}):
+                if key not in tpl_keys:
+                    problems.append(f"erp_defaults 里有模板不存在的 ERP 字段 '{key}'")
+            # 同一字段不许两边都声明：固定值是无条件覆盖、默认值是补空，
+            # 同时出现说明口径没想清楚（永远只有固定值生效，默认值静默失效）
+            both = sorted(set(self.erp_fixed) & set(self.erp_defaults or {}))
+            if both:
+                problems.append(
+                    f"字段 {both} 同时出现在 erp_fixed 与 erp_defaults —— "
+                    f"固定值无条件覆盖、默认值只补空，二选一"
+                )
 
-        # 客户偏好表（preferences）—— 与人看的清单必须和机器读的 erp_fixed 一致。
+        # 客户偏好表（preferences）—— 与人看的清单必须和机器读的落库口径一致。
         # 这是防漂移的关键一处：文档说「留空」而 erp_fixed 里还写着 1，
-        # 或者偏好表填了值却没落进 erp_fixed（等于没生效），都在这里拦下。
-        effective = self.erp_fixed_values()
+        # 或者偏好表填了值却没落进 erp_fixed/erp_defaults（等于没生效），都在这里拦下。
+        effective = {**self.erp_default_values(), **self.erp_fixed_values()}
         seen_pref: set = set()
         for p_idx, pref in enumerate(self.preferences or []):
             if not isinstance(pref, dict):
@@ -546,8 +582,8 @@ class CustomerProfile:
             eff = "" if eff is None else str(eff)
             if eff != value:
                 problems.append(
-                    f"preferences 里 {field_name}={value!r} 与 erp_fixed 实际值 {eff!r} 不一致 —— "
-                    f"偏好表是给人看的、erp_fixed 才是落库值，两者必须同步"
+                    f"preferences 里 {field_name}={value!r} 与落库口径实际值 {eff!r} 不一致 —— "
+                    f"偏好表是给人看的、erp_fixed / erp_defaults 才是落库口径，两者必须同步"
                     + ("（想留空就在 erp_fixed 里显式写 ''，否则模板默认值会留在产物里）"
                        if value == "" else "")
                 )
