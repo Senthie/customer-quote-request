@@ -35,6 +35,10 @@ def test_规则表覆盖业务点名的11个字段():
         "业务点名的 11 个字段一个都不能少（多出来的字段要说明理由）")
     for field, spec in rules["fields"].items():
         assert spec.get("label"), f"{field} 要有中文标签（日志/清单里要用）"
+        if spec.get("derivable") is False:
+            # 「语料证明推不出来」也是结论，但必须写明理由（不能默默没规则）
+            assert spec.get("reason"), f"{field} 声明不推导就必须写 reason"
+            continue
         assert spec.get("evidence"), f"{field} 至少要有一条推导规则"
 
 
@@ -145,11 +149,16 @@ def test_规则表坏一条正则不影响其它字段(capsys):
 
 
 # ── ④ 联动与缺口 ─────────────────────────────────────────────────────────
-def test_不打卡板连带勾上不使用台板():
-    """业务口径：`TBLX=不打卡板` 与 `chkBSYTB=true` 是同一件事的两种写法。"""
+def test_不打卡板不再连带勾上不使用台板():
+    """★ 2026-11-03 语料证伪（18476 份真实 ERP 报价单）：
+
+    曾以为 `TBLX=不打卡板` 与 `chkBSYTB=true` 是同一件事的两种写法，
+    但语料里 TBLX=不打卡板 的 7236 份记录 chkBSYTB **全是 false**，
+    全语料 true 出现 0 次 —— 两者在 ERP 里不联动，所以只推 TBLX、不推勾选框。
+    """
     items = {i["field"]: i["value"] for i in spec_fields.derive("no pallets required")}
     assert items.get("TBLX") == "不打卡板"
-    assert items.get("chkBSYTB") is True
+    assert "chkBSYTB" not in items, "勾选框由客户档案给，不从正文/联动推"
 
 
 def test_缺口清单只报空字段且不卡交付():

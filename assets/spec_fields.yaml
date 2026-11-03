@@ -71,11 +71,18 @@ fields:
     cpms_keywords: ["台板", "卡板", "托盘"]
   chkBSYTB:
     label: 不使用台板
-    # 与 TBLX 联动：TBLX=不打卡板 → 这个勾选框必须是 true（业务口径：勾选框和
-    # 下拉是同一件事）。客户原文单独只写「不打托盘」也认（见上面 evidence）。
-    derive_from: { field: TBLX, when_value: 不打卡板, then: true }
-    evidence:
-      - { match: '(?i)no\s+pallets?|ohne\s+palette|不(?:打|用)卡板|不(?:打|用)台板|无卡板|不用托盘', value: true }
+    # ★ 2026-11-03 用真实语料（18476 份 ERP 历史报价单）证伪了原来的联动假设：
+    #   原写法是 `derive_from: {field: TBLX, when_value: 不打卡板, then: true}`，
+    #   但语料里 TBLX=不打卡板 的 7236 份记录 **chkBSYTB 全是 false**，
+    #   全语料 true 出现 0 次（chkZDBJF / chkBSYJZX 同样恒 false，chkXBJF 恒 null）。
+    #   结论：TBLX 和这个勾选框在 ERP 里**不是同一件事**，不联动、不推导。
+    #   取值只听客户档案 `erp_defaults`（NGV 档案写 true 属业务给的常用值，另议）。
+    derivable: false
+    reason: >-
+      真实语料 18476 份里 true 出现 0 次（chkZDBJF / chkBSYJZX 同样恒 false、
+      chkXBJF 恒 null、Drop_SJFX 恒 null），且 TBLX=不打卡板 的记录也全是 false。
+      说明报价阶段这几个勾选框从不因「不打卡板」而勾上 —— 不推导，只跟档案。
+      同理不从正文「不使用台板」推：推 true 会造出 6 年数据里从未出现过的值。
     cpms_keywords: ["不使用台板"]
 
   # ── 送货方式 / 运输类型 / 送货地区：三件套，同一个交货条件 ─────────────

@@ -129,10 +129,20 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 ## 5. 不该被脚本碰的字段
 
 `BDBH` `YWY` `KHZL` `GDY` `Remark` `CPMX`（ERP 自动带出，业务已确认留空即正确）、
-以及 IGL 样本里客户文件根本没提的 `BZFS` `TBLX` `SHFS` `FSCMC` `OLD_KHDDH` `SFYPJ`
-`Remark1` `CPLX` `KHDDH` `ZXLB` `ZBLX` `ZXFS` `DKMC` `YSLX` `SHDQ` `KHDQ`
-`BGMS` `Remark4` `Remark3` —— 它们应**等于模板默认值**，`tests/test_pipeline.py`
+以及 IGL 样本里客户文件根本没提的 `FSCMC` `OLD_KHDDH` `SFYPJ` `Remark1` `CPLX` `KHDDH`
+`KHDQ` `BGMS` `Remark4` `Remark3` —— 它们应**等于模板默认值**，`tests/test_pipeline.py`
 的 `UNTOUCHED` 列表逐个断言。往这些字段里加逻辑前先想清楚：**是通用能力还是 IGL 特有**。
+
+> ★ **2026-10-30 起 `BZFS` 已不在这份名单里**：新增的 `spec_fields` 推导层会从客户原文推
+> 包装/台板/运输/纸板等 11 个字段（`BZFS` `TBLX` `SHFS` `SHDQ` `ZXLB` `ZBLX` `ZXFS`
+> `DKMC` `YSLX` `chkBSYTB` `BZ`）。IGL 的样本里有 `carton` 字样 → `BZFS=纸箱包装`，
+> 所以它已从 `UNTOUCHED` 移出（留在名单里的那 10 个正好守住「没证据不许碰」）。
+> **IGL 目前没有这 11 条的 `erp_defaults`**（只有公共的 `BZ=美元`），所以推不出来的
+> 8 个字段会进内部确认清单问客户（`Q_TBLX`/`Q_SHFS`/`Q_YSLX`/`Q_SHDQ`/`Q_ZBLX`/
+> `Q_ZXLB`/`Q_ZXFS`/`Q_DKMC`，`blocking=False` 不拦交付）—— 这是**设计行为**，不是漏填；
+> 汇报里要点明「这几个等客户确认」，别再去 `pending/` 里找原因。
+> 若业务给 IGL 一套默认值，写进 `customers/igl.yaml` 的 `erp_defaults` 即可（只补空）。
+> 机制与坑见 `customer-quote-request/references/spec-fields-and-linked-dropdowns.md`。
 
 > ★ **`ECPMC` 2026-10-21 起不再留空**：业务拍板「IGL 按 NGV 口径做」→ 档案已声明
 > `rules.ecpmc.source_keys: [series_name]`，`ECPMC` = 客户原文品名，并已从 `UNTOUCHED` 移出。

@@ -696,6 +696,17 @@ width / height / binding / content / content gsm / content paper / printing of c
 | `DKMC` 底卡名称 | `B3B坑纸板` | code 02 | **在 `DKMC` 下拉里，不在 `ZBLX`** |
 | `YSLX` 运输类型 | `FOB(拼柜)` | code 015 | **半角**！业务口述时写的是全角 |
 | `SHDQ` 送货地区 | `FOB(NGV)` | 联动下拉 | 可选值由 `YSLX` 决定（外贸 8 种共用一套 7 个）；`FOB(拼柜)` → `FOB(NGV)` 同组，跨字段校验守住 |
+
+**三层顺序别弄反**（2026-10-30 起，细节见总纲 `references/spec-fields-and-linked-dropdowns.md`）：
+
+1. 客户原文**证据** → `spec_fields`（step13a）—— 例如探针单的
+   `30 brown standard export carton` → `BZFS=纸箱包装`，日志带证据原文；
+2. 本表 11 条 `erp_defaults`（step13b，**只补空**）；
+3. 都没有 → 进内部确认清单问客户（`blocking=False`，不拦交付）。
+
+所以 NGV 单跑完通常**只剩**「报价截止日期」一条待确认 —— 如果清单里冒出 `Q_BZFS`/`Q_YSLX`
+之类的规格缺口，说明 `erp_defaults` 那 11 条没生效（先查档案与 `erp_fixed`/`erp_defaults`
+是否重复声明，`--validate` 会拦）。
 | `chkBSYTB` 不使用台板 | `true` | checkbox | 历史导出是 `false`，旧数据作废 |
 
 **机制**（细节与坑见总纲 `references/erp-defaults-vs-fixed.md`）：
