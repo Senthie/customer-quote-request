@@ -649,26 +649,6 @@ def test_交付闸门_历史产物没有CPMC_ZH键不误报():
     assert ev.delivery_gates({"CPMS": "老的产品描述", "CPSX": None}) == []
 
 
-def test_交付闸门_业务裁定不写CPMS时不卡交付():
-    """2026-11-03 A00130：业务「不充 CPMS」已写进 question_answers（field=CPMS, business）。
-
-    判据与 `cpms_lint` / `cpms_todo` 同一份（question_answers.cpms_waived），
-    所以页面不会再永远挂着「未完成」。
-    """
-    rec = {
-        "CPMS": "",
-        "CPMC_ZH": "逻辑谜题：地图篇",
-        "CPMC": "逻辑谜题：地图篇",
-        "question_answers": [{
-            "id": "Q_CPMS", "field": "CPMS", "question": "这种表要不要写 CPMS",
-            "answer": "留空（业务 2026-11-03「不充 CPMS」）", "status": "confirmed",
-            "blocking": False, "source": "business",
-            "asked_at": "2026-11-03", "answered_at": "2026-11-03",
-        }],
-    }
-    assert ev.delivery_gates(rec) == []
-
-
 def test_扫描结果带交付闸门(tmp_path):
     _make_export(tmp_path, "unfinished", {"version": 2, "CPMS": "",
                                           "CPMC_ZH": "KM/Aldi 【中文品名待定】 x"},

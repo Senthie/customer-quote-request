@@ -138,12 +138,7 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
 
         profile_id = _profile_id(task_dir)
         for ridx, data in enumerate(records, 1):
-            # ★ 2026-11-03：业务明确「这条不写 CPMS」（A00130「不充 CPMS」）时，
-            #   空的 CPMS 不算欠账 —— 否则每轮都报一个永远补不了的项。
-            from question_answers import cpms_waived as _cpms_waived
-            cpms_ok = _cpms_waived(data)
-            missing = [f for f in AGENT_FIELDS
-                       if _is_blank(data.get(f)) and not (f == "CPMS" and cpms_ok)]
+            missing = [f for f in AGENT_FIELDS if _is_blank(data.get(f))]
             # ECPMC 只对「档案声明了」的客户查（NGV 要求、igl 不产出）
             if _is_blank(data.get(ECPMC_FIELD)) and _requires_ecpmc(profile_id):
                 missing.append(ECPMC_FIELD)

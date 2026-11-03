@@ -114,31 +114,6 @@ def test_空CPMS判未完成():
     assert "CPMS040" in codes(L.lint_text("", SPEC))
 
 
-def test_业务明确不写CPMS时空CPMS不算未完成():
-    """2026-11-03 A00130「不充 CPMS」：业务口径确认留空 → 不再报 CPMS040。
-
-    判据在 question_answers.cpms_waived：必须 field=CPMS + source=business/customer
-    + 状态 waived 或答案明说留空，避免变成绕过闸门的后门。
-    """
-    rec = {"CPMS": "", "question_answers": [{
-        "id": "Q_CPMS", "field": "CPMS", "question": "这种表要不要写 CPMS",
-        "answer": "留空（业务 2026-11-03「不充 CPMS」）", "status": "confirmed",
-        "blocking": False, "source": "business",
-        "asked_at": "2026-11-03", "answered_at": "2026-11-03",
-    }]}
-    assert L.lint_text("", SPEC, rec) == []
-
-
-def test_agent自己写的豁免不算数():
-    """source=agent 的确认项不能豁免空 CPMS —— 否则任何人写一条自说自话就过闸。"""
-    rec = {"CPMS": "", "question_answers": [{
-        "id": "Q_CPMS", "field": "CPMS", "question": "要不要写",
-        "answer": "留空", "status": "confirmed", "blocking": False,
-        "source": "agent", "asked_at": "2026-11-03", "answered_at": "2026-11-03",
-    }]}
-    assert "CPMS040" in codes(L.lint_text("", SPEC, rec))
-
-
 # ── 3. 概要行是派生数据 ──────────────────────────────────────
 def test_概要行与字段一致才通过():
     rec = {"Drop_SJFX": "长书脊", "CD": 229, "KD": 254, "GD": 0, "TZS": 2, "YYS": None}
