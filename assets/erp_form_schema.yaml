@@ -417,8 +417,35 @@ fields:
     label: 送货地区
     type: select
     store: label
-    options: []          # 联动下拉，随客户/送货方式动态加载
-    notes: "联动下拉，表单 HTML 里是空的 —— 无法从静态 HTML 取枚举，需业务提供。"
+    options: []          # 联动下拉，随「运输类型」动态加载 —— 取值见下方 linked_to
+    # ★ 2026-10-30 业务（森西）给出：SHDQ 的可选值由 YSLX（运输类型）决定。
+    #   注意这条关系是**分组**的，不是逐个映射：8 种外贸运输方式共用同一套送货地区，
+    #   只有「国内」自成一组。所以写 groups 而不是 when/options 一一对应。
+    #   erp_schema.py 用它做两件事：① 归一化/合法值用全集 ② validate_result 的跨字段校验
+    #   （填了 YSLX 就只认该组的值，填错 → error 并列出该组合法值）。
+    linked_to:
+      field: YSLX
+      captured_at: "2026-10-30"
+      source: "业务口头给出（森西）：运输类型 → 可选的送货地区"
+      groups:
+        - when: [FOB盐田(普通), FOBHK, FOB(拼柜), DPU, CIF, FOB(底价), FOB蛇口, FOB(美加线)]
+          note: 外贸 / 出口（8 种运输类型共用）
+          options:
+            - FOB盐田(普通)
+            - 香港
+            - FOB(美加线)
+            - FOB(NGV)
+            - DPU
+            - 日本（Tokyo）     # ⚠️ 全角括号，照业务原文录入；半角写法见 aliases
+            - FOB蛇口
+        - when: [国内]
+          note: 内销
+          options: [工厂自提, 香港, 东莞凤岗, 深圳]
+    aliases:
+      # 全角/半角括号是同一个值的两种写法（业务原文是全角）。
+      # 只做宽度归一，**不猜别的措辞** —— 联动下拉写错一个字 ERP 就不认。
+      "日本(Tokyo)": 日本（Tokyo）
+    notes: "联动下拉，表单 HTML 里是空的 —— 枚举由业务 2026-10-30 给出（见 linked_to）。"
 
   FSCMC:
     form_name: txtFSCMC

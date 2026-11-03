@@ -316,6 +316,37 @@ def test_字典与erp_schema同源():
         assert f["type"] == str((authoritative[f["key"]] or {}).get("type", "text"))
 
 
+def test_字典载荷_联动下拉带上分组关系():
+    """`SHDQ` 送货地区的候选值由 `YSLX` 运输类型决定（业务 2026-10-30）。
+
+    页面要按当前运输类型只列该组的候选值，所以载荷必须带上 `linked_to` + `legal_groups`；
+    同时 `legal` 仍是全集（不按父字段裁剪）——「这个值配这个父值合不合法」由后端
+    `erp_schema.validate_result` 判，页面不自己比枚举。
+    """
+    payload = ev.build_schema_payload()
+    by_key = {f["key"]: f for f in payload["erp_fields"]}
+
+    shdq = by_key["SHDQ"]
+    assert shdq["linked_to"] == "YSLX"
+    assert len(shdq["legal_groups"]) == 2, "外贸一组 + 国内一组"
+    trade = next(g for g in shdq["legal_groups"] if "FOB(拼柜)" in g["when"])
+    assert len(trade["when"]) == 8, "8 种外贸运输类型共用一套送货地区"
+    assert "FOB(NGV)" in trade["options"] and "日本（Tokyo）" in trade["options"]
+    dom = next(g for g in shdq["legal_groups"] if g["when"] == ["国内"])
+    assert dom["options"] == ["工厂自提", "香港", "东莞凤岗", "深圳"]
+    assert len(shdq["legal"]) == 10, "legal 是并集（10 个，香港两组都有）"
+
+    # 其他字段不受影响：没有联动关系就是空
+    assert by_key["YSLX"]["linked_to"] == ""
+    assert by_key["YSLX"]["legal_groups"] == []
+
+    # 页面源码：有按父字段筛候选值的实现，且没有在前端做合法性判定
+    html = PAGE_PATH.read_text(encoding="utf-8")
+    assert "function legalForField" in html
+    assert "legal_groups" in html
+    assert "legal.includes(text)" not in html
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 配置版本
 # ═══════════════════════════════════════════════════════════════════════

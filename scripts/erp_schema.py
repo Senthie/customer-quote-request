@@ -64,8 +64,26 @@ def field_spec(field: str) -> dict:
     return load_schema()["fields"].get(field) or {}
 
 
+def _linked_groups(spec: dict) -> list[dict]:
+    """联动下拉的分组定义（SHDQ 送货地区 ← YSLX 运输类型）。
+
+    业务 2026-10-30 给出的是**分组**关系：8 种外贸运输类型共用一套送货地区，
+    「国内」自成一组。所以字典里写
+        linked_to: {field: YSLX, groups: [{when: [...], options: [...]}, ...]}
+    而不是逐值映射 —— 逐值写会把同一套 7 个值抄 8 遍，改一处漏七处。
+    """
+    linked = spec.get("linked_to") or {}
+    out = []
+    for group in linked.get("groups") or []:
+        out.append({
+            "when": [str(v).strip() for v in group.get("when") or []],
+            "options": [str(v).strip() for v in group.get("options") or []],
+        })
+    return out
+
+
 def _option_entries(spec: dict) -> list[dict]:
-    """把 options 统一成 [{code, label, store}] 形式。"""
+    """把 options 统一成 [{code, label, store}] 形式（含联动下拉的各组取值）。"""
     out = []
     for opt in spec.get("options") or []:
         if isinstance(opt, dict):
@@ -74,7 +92,36 @@ def _option_entries(spec: dict) -> list[dict]:
             out.append({"code": code, "label": label, "store": opt.get("store") or spec.get("store", "label")})
         else:
             out.append({"code": "", "label": str(opt).strip(), "store": spec.get("store", "label")})
+
+    # 联动下拉：各组可选值并进全集。
+    # 归一化/合法值不区分「属于哪一组」（那是父字段才能决定的事），
+    # 「这个值配这个父值合不合法」交给 validate_result 的跨字段校验判。
+    for group in _linked_groups(spec):
+        for label in group["options"]:
+            if label and not any(e["label"] == label for e in out):
+                out.append({"code": "", "label": label, "store": spec.get("store", "label")})
     return out
+
+
+def linked_field(field: str) -> str:
+    """该字段联动依赖的父字段（无联动 → 空串）。"""
+    return str((field_spec(field).get("linked_to") or {}).get("field") or "")
+
+
+def linked_options(field: str, parent_value: Any) -> Optional[list[str]]:
+    """给定父字段取值，返回该字段允许的取值集合。
+
+    返回 None 表示**不判定**：父字段没填、或填了不在联动表里的值
+    （后者本身会被枚举校验抓走）。父值为空时不能凭空报错 —— 不知道该属于哪组。
+    """
+    groups = _linked_groups(field_spec(field))
+    if not groups or parent_value in (None, ""):
+        return None
+    key = str(parent_value).strip().lower()
+    for group in groups:
+        if any(w.lower() == key for w in group["when"]):
+            return group["options"]
+    return None
 
 
 def legal_values(field: str) -> list[str]:
@@ -400,6 +447,29 @@ def validate_result(result: dict, allow_empty=(), allow_values=None,
                 "field": field, "level": "error" if required == "error" else "warn",
                 "message": f"{spec.get('label', field)} 为空"
                            + ("（业务必填）" if required == "error" else "（建议填写）"),
+            })
+
+    # ── 跨字段校验：联动下拉（业务 2026-10-30 给出的 SHDQ ← YSLX 关系）──────
+    #   为什么必须在单字段枚举校验之外再做一层：SHDQ 的 11 个值分成两套
+    #   （8 种外贸共用 7 个 + 国内 4 个），单独看每个值都合法，配错父值才非法
+    #   —— 例如 YSLX=国内 + SHDQ=FOB(NGV)，导入端会静默丢字段。
+    for field, value in result.items():
+        if field.startswith("_") or field in internal:
+            continue
+        parent = linked_field(field)
+        if not parent or value in ("", None):
+            continue
+        allowed = linked_options(field, result.get(parent))
+        if allowed is None:
+            continue        # 父字段空着 / 取值不在联动表里 → 不判定（后者另有枚举校验兜底）
+        text = str(value).strip()
+        if not any(text.lower() == a.lower() for a in allowed):
+            parent_label = field_spec(parent).get("label", parent)
+            issues.append({
+                "field": field, "level": "error",
+                "message": f"取值 {value!r} 与 {parent}={result.get(parent)!r} 不匹配 —— "
+                           f"{field_spec(field).get('label', field)}的可选值由 {parent_label} 决定；"
+                           f"该组合法值：{' / '.join(allowed)}",
             })
 
     return issues

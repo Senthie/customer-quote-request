@@ -621,7 +621,7 @@ width / height / binding / content / content gsm / content paper / printing of c
 | 套装（盒子）尺寸 | **`CD/KD/GD` 一律 `0/0/0`**（`rules.size.zero_tops: [套装]`） | 附件给的是盒内单件 TPS，不采用 |
 | 交货日期 `JHRQ` | **不落库**（`dates.JHRQ.mode: empty`） | 4 份导出全空，附件给了 ETA 也不填 |
 | 预计下单日期 `WCRQ` | **不落库**（`dates.WCRQ.mode: empty`） | 4 份导出全空；不用「今天+10 天」 |
-| 纸板类型 `ZBLX` | **留空** | 导出里 3 份 `B3B普通芯` 1 份空 → ERP/业务侧填；业务给的完整下拉枚举里没有 `B3B普通芯` |
+| 纸板类型 `ZBLX` | ~~**留空**~~ **⚠️ 已作废（2026-10-30）** → 现为 **`A=B双坑纸板`**（`erp_defaults` 默认值，枚举 002）。旧依据「导出里 3 份 `B3B普通芯` 1 份空」是 ERP 侧旧数据，那个值本来就不在下拉枚举内 |
 | 单语言 `YYS` | **留空**（`versions.empty_when_single: true`） | 写 `1 language` 的两单导出 YYS 都是空的；写 `5 languages` 的才是 5 |
 | 必填豁免 | `rules.required_empty: [KHDH, Drop_SJFX]` | KHDH 报价阶段取不到、套装没有书脊方向；不豁免会淹掉真 error |
 
@@ -636,7 +636,7 @@ width / height / binding / content / content gsm / content paper / printing of c
 | `SFYPJ` / `Remark1` 配件 | **推不出就留空**（删掉了写死的「否」—— CU26072301 确实有配件） |
 | `FSCMC` | **不唯一就留空**（`rules.scan` 的 `fsc` 设 `unique: true`） |
 | `Remark3` 修改记录 | **留空** —— 我们产出的就是第一版报价，不存在修改记录 |
-| `YSLX` 运输类型 | **默认留空**；长期客户的稳定口径写进档案偏好表 |
+| `YSLX` 运输类型 | ~~**默认留空**~~ **⚠️ 已作废（2026-10-30）** → 现为 **`FOB(拼柜)`**（`erp_defaults` 默认值，枚举 015，**半角括号**） |
 | `CPSL2`~`CPSL10`、`KHMBDJ` | **落 `0` 可接受**（未使用档位 / 客户目标价） |
 | 「产品备注」 | 先不需要（ERP 导出侧多出的键） |
 
@@ -678,6 +678,47 @@ width / height / binding / content / content gsm / content paper / printing of c
 > 唯一遗留是**内部字段**（`ID`/`CPMC_ZH`/`Reminder`/`version`）导入端收不收 —— 若报「未知字段」，
 > 用 `--strip-internal` 出纯净 59 键。
 
+
+### 4.2b 第五批（2026-10-30）★ 11 条「常用值」→ 默认值层 `erp_defaults`
+
+业务一次给了 11 条常用值，并拍板口径（森西原话，三答）：
+① **「客户写了就听客户的，没写才用默认」** ② **半角括号** ③ **只对 NGV**。
+
+| 字段 | 落库值 | ERP 枚举 | 备注 |
+|---|---|---|---|
+| `BZFS` 包装方式 | `纸箱包装` | — | 4 份导出逐字相同 |
+| `TBLX` 台板类型 | `不打卡板` | code 06 | |
+| `BZ` 客户目标价币种 | `美元` | code 02 | 已从公共 `erp_fixed` 挪到 `erp_defaults` |
+| `SHFS` 送货方式 | `FOB(NGV)` | — | **半角**括号 |
+| `ZXLB` 纸箱类别 | `普通纸箱` | code 008 | 历史导出为空 |
+| `ZBLX` 纸板类型 | `A=B双坑纸板` | code 002 | 历史导出的 `B3B普通芯` 不在枚举内 |
+| `ZXFS` 装箱方式 | `平装` | code 0 | 历史导出为空 |
+| `DKMC` 底卡名称 | `B3B坑纸板` | code 02 | **在 `DKMC` 下拉里，不在 `ZBLX`** |
+| `YSLX` 运输类型 | `FOB(拼柜)` | code 015 | **半角**！业务口述时写的是全角 |
+| `SHDQ` 送货地区 | `FOB(NGV)` | 联动下拉 | 可选值由 `YSLX` 决定（外贸 8 种共用一套 7 个）；`FOB(拼柜)` → `FOB(NGV)` 同组，跨字段校验守住 |
+| `chkBSYTB` 不使用台板 | `true` | checkbox | 历史导出是 `false`，旧数据作废 |
+
+**机制**（细节与坑见总纲 `references/erp-defaults-vs-fixed.md`）：
+
+- `erp_fixed` = **无条件覆盖**（`YWY=KM` / `PXH` 显式留空 / `Remark4` 常量 / `CPDL` 书版）
+- `erp_defaults` = **只补空**（`main.py` step13b，跑在所有推导之后）
+- 同一字段两边都写 → `--validate` 报错；偏好表 `preferences` 必须与落库口径逐条一致
+- 布尔字段**不能按「值是否为空」判断**（模板默认 `false` 是非空值）→ 用 `assigned` 判定
+
+⚠️ **现状缺口（2026-10-30 查证，重要）**：这 11 个字段在 `main.py` 里**一个赋值点都没有**
+（`grep 'assign("SHFS"\|result\["SHFS"\]' scripts/main.py` → 0）。客户真在 enquiry 里写了
+`VK-Verpackung: Palette`，那值会落进规范键 `primary_packaging`，**只进 CPMS 素材与分组依据、
+不会进 `BZFS`** —— 所以现在这 11 条实际上是「挂在默认值名下的固定值」。
+要真正实现「客户写了听客户的」，需要业务给「德/英原文 → ERP 下拉 label」对照表，
+再写成 `rules.*_terms` 关键词映射。**交付时别向业务宣称「客户写什么就填什么」** —— 目前不成立。
+
+要自己复核这个缺口：
+```bash
+cd /home/claw/customer-quote-request
+for f in BZFS TBLX SHFS SHDQ ZXLB ZBLX ZXFS DKMC YSLX chkBSYTB BZ; do
+  echo "$f: $(grep -c "assign(\"$f\"\|result\[\"$f\"\]" scripts/main.py)"
+done   # 全 0 = 没有抽取通道
+```
 
 ---
 
@@ -875,7 +916,10 @@ uv run ./scripts/customer_profile.py --prefs ngv
 - **别按标签名匹配**，要按行位置对齐（坑 2 的教训）。
 - **别拿 `our_ref`（`PR-00081126`）冒充客户单号** —— 那是我们的询价编号。
 - **别把香港单号写进 `KHDH`**，进 `KHDDH`。
-- **别给 `ZBLX` 填值**、**别给套装配尺寸**、**别给 `JHRQ`/`WCRQ` 填日期**。
+- ~~**别给 `ZBLX` 填值**~~ **⚠️ 已作废（2026-10-30）**：`ZBLX` 现在**就该填** `A=B双坑纸板`（默认值层，见 §4.2b）。
+  仍不许瞎猜的是：`JHRQ`/`WCRQ` 不填日期、套装不填尺寸。
+- **别用「默认值」冒充事实**：`erp_defaults` 那 11 条是**业务给的默认值**（询价没提到才用），
+  跟「我们自己猜一个合理值」不是一回事 —— 前者可追溯、后者是 §9.5 的柔性造数。
 - **`FSCMC` 多材质混用必须留空** —— 取第一个命中是错的（盒底 Recycled / 盒盖 Mix /
   竹底座 100%，ERP 留空）。
 - ★ **数量的「带 = 总数」写法**（2026-09-24 踩过）：`3 x 7000 cps. = 21.000 cps` ——
@@ -1124,7 +1168,12 @@ uv run ./scripts/customer_profile.py --prefs ngv
 - [ ] `ZDFS`：**映射命中才填**（Wire-O → 线圈书、perfect binding → 胶装/PAD书 等）；
       没命中 / 客户没提装订方式 → **留空是拍板口径**（2026-10-21，真实录入里「快线BB书」属业务补填），
       别为了让字段有值去猜，也别拿 `CPLB` 的名称回填 `ZDFS`
-- [ ] `PXH` 空、`ZBLX` 空、`Remark3` 空、`SFYPJ`/`Remark1` 空（推不出就留空）
+- [ ] `PXH` 空、`Remark3` 空、`SFYPJ`/`Remark1` 空（推不出就留空）
+- [ ] ★ **11 条常用值已落库**（2026-10-30 起，见 §4.2b）：`BZFS` 纸箱包装 / `TBLX` 不打卡板 /
+      `BZ` 美元 / `SHFS` FOB(NGV) / `ZXLB` 普通纸箱 / `ZBLX` A=B双坑纸板 / `ZXFS` 平装 /
+      `DKMC` B3B坑纸板 / `YSLX` FOB(拼柜) / `SHDQ` FOB(NGV) / `chkBSYTB` `true`。
+      **括号一律半角**；跑完日志里应有 `客户默认值补空 11 个: …`（少一个就是被谁抢先赋了值，
+      查那条「客户默认值**未覆盖**」日志）。`--validate` 必须过。
 - [ ] `YYS`：单语言空 / 提取不到 0 / 多语言为真实数字
 - [ ] `FSCMC`：单一材质才填，多材质留空
 - [ ] `Remark4` 与 ERP 原文逐字一致（含错别字）

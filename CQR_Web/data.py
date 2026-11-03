@@ -611,6 +611,15 @@ def build_schema_payload() -> dict[str, Any]:
             "required": spec.get("required"),
             "auto_filled": bool(spec.get("auto_filled")),
             "legal": legal,
+            # 联动下拉（SHDQ 送货地区 ← YSLX 运输类型）：把分组关系带给页面，
+            # 让「字典合法取值」只显示**当前运输类型下**的候选值。
+            # ⚠️ 页面只做展示筛选，合法性认定仍是 erp_schema.validate_result（不要在前端比枚举）。
+            "linked_to": str((spec.get("linked_to") or {}).get("field") or ""),
+            "legal_groups": [
+                {"when": [str(v).strip() for v in (g.get("when") or [])],
+                 "options": [str(v).strip() for v in (g.get("options") or [])]}
+                for g in ((spec.get("linked_to") or {}).get("groups") or [])
+            ],
         })
 
     return {

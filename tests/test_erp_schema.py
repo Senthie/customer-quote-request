@@ -270,6 +270,62 @@ def test_ZBLX_枚举已由业务确认_含B3B普通芯的判定():
     assert [i["level"] for i in bad] == ["error"]
 
 
+def test_SHDQ_送货地区由运输类型_YSLX_决定():
+    """SHDQ（送货地区）是联动下拉，业务 2026-10-30 给出了 YSLX → SHDQ 的关系。
+
+    关系是**分组**的：8 种外贸运输类型共用一套 7 个送货地区，「国内」自成一组 4 个。
+    这条用例钉三件事：
+      ① 两组值是并集（归一化不误报）；
+      ② 配对正确时不报错（配错才是问题）；
+      ③ 配错时（YSLX=国内 + SHDQ=FOB(NGV)）报 error 并列出该组的值 ——
+         导入端对配错的值是**静默丢弃**，不报错是最危险的失败方式。
+    """
+    sites = legal_values("SHDQ")
+    for v in ["FOB盐田(普通)", "香港", "FOB(美加线)", "FOB(NGV)", "DPU", "FOB蛇口",
+              "日本（Tokyo）", "工厂自提", "东莞凤岗", "深圳"]:
+        assert v in sites, f"{v} 必须在送货地区合法值里"
+    assert "日本（Tokyo）" in sites, "全角括号照业务原文录入，不能改成半角"
+
+    # ② 外贸 8 种运输类型都能配外贸那套地区
+    for ys in ["FOB盐田(普通)", "FOBHK", "FOB(拼柜)", "DPU", "CIF",
+               "FOB(底价)", "FOB蛇口", "FOB(美加线)"]:
+        for site in ["FOB(NGV)", "日本（Tokyo）", "FOB蛇口", "香港"]:
+            issues = validate_result({"YSLX": ys, "SHDQ": site})
+            assert issues == [], f"{ys} + {site} 应合法，实际 {issues}"
+
+    # 国内那套
+    for site in ["工厂自提", "香港", "东莞凤岗", "深圳"]:
+        assert validate_result({"YSLX": "国内", "SHDQ": site}) == []
+
+    # ③ 配错 → error，且消息里给出该组的可选值（不是全 10 个的并集）
+    bad = validate_result({"YSLX": "国内", "SHDQ": "FOB(NGV)"})
+    assert [i["level"] for i in bad] == ["error"]
+    assert "工厂自提" in bad[0]["message"] and "FOB(NGV)" not in bad[0]["message"].split("该组合法值：")[1]
+
+    bad2 = validate_result({"YSLX": "FOB(拼柜)", "SHDQ": "东莞凤岗"})
+    assert [i["level"] for i in bad2] == ["error"], "外贸运输类型不能选国内送货点"
+
+
+def test_SHDQ_父字段为空时不判定跨字段():
+    """YSLX 没填 → 不知道属于哪一组，不能凭空报错（报了就成假 error）。
+
+    取值本身是否在全集里仍由单字段枚举校验负责，两层职责分开。
+    """
+    assert validate_result({"SHDQ": "FOB(NGV)"}) == []
+    assert validate_result({"YSLX": "", "SHDQ": "深圳"}) == []
+
+    # 父字段填了联动表外的值 → 该值本身报枚举 error，跨字段层不重复报
+    issues = validate_result({"YSLX": "瞎写的运输方式", "SHDQ": "深圳"})
+    assert [i["level"] for i in issues] == ["error"]
+    assert "不在 ERP 合法枚举里" in issues[0]["message"]
+
+
+def test_SHDQ_半角括号写法归一化成全角():
+    """`日本(Tokyo)` → `日本（Tokyo）`：同一个值的两种括号宽度，只做宽度归一。"""
+    assert normalize_value("SHDQ", "日本(Tokyo)") == ("日本（Tokyo）", "normalized")
+    assert normalize_value("SHDQ", "日本（Tokyo）") == ("日本（Tokyo）", "ok")
+
+
 def test_check可带客户档案豁免必填(tmp_path):
     """`--check x.json --customer ngv`：KHDH 在 NGV 报价阶段本来就空，不该报 error。
 

@@ -141,6 +141,20 @@ const SCHEMA = {
     { key: "TZS", label: "款数", type: "number" },
     { key: "CPSL1", label: "数量1", type: "number" },
     { key: "CPMS", label: "产品描述", type: "text" },
+    /* ★ 联动下拉（业务 2026-10-30）：SHDQ 送货地区的候选值随 YSLX 运输类型变。
+       legal = 全集（10 个，香港两组都有），legal_groups = 分组关系。 */
+    { key: "YSLX", label: "运输类型", type: "text" },
+    { key: "SHDQ", label: "送货地区", type: "text",
+      legal: ["FOB盐田(普通)", "香港", "FOB(美加线)", "FOB(NGV)", "DPU", "日本（Tokyo）",
+              "FOB蛇口", "工厂自提", "东莞凤岗", "深圳"],
+      linked_to: "YSLX",
+      legal_groups: [
+        { when: ["FOB盐田(普通)", "FOBHK", "FOB(拼柜)", "DPU", "CIF",
+                 "FOB(底价)", "FOB蛇口", "FOB(美加线)"],
+          options: ["FOB盐田(普通)", "香港", "FOB(美加线)", "FOB(NGV)", "DPU",
+                    "日本（Tokyo）", "FOB蛇口"] },
+        { when: ["国内"], options: ["工厂自提", "香港", "东莞凤岗", "深圳"] },
+      ] },
   ],
   internal_fields: [
     { key: "ID", label: "任务ID", source: "task_id", kind: "value" },
@@ -220,7 +234,9 @@ vm.runInContext(
          // v3：内部确认清单的渲染函数（render_real.js 要用真实数据看清单）
          " renderQuestions, recordQuestions, saveAnswer, answerKey, canWriteAnswers," +
          // v3：折叠状态（默认折叠，业务 2026-10-30）
-         " qaOpenKey, qaIsOpen, toggleQuestions, firstQuestionPeek};",
+         " qaOpenKey, qaIsOpen, toggleQuestions, firstQuestionPeek," +
+         // 联动下拉（SHDQ ← YSLX）：候选值按父字段筛
+         " legalForField, specOf};",
   ctx,
 );
 
@@ -408,6 +424,32 @@ vm.runInContext(
     ["短数字字段值后面没有 null（TZS=3）", tzsCell.includes("3") && !/null/i.test(tzsCell)],
     ["长数字字段值后面没有 null（CPSL1=182670）", /182,670/.test(cpslCell) && !/null/i.test(cpslCell)],
     ["有值的字段整页不会出现「值+null」", !/\d\s*null/i.test(pageEl.text())],
+  );
+
+  /* ── 联动下拉：SHDQ 送货地区的候选值随 YSLX 运输类型变（业务 2026-10-30）
+     页面只做**展示筛选**：父字段有值 → 只列该组；父字段空 → 全集并注明「随…变化」。
+     合法性判定仍由服务端 validate_result 负责（前端不重写枚举判定）。 */
+  const shdqSpec = api.specOf("SHDQ");
+  const savedCur = api.state.current;
+  api.state.current = { YSLX: "国内" };
+  const domSites = api.legalForField(shdqSpec);
+  api.state.current = { YSLX: "FOB(拼柜)" };
+  const tradeSites = api.legalForField(shdqSpec);
+  api.state.current = {};
+  const allSites = api.legalForField(shdqSpec);
+  api.state.current = savedCur;
+  checks.push(
+    ["SHDQ 联动：国内 → 只剩 4 个国内送货点",
+      domSites.values.join("|") === "工厂自提|香港|东莞凤岗|深圳"],
+    ["SHDQ 联动：标题点明是按运输类型筛的", domSites.title.includes("运输类型")],
+    ["SHDQ 联动：外贸 → 7 个（含 FOB(NGV) 与全角 日本（Tokyo））",
+      tradeSites.values.length === 7 && tradeSites.values.includes("FOB(NGV)")
+      && tradeSites.values.includes("日本（Tokyo）")],
+    ["SHDQ 联动：外贸那组不含国内送货点", !tradeSites.values.includes("工厂自提")],
+    ["SHDQ 联动：父字段空着 → 全集 10 个并注明「随…变化」",
+      allSites.values.length === 10 && allSites.title.includes("随")],
+    ["SHDQ 联动：非联动字段照旧给全集标题",
+      api.legalForField(api.specOf("CPLB")).values.length === 0],
   );
 
   let failed = 0;

@@ -298,8 +298,11 @@ erp_fixed:
 # 对照过（半角括号、全角字符都不能改）：
 #   ZBLX 002 A=B双坑纸板 / ZXLB 008 普通纸箱 / ZXFS 0 平装 / DKMC 02 B3B坑纸板 /
 #   YSLX 015 FOB(拼柜) / SHFS FOB(NGV) / TBLX 06 不打卡板 / BZ 02 美元
-# ⚠️ SHDQ（送货地区）是**联动下拉**，静态 HTML 抓不到枚举 → 只能靠业务给的值；
-#    写错一个字符 ERP 就不认，改动前先问业务。
+# ⚠️ SHDQ（送货地区）是**联动下拉**：可选值由 YSLX（运输类型）决定 —— 8 种外贸运输类型
+#    共用 FOB盐田(普通)/香港/FOB(美加线)/FOB(NGV)/DPU/日本（Tokyo）/FOB蛇口（业务 2026-10-30
+#    给出的分组关系，落在 assets/erp_form_schema.yaml 的 SHDQ.linked_to）。
+#    NGV 用 FOB(拼柜) → 落 FOB(NGV) 在同组内，validate_result 跨字段校验会守住这件事；
+#    改这两个值时两个字段要一起看。
 erp_defaults:
   BZFS: 纸箱包装          # 包装方式（4 份导出逐字相同）
   TBLX: 不打卡板          # 台板类型（导出里的 code 06）

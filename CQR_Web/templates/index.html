@@ -784,6 +784,39 @@ function internalSpecOf(key) {
     return list.find((f) => f.key === key) || null;
 }
 
+/** 枚举字段该显示哪些合法取值。
+ *
+ *  普通下拉 → 字典全集。联动下拉（`SHDQ` 送货地区 ← `YSLX` 运输类型）在字典里写成
+ *  `linked_to` + `legal_groups`：父字段有值 → **只列该组的候选值**；父字段空着 →
+ *  列全集并注明「随 X 变化」（父值未知，不知道属于哪组）。
+ *
+ *  ⚠️ 这里只决定「给业务看哪些候选值」，**不判定**值合不合法 ——
+ *  合法性一律用服务端 `erp_schema.validate_result` 的结论
+ *  （前端比字符串会把 CPLB 的「编号;名称」全误判，2026-09-24 踩过）。
+ */
+function legalForField(spec) {
+    const all = (spec && spec.legal) || [];
+    const parentKey = spec && spec.linked_to;
+    const groups = (spec && spec.legal_groups) || [];
+    if (!parentKey || !groups.length) {
+        return { values: all, title: "字典合法取值" };
+    }
+    const parent = state.current ? state.current[parentKey] : null;
+    const key = parent == null ? "" : String(parent).trim().toLowerCase();
+    const hit = key
+        ? groups.find((g) => (g.when || [])
+            .some((w) => String(w).trim().toLowerCase() === key))
+        : null;
+    const parentSpec = specOf(parentKey);
+    const parentZh = (parentSpec && parentSpec.label) || parentKey;
+    if (hit) {
+        return { values: hit.options || [],
+                 title: "该「" + parentZh + "」下的合法取值" };
+    }
+    return { values: all,
+             title: "字典合法取值（随「" + parentZh + "」变化）" };
+}
+
 /** {字段: {level, message}} —— 来自服务端的**权威**校验结果（erp_schema.validate_result
  *  原样带过来的当次运行报告）。页面**不自己比枚举**：
  *  `CPLB` 我们的口径是「编号;名称」，而字典的 legal 列表是 88 个裸名称 ——
@@ -1286,7 +1319,7 @@ function renderValue(key, value, spec) {
         line.append(el("span", { class: "val plain", text: text }));
     }
 
-    const legal = (spec && spec.legal) || [];
+    const legalInfo = legalForField(spec);
     const issue = issueMap()[key];
     if (issue) {
         // 权威校验结果：error 红 / warn 黄，带后端给的原因
@@ -1306,11 +1339,12 @@ function renderValue(key, value, spec) {
     wrap.append(line);
 
     // 枚举字段：折叠列出字典里的合法取值，纯参考（**不做判定** —— 认定交给 erp_schema）
-    if (legal.length) {
+    //  联动下拉按父字段（运输类型）筛过再列，见 legalForField()
+    if (legalInfo.values.length) {
         const listBox = el("div", { class: "legal-list" },
-            legal.map((v) => el("span", { class: "legal-item" + (v === text ? " cur" : ""), text: v })));
+            legalInfo.values.map((v) => el("span", { class: "legal-item" + (v === text ? " cur" : ""), text: v })));
         wrap.append(el("details", { class: "legal" },
-            el("summary", { text: "字典合法取值（" + legal.length + "）" }), listBox));
+            el("summary", { text: legalInfo.title + "（" + legalInfo.values.length + "）" }), listBox));
     }
     return wrap;
 }
