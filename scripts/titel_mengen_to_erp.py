@@ -150,6 +150,7 @@ def main() -> int:
     ap.add_argument("--names", required=True, help='组号→中文品名 JSON，如 {"A": "逻辑谜题…"}')
     ap.add_argument("--out", required=True)
     ap.add_argument("--cpms", action="store_true", help="写 CPMS（默认留空，业务 2026-11-03 口径）")
+    ap.add_argument("--cpms-file", help='组号→CPMS 正文 JSON，如 {"A": "书籍方向：…"}')
     ap.add_argument("--asked-at", default="2026-11-03")
     args = ap.parse_args()
 
@@ -167,6 +168,8 @@ def main() -> int:
     yys = len(langs) or None
 
     names = json.loads(Path(args.names).read_text(encoding="utf-8"))
+    cpms_map = (json.loads(Path(args.cpms_file).read_text(encoding="utf-8"))
+                if args.cpms_file else {})
     tpl_doc = json.loads(Path(args.template).read_text(encoding="utf-8"))
     tpl = tpl_doc[0] if isinstance(tpl_doc, list) else tpl_doc
 
@@ -201,10 +204,12 @@ def main() -> int:
             rec[f"CPSL{i}"] = 0                          # NGV 多语言单实测全空
         rec["Drop_SJFX"] = None
         rec["CPMS"] = "" if not args.cpms else (rec.get("CPMS") or "")
+        if g in cpms_map:
+            rec["CPMS"] = cpms_map[g].strip()
         rec["BGMS"] = ""
         qty_total = sum(t["qty"] for t in items)
         rec["question_answers"] = _questions(args.asked_at, spec, items, qty_total,
-                                             yys, bool(args.cpms))
+                                             yys, rec["CPMS"])
         records.append(rec)
 
     Path(args.out).write_text(
@@ -222,9 +227,9 @@ def main() -> int:
 
 
 def _questions(asked_at: str, spec: dict, items: list[dict],
-               qty_total: int, yys: int | None, cpms_on: bool) -> list[dict]:
-    """本形态固定要留痕的 4 件事（都写 answer，不空转）。"""
-    return [
+               qty_total: int, yys: int | None, cpms_text: str = "") -> list[dict]:
+    """本形态固定要留痕的几件事（都写 answer，不空转）。"""
+    out = [
         make_item(
             "Q_CPSL_QTY", "CPSL1",
             f"本组 {len(items)} 款共 {qty_total:,} 本，是否要落 CPSL 数量档位",
@@ -256,11 +261,20 @@ def _questions(asked_at: str, spec: dict, items: list[dict],
         make_item(
             "Q_CPMS", "CPMS",
             "这种表要不要写 CPMS 概要行",
-            answer="留空（业务 2026-11-03「不充 CPMS」）—— 无单款规格分区，"
-                   "硬写只会得到「0*0*0 共 N 款」的假概要行" if not cpms_on else "已按原文写",
+            answer="已按 CPMS 写作规范写（概要行 + 封面/内文/装订/装箱 + 备注）" if cpms_text
+                   else "留空（业务 2026-11-03「不充 CPMS」）—— 无单款规格分区，"
+                        "硬写只会得到「0*0*0 共 N 款」的假概要行",
             status="confirmed", source="business",
             asked_at=asked_at, answered_at=asked_at),
     ]
+    # CPMS 里写了「待确认」→ 必须有 field=CPMS 的未关闭项承接（CPMS080）
+    if "待确认" in (cpms_text or ""):
+        out.append(make_item(
+            "Q_CPACK", "CPMS",
+            "装箱：每箱本数客户没给（附表只有总箱数）",
+            answer="", status="open", blocking=False, source="enquiry",
+            asked_at=asked_at))
+    return out
 
 
 if __name__ == "__main__":

@@ -327,7 +327,10 @@ def delivery_gates(data: dict[str, Any]) -> list[str]:
     """
     gates: list[str] = []
     cpms = data.get("CPMS")
-    if not isinstance(cpms, str) or not cpms.strip():
+    # ★ 2026-11-03：业务明确「这条不写 CPMS」（field=CPMS 的 business/customer 确认项）时
+    #   不卡交付 —— 判据在 scripts/question_answers.py（与 cpms_lint / cpms_todo 同一份）。
+    from question_answers import cpms_waived as _cpms_waived
+    if (not isinstance(cpms, str) or not cpms.strip()) and not _cpms_waived(data):
         gates.append("CPMS 未写 —— 脚本不生成，必须 agent 亲自补写（SKILL 第 5 节）")
     cpmc_zh = data.get("CPMC_ZH")
     if isinstance(cpmc_zh, str) and CPMC_ZH_PLACEHOLDER in cpmc_zh:

@@ -288,6 +288,39 @@ def gates(items: Any) -> list[str]:
             for i in open_items(items, blocking_only=True)]
 
 
+# ─────────────────────────────────────────────────────────────
+# 「这条记录不写 CPMS」—— 业务可以拍的板（2026-11-03 A00130「不充 CPMS」）
+# ─────────────────────────────────────────────────────────────
+# 背景：`CPMS` 为空原本一律算未完成（CPMS040 / 交付闸门 / cpms_todo 欠账）。
+# 但确有形态（如 VEMAG 的 `Anfrage_Titel+Mengen` 多国多款表）业务明确说不写 CPMS，
+# 于是那三个判定会每 5 分钟报一次「永远补不了」的欠账 —— 噪音会把真欠账淹掉。
+# 判据刻意收窄，避免变成绕过闸门的后门：
+#   * `field == CPMS`
+#   * `source` 必须是 business / customer（agent 自己写的 confirmed 不算）
+#   * status == waived，或 status == confirmed 且 answer 明确说留空/不写/不填
+_CPMS_BLANK_HINTS = ("留空", "不充", "不写", "不填", "空着", "无需", "不需", "waive", "n/a")
+
+
+def cpms_waived(record: Any) -> bool:
+    """业务是否已明确「这条记录不写 CPMS」。record = 一条产品记录（dict）。"""
+    if not isinstance(record, dict):
+        return False
+    for item in normalize(record.get(QUESTIONS_KEY)):
+        if str(item.get("field") or "").strip().upper() != "CPMS":
+            continue
+        source = str(item.get("source") or "").strip().lower()
+        if source not in ("business", "customer"):
+            continue
+        status = effective_status(item)
+        if status == WAIVED:
+            return True
+        if status == CONFIRMED:
+            answer = str(item.get("answer") or "").strip().lower()
+            if any(hint in answer for hint in _CPMS_BLANK_HINTS):
+                return True
+    return False
+
+
 def reminder_text(items: Any) -> str:
     """`Reminder` 字段的取值：卡交付的未确认项，一行一条。
 

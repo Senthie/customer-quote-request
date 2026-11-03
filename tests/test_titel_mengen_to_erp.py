@@ -166,3 +166,37 @@ def test_缺中文品名要报错而不是留占位符(tmp_path, monkeypatch):
         "--names", str(names), "--out", str(tmp_path / "o.json")])
     with pytest.raises(SystemExit):
         t2e.main()
+
+
+def test_cpms_file写正文_待确认要有QA承接(tmp_path, monkeypatch):
+    """业务 2026-11-03 后续口径：CPMS 要写。写了「待确认」必须有 field=CPMS 的未关闭项（CPMS080）。"""
+    xlsx = build(tmp_path)
+    tpl = tmp_path / "tpl.json"
+    tpl.write_text(json.dumps([template_record()]), encoding="utf-8")
+    names = tmp_path / "names.json"
+    names.write_text(json.dumps({"A": "甲", "B": "乙"}, ensure_ascii=False), encoding="utf-8")
+    cpms = tmp_path / "cpms.json"
+    cpms.write_text(json.dumps({
+        "A": "书籍方向：【长书脊】产品规格：【160*210*0】共【2】款，每款【3】语言\n"
+             "封面：230g单粉卡，4C+UV/0C\n内文：128pp，120g书纸，4C/4C\n"
+             "装订：无线胶装，方脊\n装箱：待确认（客户没给每箱本数）",
+        "B": "书籍方向：【长书脊】产品规格：【190*245*0】，每款【3】语言\n"
+             "封面：230g单粉卡，4C+UV/0C\n内文：144pp，120g书纸，4C/4C\n"
+             "装订：无线胶装，方脊\n装箱：12本/箱",
+    }, ensure_ascii=False), encoding="utf-8")
+    out = tmp_path / "ERP.json"
+    monkeypatch.setattr(sys, "argv", [
+        "titel_mengen_to_erp.py", str(xlsx), "--template", str(tpl),
+        "--names", str(names), "--cpms-file", str(cpms),
+        "--out", str(out), "--asked-at", "2026-11-03"])
+    assert t2e.main() == 0
+
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc[0]["CPMS"].startswith("书籍方向：【长书脊】产品规格：【160*210*0】共【2】款")
+    qa_a = {q["id"]: q for q in doc[0]["question_answers"]}
+    assert "Q_CPACK" in qa_a and qa_a["Q_CPACK"]["status"] == "open", \
+        "CPMS 里写了「待确认」→ CPMS080 会要求 field=CPMS 的未关闭项"
+    assert qa_a["Q_CPMS"]["answer"].startswith("已按 CPMS 写作规范写")
+    qa_b = {q["id"]: q for q in doc[1]["question_answers"]}
+    assert "Q_CPACK" not in qa_b, "没写「待确认」就不要凭空造一条待办"
+

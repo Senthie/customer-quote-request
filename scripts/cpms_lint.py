@@ -91,6 +91,17 @@ ITEM_RE = re.compile(r"^[ ]*(?P<num>\d{1,2})\s*[.．、)]\s*(?P<name>\S.*)$")
 _PENDING_RE = re.compile(r"待确认|待定|待补|TBD|待核实")
 
 
+def _cpms_waived(record: Optional[dict]) -> bool:
+    """业务是否已明确「这条记录不写 CPMS」—— 判据在 `question_answers.cpms_waived`（单一实现）。"""
+    if not record:
+        return False
+    try:
+        from question_answers import cpms_waived
+    except ImportError:  # 单独拷走本文件用时退回「不豁免」，宁可报错不静默放过
+        return False
+    return cpms_waived(record)
+
+
 def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Finding]:
     """校验一段 CPMS。record 给定时，顺带核对概要行与 59 字段是否一致。"""
     out: list[Finding] = []
@@ -122,12 +133,16 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
             add("CPMS003", i, "行尾有空格")
 
     if not text.strip():
-        add("CPMS040", 0, "CPMS 为空 —— 视为未完成，不得交付")
+        # 业务明确「这条记录不写 CPMS」（question_answers 里 field=CPMS 的 business/customer
+        # 确认项）时，空的 CPMS 不是未完成 —— 2026-11-03 A00130「不充 CPMS」。
+        if not (record and _cpms_waived(record)):
+            add("CPMS040", 0, "CPMS 为空 —— 视为未完成，不得交付")
         return out
 
     stripped = [l for l in lines if l.strip()]
     if not stripped:
-        add("CPMS040", 0, "CPMS 只有空白字符")
+        if not (record and _cpms_waived(record)):
+            add("CPMS040", 0, "CPMS 只有空白字符")
         return out
 
     # ── 概要行 ──

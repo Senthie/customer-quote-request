@@ -528,9 +528,11 @@ width / height / binding / content / content gsm / content paper / printing of c
 2026-11-03 实单 `A00130 Logik-Rätsel`（7 款 × 3 规格组 × 357,075 本）暴露两个坑：
 ① **只看表头会误判「客户没给装订/用纸」** —— 规格按 A/B/C 组写在表尾，判「没有」前先整表 dump；
 ② 这种表抽出来的产物是 `32.00;其他` + 全 0，`CPMS011` 会逼你写「0\*0\*0 共 1 款」的假概要行 →
-**不写 CPMS**（业务 2026-11-03「不充 CPMS」）。
+**CPMS 必须写**（业务 2026-11-03：「CMPS 需要填写」；`CPMS` 空 = `CPMS040` = 未完成、不得交付）。
+写法模板（概要用【长书脊】+ `共【款数】款，每款【语言数】语言`，下面 封面/内文/装订/装箱 四段，
+客户没给的包装/转版段落整段不写）：见 `references/anfrage-titel-mengen-表.md` §5。
 出数命令：`parse_titel_mengen.py`（抽结构）→ `titel_mengen_to_erp.py`（结构 + 表尾规格块 +
-语言图例 → 3 条记录，`--names` 传中文品名）。完整口径 / 两个脚本的参数 / 校验结果：
+语言图例 → 3 条记录，`--names` 传中文品名、`--cpms-file` 传每组 CPMS 正文）。
 `references/anfrage-titel-mengen-表.md`。
 
 ## 2. 怎么认出这是 NGV

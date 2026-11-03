@@ -192,3 +192,53 @@ def test_命令行_JSON_模式可被脚本消费(processed: Path, capsys):
     assert cpms_todo.main(["--dir", str(processed), "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert data[0]["task_id"] == "jjj"
+
+
+# ── 业务明确「不写 CPMS」的豁免（2026-11-03 A00130）─────────────────
+def _set_qa(root: Path, task_id: str, items: list[dict]) -> None:
+    erp = next((root / task_id).glob("ERP_*.json"))
+    payload = load_one(erp)
+    payload["question_answers"] = items
+    erp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _qa_cpms(*, source: str, answer: str, status: str = "confirmed") -> dict:
+    return {"id": "Q_CPMS", "field": "CPMS", "question": "这种表要不要写 CPMS",
+            "answer": answer, "status": status, "blocking": False,
+            "source": source, "asked_at": "2026-11-03",
+            "answered_at": "2026-11-03" if status != "open" else None}
+
+
+def test_业务裁定不写CPMS就不再算欠账(processed: Path):
+    """空 CPMS 若已有业务确认项「留空」，不该每 5 分钟重报一次永远补不了的欠账。"""
+    _task(processed, "waived1", cpms="", cpmc="逻辑谜题：地图篇", cpmc_en="Landkarten-Rätsel")
+    _set_qa(processed, "waived1", [_qa_cpms(source="business",
+                                            answer="留空（业务 2026-11-03「不充 CPMS」）")])
+    assert cpms_todo.iter_incomplete(processed) == []
+
+
+def test_waived状态也认(processed: Path):
+    _task(processed, "waived2", cpms="", cpmc="某品名", cpmc_en="Some Title")
+    _set_qa(processed, "waived2", [_qa_cpms(source="business", answer="", status="waived")])
+    assert cpms_todo.iter_incomplete(processed) == []
+
+
+def test_agent自己写的豁免不算数(processed: Path):
+    """source=agent 的自说自话不能豁免 —— 否则欠账可以被一条记录静默抹掉。"""
+    _task(processed, "waived3", cpms="", cpmc="某品名", cpmc_en="Some Title")
+    _set_qa(processed, "waived3", [_qa_cpms(source="agent", answer="留空")])
+    assert cpms_todo.iter_incomplete(processed)[0]["missing"] == ["CPMS"]
+
+
+def test_答案说要写就不能豁免(processed: Path):
+    _task(processed, "waived4", cpms="", cpmc="某品名", cpmc_en="Some Title")
+    _set_qa(processed, "waived4", [_qa_cpms(source="business", answer="要写，等业务补")])
+    assert cpms_todo.iter_incomplete(processed)[0]["missing"] == ["CPMS"]
+
+
+def test_豁免CPMS后其他缺项照旧报(processed: Path):
+    """豁免只针对 CPMS，中文品名占位符仍然要报。"""
+    _task(processed, "waived5", cpms="", cpmc=cpms_todo.CPMC_PLACEHOLDER,
+          cpmc_en="Some Title")
+    _set_qa(processed, "waived5", [_qa_cpms(source="business", answer="留空")])
+    assert cpms_todo.iter_incomplete(processed)[0]["missing"] == ["CPMC_ZH"]
