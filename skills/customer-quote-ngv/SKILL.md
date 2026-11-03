@@ -1,6 +1,6 @@
 ---
 name: customer-quote-ngv
-description: NGV 客户报价需求提取（德英双语 enquiry 分区表单 → ERP 59 字段）。处理 NGV（德国/欧洲 Aldi、Circon 线）的报价需求、附件解析、口径核对时加载；总纲见 skill customer-quote-request。
+description: NGV 客户报价需求提取（德英双语 enquiry 分区表单，或项目级多国多款数量表 → ERP 59 字段）。处理 NGV（德国/欧洲 Aldi、Circon 线）的报价需求、附件解析、口径核对时加载；总纲见 skill customer-quote-request。
 metadata:
   openclaw:
     emoji: "🇩🇪"
@@ -520,8 +520,18 @@ vs 录入 `128gsm哑粉`，差 2g）**不足以破去重**，四项主干（尺�
 **第五种形态（尚未支持）**：Lidl `Übersicht … _Preisanfrage.xlsx` —— 表头在 A1 的**平铺多列表**
 （`spec type / Nr. / reference IAN/PO / article number / title / assortment in display / QTY to be printed /
 width / height / binding / content / content gsm / content paper / printing of content / cover material / …`），
-一行一款、`spec type` 用 A/B/C/D 分组。现有 `section_pairs` / `lidl_anlage` 都吃不下，
+一行一款、`spec type` 用 A/B/C 分组。现有 `section_pairs` / `lidl_anlage` 都吃不下，
 要支持得加「按表头名定位列」的策略。
+
+**第六种形态（已支持）**：`Anfrage_Titel+Mengen_<项目号>_<项目名>.xlsx` —— VEMAG 的项目级
+「国别 × 款量」表（表头在第 5 行、16 个国别区块、**表尾 r166-r185 才是规格汇总块**）。
+2026-11-03 实单 `A00130 Logik-Rätsel`（7 款 × 3 规格组 × 357,075 本）暴露两个坑：
+① **只看表头会误判「客户没给装订/用纸」** —— 规格按 A/B/C 组写在表尾，判「没有」前先整表 dump；
+② 这种表抽出来的产物是 `32.00;其他` + 全 0，`CPMS011` 会逼你写「0\*0\*0 共 1 款」的假概要行 →
+**不写 CPMS**（业务 2026-11-03「不充 CPMS」）。
+出数命令：`parse_titel_mengen.py`（抽结构）→ `titel_mengen_to_erp.py`（结构 + 表尾规格块 +
+语言图例 → 3 条记录，`--names` 传中文品名）。完整口径 / 两个脚本的参数 / 校验结果：
+`references/anfrage-titel-mengen-表.md`。
 
 ## 2. 怎么认出这是 NGV
 
@@ -740,6 +750,16 @@ width / height / binding / content / content gsm / content paper / printing of c
 > 依据业务口径」**（次多 `DPU` 304 份是德国国内线）。
 > 两率为什么不能合成一个、布尔字符串化会怎样、改默认值要连带动哪四处：
 > `customer-quote-request/references/customer-erp-defaults-derivation.md`。
+>
+> 📎 **第二种附件形态：`Anfrage_Titel+Mengen_*.xlsx`（项目级多国多款数量表）**
+> —— 表头在第 5 行、每 7 行一个国家区块、Land/日期/合计是合并单元格。
+> `sections:` 那套引擎对它**一无所获**（CD/KD/CPSL 全 0，看着像成功），
+> 所以先跑 `scripts/parse_titel_mengen.py` 抽结构，并把错产物改名 `.json.unsupported`；
+> 别漏**表尾规格块**（装订/用纸在 r166-r185，不在表头）；
+> J 列 = 语言代码（表尾 r168-r179 就是图例，不是推断），L 列含义仍未明但只影响「同国两批要不要分开报」；
+> `TZS`=组内款数、`YYS`=有量语言数、`CPSL` 不填、`CPMS` 留空 —— 已用 719 份语料定案，
+> 出数用 `scripts/titel_mengen_to_erp.py`。
+> 全文：`references/anfrage-titel-mengen-表.md`。
 >
 > 🔁 **跑回归/校准样本前先看两条**：
 > - 批量建档（`--bootstrap --min-records 100` 给还没收到询价的客户铺默认值、draft 档案约定、
