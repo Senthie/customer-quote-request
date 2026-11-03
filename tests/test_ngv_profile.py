@@ -588,7 +588,9 @@ def test_真实样本_关键字段(order):
     assert result["ZXLB"] == "普通纸箱" and result["ZXFS"] == "平装", "纸箱类别/装箱方式默认值"
     assert result["DKMC"] == "B3B坑纸板", "底卡名称默认 B3B坑纸板（DKMC 枚举）"
     assert result["SHDQ"] == "FOB(NGV)", "送货地区默认 FOB(NGV)"
-    assert result["chkBSYTB"] is True, "不使用台板默认勾选 → JSON true"
+    # ★ 2026-11-03 语料校准：真实 NGV 单据 2677 份 chkBSYTB 全是 false（全语料
+    #   true 出现 0 次），且与 TBLX=不打卡板 无联动 → 不再勾选
+    assert result["chkBSYTB"] is False, "不使用台板不勾选（语料证伪了 10-30 的 true）"
     assert result["SHFS"] == "FOB(NGV)" and result["BZFS"] == "纸箱包装"
     assert result["TBLX"] == "不打卡板"
     # 业务决定（2026-09-24 第二批）：PXH 显式留空（模板默认 1 必须清掉）；

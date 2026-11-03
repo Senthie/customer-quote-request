@@ -241,7 +241,9 @@ def test_偏好表_NGV_业务给的默认值落在默认值层():
         "BZFS": "纸箱包装", "TBLX": "不打卡板", "BZ": "美元", "SHFS": "FOB(NGV)",
         "ZXLB": "普通纸箱", "ZBLX": "A=B双坑纸板", "ZXFS": "平装",
         "DKMC": "B3B坑纸板", "YSLX": "FOB(拼柜)", "SHDQ": "FOB(NGV)",
-        "chkBSYTB": True,
+        # ★ 2026-11-03 语料校准：2677 份真实 NGV 单据 chkBSYTB 全是 false，
+        #   全语料 18476 份 true 出现 0 次 → 撤销 10-30 的 true
+        "chkBSYTB": False,
     }
     defaults = ngv.erp_default_values()
     fixed = ngv.erp_fixed_values()

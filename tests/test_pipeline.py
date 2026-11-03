@@ -40,16 +40,21 @@ EXPECTED_VALUES = {
     "CPSX": "3岁以上（要寄第三方测试）",  # 样本：Target Age Group=7+ 且 Safety Checks=Y
     "JHRQ": "2027-05-01",
     "KHDH": "23992 / 23993",
+    # ★ 2026-11-03 语料校准：igl（ERP 客户代码 IBL10）2520 份单据里 SHFS 99% 是
+    #   `FOB 盐田`，已写进 igl 档案的 erp_defaults（默认值层，只补空）。
+    #   本样本正文没写交货方式 → 走默认值，故从 UNTOUCHED 移到期望值。
+    "SHFS": "FOB 盐田",
     "CPMS": "",                      # ★ 必须为空：由 agent 亲自撰写
 }
 # 脚本不该碰的字段 → 应等于模板默认值
 # ⚠️ 2026-10-30：`BZFS` 已从这份名单移出 —— 它现在由 `assets/spec_fields.yaml` 从
 #    客户原文推（样本文件里有 `carton` 字样 → `纸箱包装`，那是设计行为，不是「被改写」）。
-#    同类字段（TBLX/SHFS/SHDQ/ZXLB/ZBLX/ZXFS/DKMC/YSLX/BZ/chkBSYTB）仍在名单里：
+# ⚠️ 2026-11-03：`SHFS` 也移出 —— igl 档案新增了 erp_defaults（语料 99% FOB 盐田）。
+#    同类字段（TBLX/SHDQ/ZXLB/ZBLX/ZXFS/DKMC/YSLX/BZ/chkBSYTB）仍在名单里：
 #    这个样本里**没有**它们的证据，所以必须保持模板默认值 —— 正好守住「不许瞎猜」。
 UNTOUCHED = [
     "BDBH", "YWY", "KHZL", "GDY", "Remark", "CPMX",
-    "TBLX", "SHFS", "FSCMC", "OLD_KHDDH", "SFYPJ", "Remark1",
+    "TBLX", "FSCMC", "OLD_KHDDH", "SFYPJ", "Remark1",
     "CPLX", "KHDDH", "ZXLB", "ZBLX", "ZXFS", "DKMC",          # ECPMC 2026-10-21 移出：igl 已开
     "YSLX", "SHDQ", "KHDQ", "BGMS", "Remark4", "Remark3",
 ]

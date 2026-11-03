@@ -12,6 +12,11 @@ id: igl
 name: IGL
 priority: 100
 status: calibrated
+# ERP 里的客户资料代码（KHZL）。真实语料里 IBL10 的单据 CPMC 形如
+# 「Christine 揭盖糊盒套装 NPD2023 Holo Box Disney」——联系人 Christine 与
+# 本档案 4 份 IGL 样本的 Requested By 一致，产品线（Disney 授权书）也对得上。
+# 用 scripts/derive_customer_defaults.py 统计客户默认值时要靠它归组。
+erp_khzl: [IBL10]
 notes: >
   香港书商，报价单是「横向键值对」表格：第一行 Imprint | Autumn | Complexity | Low …
   同一行右侧还可能续上第 3、4 组键值（如 Group/Series Number | | 6366）。
@@ -115,6 +120,22 @@ erp_fixed:
   PXH: 1
   KHMBDJ: 0
   DWMC: 本            # 业务确认 2026-09-23：书版产品单位用「本」（ERP 单位枚举含「本」）
+
+# ── 默认值层（erp_defaults，只补空）──────────────────────────
+# 来源：真实 ERP 语料 /home/claw/train/custom_cpms_requie，IBL10 共 2520 份（2023+）
+# 口径：覆盖率 ≥ 90% 且 一致率 ≥ 90% 才进这里
+#       （用 scripts/derive_customer_defaults.py 重算，口径变了就重跑）。
+# 优先级：客户原文/我的提取有值 → 听客户的；都没有 → 用这里的值。
+erp_defaults:
+  BZFS: 纸箱包装          # 2520/2520，一致 100%
+  SHFS: FOB 盐田          # 2497/2520，一致 99%（次多「送国内」10 份）
+  chkBSYTB: false         # 全语料 false；「不打卡板」与这个勾选框**不联动**（见 spec_fields）
+  chkZDBJF: false
+  chkBSYJZX: false
+# ⚠️ TBLX（台板类型）**故意不设默认**：2520 份里 不打卡板 34% / 欧标松木卡板 27% /
+#    欧式实木 20% …，分布分散（一致率只 34%）。设默认就是瞎猜，宁可问客户。
+# ⚠️ SHDQ / YSLX / ZXLB / ZBLX / ZXFS / DKMC / BZ 七年语料 0 填充 —— 报价阶段本来不填，
+#    不给默认值（填了等于造出历史从未出现过的值）。
 
 # ── 客户偏好表 ──────────────────────────────────────────────
 # 业务 2026-09-24 提出：长期合作客户有稳定口径，要一份「喜爱表」一眼看全、快速填写。

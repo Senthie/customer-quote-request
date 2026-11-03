@@ -707,7 +707,7 @@ width / height / binding / content / content gsm / content paper / printing of c
 所以 NGV 单跑完通常**只剩**「报价截止日期」一条待确认 —— 如果清单里冒出 `Q_BZFS`/`Q_YSLX`
 之类的规格缺口，说明 `erp_defaults` 那 11 条没生效（先查档案与 `erp_fixed`/`erp_defaults`
 是否重复声明，`--validate` 会拦）。
-| `chkBSYTB` 不使用台板 | `true` | checkbox | 历史导出是 `false`，旧数据作废 |
+| `chkBSYTB` 不使用台板 | **`false`** | checkbox | ★ **2026-11-03 语料证伪**：18476 份真实单据 true 出现 **0 次**，且 `TBLX=不打卡板` 的 7236 份也**全是 false** → 勾选框与 `TBLX` 不联动，**不要勾**。原「历史导出是 false，旧数据作废」的判断是错的，见 `customer-quote-request/references/erp-corpus-ground-truth.md` |
 
 **机制**（细节与坑见总纲 `references/erp-defaults-vs-fixed.md`）：
 
@@ -722,6 +722,15 @@ width / height / binding / content / content gsm / content paper / printing of c
 不会进 `BZFS`** —— 所以现在这 11 条实际上是「挂在默认值名下的固定值」。
 要真正实现「客户写了听客户的」，需要业务给「德/英原文 → ERP 下拉 label」对照表，
 再写成 `rules.*_terms` 关键词映射。**交付时别向业务宣称「客户写什么就填什么」** —— 目前不成立。
+
+> 📎 **★ 2026-11-03 语料校准（18476 份真实报价单）推翻了三条假设**，细节与命令见
+> `customer-quote-request/references/erp-corpus-ground-truth.md`。一句话版本：
+> - 报价阶段真实有值的只有 `BZFS`/`TBLX`/`SHFS`/`SFYPJ`（99-100%）；`SHDQ`/`YSLX`/`ZXLB`/
+>   `ZBLX`/`ZXFS`/`DKMC`/`BZ`/`CPDL` **六年 0 填充** —— 那 7 条默认值是业务新要求，不是历史做法。
+> - `chkBSYTB` 全语料 true 出现 0 次，与 `TBLX` 无联动（已删 `derive_from`，规则表标 `derivable: false`）。
+> - 「从原文推导」只有 `BZFS` 成立（97% 命中）；`SHFS` 0.7%、`TBLX` 1.6% → 它们实际是**档案默认值**。
+> 改枚举 / 加默认值 / 加推导规则**之前**先跑 `scripts/audit_erp_corpus.py --enums --since 2023`
+> 与 `--customers --check`；判定门槛：众数 <50% 不给默认值（IGL 的 `TBLX` 32% 就是这种）。
 
 要自己复核这个缺口：
 ```bash
@@ -1182,7 +1191,10 @@ uv run ./scripts/customer_profile.py --prefs ngv
 - [ ] `PXH` 空、`Remark3` 空、`SFYPJ`/`Remark1` 空（推不出就留空）
 - [ ] ★ **11 条常用值已落库**（2026-10-30 起，见 §4.2b）：`BZFS` 纸箱包装 / `TBLX` 不打卡板 /
       `BZ` 美元 / `SHFS` FOB(NGV) / `ZXLB` 普通纸箱 / `ZBLX` A=B双坑纸板 / `ZXFS` 平装 /
-      `DKMC` B3B坑纸板 / `YSLX` FOB(拼柜) / `SHDQ` FOB(NGV) / `chkBSYTB` `true`。
+      `DKMC` B3B坑纸板 / `YSLX` FOB(拼柜) / `SHDQ` FOB(NGV) / `chkBSYTB` **`false`**（2026-11-03 更正，
+      语料 true 出现 0 次）。
+      ⚠️ 其中 `SHDQ/YSLX/ZXLB/ZBLX/ZXFS/DKMC/BZ` **7 条在 3183 份真实 NGV 单据里从未填过**
+      —— 属业务新要求，交付汇报里必须写成「按 2026-10-30 业务口径补填」，不许说「历史一致」。
       **括号一律半角**；跑完日志里应有 `客户默认值补空 11 个: …`（少一个就是被谁抢先赋了值，
       查那条「客户默认值**未覆盖**」日志）。`--validate` 必须过。
 - [ ] `YYS`：单语言空 / 提取不到 0 / 多语言为真实数字

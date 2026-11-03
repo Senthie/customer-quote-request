@@ -34,6 +34,9 @@ id: ngv
 name: NGV
 priority: 50
 status: calibrated
+# ERP 里的客户资料代码（KHZL）：NGV10 是主客户，NGVS16 是同集团的第二个资料
+# 代码（德文单，送货 FOB(NGV) 86%）。统计客户默认值时两个合并算。
+erp_khzl: [NGV10, NGVS16]
 notes: >
   NGV（德国/欧洲的 Aldi、Circon 线）的报价需求是德英双语 enquiry 分区表单，
   一张 enquiry 工作表、A1:K32、结构固定。已用 4 份真实附件 + ERP 导出校准。
@@ -304,18 +307,28 @@ erp_fixed:
 #    NGV 用 FOB(拼柜) → 落 FOB(NGV) 在同组内，validate_result 跨字段校验会守住这件事；
 #    改这两个值时两个字段要一起看。
 erp_defaults:
-  BZFS: 纸箱包装          # 包装方式（4 份导出逐字相同）
-  TBLX: 不打卡板          # 台板类型（导出里的 code 06）
+  # 口径：覆盖率 ≥90% 且 一致率 ≥90% 才进「语料证实」组
+  #       （scripts/derive_customer_defaults.py，2023+ NGV10+NGVS16 共 2677 份）
+  #
+  # ① 语料证实的常用值
+  BZFS: 纸箱包装          # 2677/2677，一致 100%
+  TBLX: 不打卡板          # 2676/2677，一致 99.96%（ERP code 06）
   BZ: 美元                # 客户目标价币种（长期口径；询价写别的币种就听客户的）
-  SHFS: FOB(NGV)          # 送货方式（半角括号，ERP 下拉原文）
-  ZXLB: 普通纸箱          # 纸箱类别（导出里是空 → 之前不填，2026-10-30 起补默认）
-  ZBLX: A=B双坑纸板       # 纸板类型（2026-10-30 改口径：选枚举 002；历史导出里的
-                          #   B3B普通芯 不在下拉枚举内，属 ERP 侧旧数据）
+  SHFS: FOB(NGV)          # 2295/2677 = 86%，未过 90% 线，但业务 2026-09-24 已确认该客户走这条；
+                          #   次多 DPU 304 份（德国国内线）→ 客户写 DPU 就听客户的
+  # ② 语料里 0 填充：业务 2026-10-30 要求「报价阶段就补齐」，属**新口径**不是历史做法。
+  #    留着的作用是省手工，但要知道依据是业务要求（不是数据）。
+  ZXLB: 普通纸箱          # 纸箱类别（枚举 code 008）
+  ZBLX: A=B双坑纸板       # 纸板类型（枚举 002）
   ZXFS: 平装              # 装箱方式
-  DKMC: B3B坑纸板         # 底卡名称（注意在 DKMC 下拉里，不在 ZBLX）
-  YSLX: FOB(拼柜)         # 运输类型（半角括号；历史导出里是 FOB(底价) 或空）
-  SHDQ: FOB(NGV)          # 送货地区（联动下拉，无静态枚举）
-  chkBSYTB: true          # 不使用台板（勾选框 → JSON true）
+  DKMC: B3B坑纸板         # 底卡名称（在 DKMC 下拉里，不在 ZBLX）
+  YSLX: FOB(拼柜)         # 运输类型（枚举 015，半角括号）
+  SHDQ: FOB(NGV)          # 送货地区（联动下拉，随运输类型变）
+  # ③ 勾选框：真实单据 2677 份全是 false（全语料 18476 份 true 出现 0 次，且与
+  #    TBLX=不打卡板 无联动）。原写 chkBSYTB: true 与数据相反 → 2026-11-03 改为 false。
+  chkBSYTB: false         # 不使用台板
+  chkZDBJF: false         # 自动报价
+  chkBSYJZX: false        # 不使用纸张
 
 # ── 客户偏好表（业务 2026-09-24 提出：长期合作客户有稳定口径，要一眼看全、快速填写）
 # ───────────────────────────────────────────────────────────────────
@@ -340,7 +353,7 @@ preferences:
   - { field: DKMC,   value: "B3B坑纸板", reason: "底卡名称默认 B3B坑纸板（DKMC 枚举 code 02；历史导出为空）" }
   - { field: YSLX,   value: "FOB(拼柜)", reason: "运输类型默认 FOB(拼柜)（枚举 code 015，2026-10-30 定；历史导出是 FOB(底价) 或空）" }
   - { field: SHDQ,   value: "FOB(NGV)", reason: "送货地区默认 FOB(NGV)（联动下拉、无静态枚举，取值由业务给定；历史导出为空）" }
-  - { field: chkBSYTB, value: true,   reason: "不使用台板默认勾选（历史导出是 false，2026-10-30 改）" }
+  - { field: chkBSYTB, value: false,  reason: "不使用台板不勾选：真实语料 18476 份 true 出现 0 次，且与 TBLX=不打卡板 无联动（2026-11-03 语料校准，撤销 10-30 的 true）" }
   # ── 以下仍是「留空即正确」的字段（推不出来就不猜）──────────────────
   - { field: PXH,    value: "",       reason: "排序号由 ERP/业务侧填 —— 导出 4 份里 3 空 1 填 1，模板默认 1 必须清掉" }
   - { field: SFYPJ,  value: "",       reason: "是否有配件：改由 rules.accessories 推导（有 → true，无 → false），档案不再写死空值" }
