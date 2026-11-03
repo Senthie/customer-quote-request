@@ -67,9 +67,17 @@ def _preference_section(text: str) -> str | None:
     return "\n".join(out)
 
 
+# ── 只对「已校准」的客户强制要求子技能 ───────────────────────────────────
+# status: draft 的档案是**语料铺底**（还没有真实询价文件、fields/detect 都空着），
+# 给它写子技能只能编，等第一份询价来了 calibrate 完再补文档。
+# 这样既保住「线上客户必须有文档」这条铁律，又不让批量建档灌一堆空壳技能。
+def calibrated_profiles() -> list[str]:
+    return [cid for cid in list_profiles() if load_profile(cid).status == "calibrated"]
+
+
 # ── ① 档案 ↔ 子技能一一对应 ─────────────────────────────────────────────
 def test_每个客户档案都有对应子技能():
-    for cid in list_profiles():
+    for cid in calibrated_profiles():
         path = _sub_skill_path(cid)
         assert path.exists(), (
             f"客户档案 customers/{cid}.yaml 没有对应的子技能 {path.relative_to(REPO_ROOT)}。"
@@ -86,7 +94,7 @@ def test_子技能不会指向不存在的客户():
 
 
 def test_子技能名与_frontmatter_一致():
-    for cid in list_profiles():
+    for cid in calibrated_profiles():
         text = _sub_skill_path(cid).read_text(encoding="utf-8")
         front, _ = _split_frontmatter(text)
         name = _frontmatter_value(front, "name")
@@ -101,7 +109,7 @@ def test_子技能名与_frontmatter_一致():
 
 
 # ── ② 子技能内容完整、找得到唯一真源 ────────────────────────────────────
-@pytest.mark.parametrize("cid", list_profiles())
+@pytest.mark.parametrize("cid", calibrated_profiles())
 def test_子技能必备章节齐全(cid):
     text = _sub_skill_path(cid).read_text(encoding="utf-8")
     for section in ("附件长什么样", "坑", "交付检查清单"):
@@ -113,11 +121,11 @@ def test_子技能必备章节齐全(cid):
     assert "uv run" in text, f"customer-quote-{cid} 里应给出可执行的回归/处理命令"
 
 
-@pytest.mark.parametrize("cid", list_profiles())
+@pytest.mark.parametrize("cid", calibrated_profiles())
 def test_子技能不泄露别的客户的专属细节(cid):
     """子技能里只该谈自己那一家（提到别人只允许出现在「别混」这类提醒里）。"""
     text = _sub_skill_path(cid).read_text(encoding="utf-8")
-    others = [o for o in list_profiles() if o != cid]
+    others = [o for o in calibrated_profiles() if o != cid]
     for other in others:
         assert f"customers/{other}.yaml" not in text, (
             f"customer-quote-{cid} 里出现了 customers/{other}.yaml —— 客户细节别串台"
@@ -135,7 +143,7 @@ def test_子技能里的偏好表字段名都对得上档案():
     """
     tpl_keys = set(json.loads(
         (REPO_ROOT / "assets" / "add_customer_quote_request.json").read_text(encoding="utf-8")))
-    for cid in list_profiles():
+    for cid in calibrated_profiles():
         profile = load_profile(cid)
         text = _sub_skill_path(cid).read_text(encoding="utf-8")
         section = _preference_section(text)
@@ -160,7 +168,7 @@ def test_子技能里的偏好表字段名都对得上档案():
 # ── ③ 总纲：路由完整、客户细节不回流 ────────────────────────────────────
 def test_总纲路由表覆盖所有子技能():
     text = ROOT_SKILL.read_text(encoding="utf-8")
-    for cid in list_profiles():
+    for cid in calibrated_profiles():
         assert f"customer-quote-{cid}" in text, (
             f"总纲没有指向 skill customer-quote-{cid} —— 路由表漏了一家"
         )

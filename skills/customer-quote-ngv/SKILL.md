@@ -731,6 +731,15 @@ width / height / binding / content / content gsm / content paper / printing of c
 > - 「从原文推导」只有 `BZFS` 成立（97% 命中）；`SHFS` 0.7%、`TBLX` 1.6% → 它们实际是**档案默认值**。
 > 改枚举 / 加默认值 / 加推导规则**之前**先跑 `scripts/audit_erp_corpus.py --enums --since 2023`
 > 与 `--customers --check`；判定门槛：众数 <50% 不给默认值（IGL 的 `TBLX` 32% 就是这种）。
+>
+> 📎 **把语料变成本档案的 `erp_defaults`**：`scripts/derive_customer_defaults.py --customer ngv`
+> —— 判定用**两个率**（覆盖率 = 有值/全部，一致率 = 众数/有值），双 ≥0.9 才采纳；
+> 产出 `customers/_draft_ngv.erp_defaults.yaml`（带未采纳原因）供人审后并入档案。
+> NGV 实测（2023+ 2677 份）：`BZFS` 2677/2677、`TBLX` 99.96% → 采纳；
+> `SHFS=FOB(NGV)` 只有 **86%** <0.9，但业务 2026-09-24 已定 → **保留并注明「低于阈值、
+> 依据业务口径」**（次多 `DPU` 304 份是德国国内线）。
+> 两率为什么不能合成一个、布尔字符串化会怎样、改默认值要连带动哪四处：
+> `customer-quote-request/references/customer-erp-defaults-derivation.md`。
 
 要自己复核这个缺口：
 ```bash

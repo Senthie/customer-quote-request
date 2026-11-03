@@ -137,11 +137,17 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 > 包装/台板/运输/纸板等 11 个字段（`BZFS` `TBLX` `SHFS` `SHDQ` `ZXLB` `ZBLX` `ZXFS`
 > `DKMC` `YSLX` `chkBSYTB` `BZ`）。IGL 的样本里有 `carton` 字样 → `BZFS=纸箱包装`，
 > 所以它已从 `UNTOUCHED` 移出（留在名单里的那 10 个正好守住「没证据不许碰」）。
-> **IGL 目前没有这 11 条的 `erp_defaults`**（只有公共的 `BZ=美元`），所以推不出来的
-> 8 个字段会进内部确认清单问客户（`Q_TBLX`/`Q_SHFS`/`Q_YSLX`/`Q_SHDQ`/`Q_ZBLX`/
-> `Q_ZXLB`/`Q_ZXFS`/`Q_DKMC`，`blocking=False` 不拦交付）—— 这是**设计行为**，不是漏填；
-> 汇报里要点明「这几个等客户确认」，别再去 `pending/` 里找原因。
-> 若业务给 IGL 一套默认值，写进 `customers/igl.yaml` 的 `erp_defaults` 即可（只补空）。
+> ★★ **2026-11-03 起 IGL 有 `erp_defaults` 了（用语料反推，不是业务口头给的）**：
+> `BZFS=纸箱包装`(2520/2520)、`SHFS=FOB 盐田`(2497/2520)、`chkBSYTB/chkZDBJF/chkBSYJZX=false`。
+> **`TBLX` 故意不设默认** —— 2520 份里一致率只 **34%**（不打卡板 34% / 欧标松木 27% /
+> 欧式实木 20%），给了就是瞎猜。
+> 后果一：IGL 单**现在会自动带上 `SHFS=FOB 盐田`**，`tests/test_pipeline.py` 的 `SHFS`
+> 已从 `UNTOUCHED` 移到 `EXPECTED_VALUES` —— 基线里多这一行不是回归。
+> 后果二：仍进确认清单问客户的只剩 `TBLX` / `SHDQ` / `YSLX` / `ZXLB` / `ZBLX` / `ZXFS` /
+> `DKMC`（`blocking=False` 不拦交付）—— 设计行为，别去 `pending/` 找原因，也别因为
+> 「`SHFS` 突然有值了」去查引擎。
+> ↳ 重算/校准命令、两率判据（覆盖率×一致率，业务确认可越线）、`erp_khzl` 归组：
+> `customer-quote-request/references/customer-erp-defaults-derivation.md`。
 > 机制与坑见 `customer-quote-request/references/spec-fields-and-linked-dropdowns.md`。
 
 > ★ **`ECPMC` 2026-10-21 起不再留空**：业务拍板「IGL 按 NGV 口径做」→ 档案已声明

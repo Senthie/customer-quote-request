@@ -1968,6 +1968,8 @@ customer-quote-request/
 │   ├── cplb_tree.py               # ★ 产品类别树：生成 / 查询 / 校验 / 出 HTML
 │   ├── ingest_email.py            # ★ 邮件入口（附件 + 客户单号 KHDH）
 │   ├── calibrate_customer.py      # ★ 新客户校准器
+│   ├── audit_erp_corpus.py        # ★ 对着 6 年真实 ERP 语料校验 schema 枚举 / 客户默认值
+│   ├── derive_customer_defaults.py # ★ 语料 → 客户 erp_defaults（双率 ≥0.9）+ --bootstrap 批量建档
 │   └── scan_pending.py            # ★ 定时任务入口：扫 pending → 逐份跑 main.py（Web 不抽取）
 │       # （查表能力都在 main.py 里：`--lookup thickness/category/date`，不再单独成脚本）
 ├── tests/                         # 683 项测试（uv run pytest）
@@ -3163,6 +3165,8 @@ PR-00091345）试跑，抓出三处缺陷 —— 都是「**静默算错**」这
 | ➕ `scripts/extract_fields.py` | 【原有】`auto_pairs` 一条规则吃下横向键值对 + 标签行/数据行混排；多工作表取命中最多者并以其它表补缺；**旧布局策略名全部替换** |
 | ➕ `scripts/ingest_email.py` | 邮件入口：`.eml` / `--subject --body --attach` / `--attach-dir`；附件落 pending + sidecar；**从标题/正文取 `KHDH`**；认不出客户时**读附件内容**再判 |
 | ➕ `scripts/calibrate_customer.py` | 新客户校准器：报告「认不出的标签」+ 候选规范键建议，自动过滤值/下拉清单/已登记 extras；输出 `_draft_<id>.yaml` |
+| ➕ `scripts/audit_erp_corpus.py` | 对着 18476 份真实 ERP 报价单（2020–2026）核口径：`--fill` 字段填充率 / `--enums` 真实取值 vs schema 双向差分 / `--customers --check` 档案默认值对账 / `--derive` 可推导性打分 |
+| ➕ `scripts/derive_customer_defaults.py` | 语料 → 客户「常用 ERP 信息」：**覆盖率 × 一致率双 ≥0.9** 才进 `erp_defaults`，布尔还原真 false；`--bootstrap --min-records 100` 给还没收到询价的客户批量建档（`status: draft`，只写语料能证明的部分）。原理与坑见 `references/customer-erp-defaults-derivation.md` |
 | ➕ `tests/` | **72 项测试**（档案层 / 抽取引擎 / 邮件 / 端到端回归），`uv run pytest` |
 | ➕ 依赖 | `pyyaml`（档案）、`pytest`（dev） |
 | ♻️ `scripts/main.py` | **去掉所有客户列名**，改为读规范键 + 档案规则；赋值统计改为**诚实计数**（跑完打印真实被赋值的字段清单）；KHDH 优先级改为「邮件 → 附件列」；输出新增 `.extracted.json` 抽取明细；读邮件 sidecar |

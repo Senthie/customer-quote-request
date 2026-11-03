@@ -102,3 +102,17 @@ def test_只看不写的字段不进草稿(tmp_path, monkeypatch):
     body = out.read_text(encoding="utf-8")
     defaults_block = body.split("erp_defaults:")[1].split("# ──")[0]
     assert "SFYPJ" not in defaults_block and "CPLB" not in defaults_block
+
+
+# ── ⑤ 批量建档的产物必须守规矩 ────────────────────────────────────────
+def test_批量建档的档案都声明了erp_khzl且是draft():
+    """`--bootstrap` 生成的档案：没被真实询价文件验证过，只能是 draft；
+    且必须声明 erp_khzl，否则下次统计无法按代码归组。"""
+    from customer_profile import list_profiles, load_profile
+
+    drafts = [cid for cid in list_profiles() if load_profile(cid).status == "draft"]
+    assert drafts, "至少应有一批语料铺底的 draft 档案"
+    for cid in drafts:
+        profile = load_profile(cid)
+        assert profile.validate() == [], f"{cid} 校验未通过"
+        assert profile.erp_khzl, f"{cid} 缺 erp_khzl 声明（统计归组要用）"

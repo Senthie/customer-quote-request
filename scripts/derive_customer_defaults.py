@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -107,30 +108,19 @@ def coerce(field: str, value: str):
     return value
 
 
-def parse_khzl_list(profile: Path) -> list[str]:
-    """档案可声明 erp_khzl: [NGV10, NGVS16]；没声明就用 id 前缀兜底。"""
-    import yaml
-    try:
-        data = yaml.safe_load(profile.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return []
-    v = data.get("erp_khzl")
-    if isinstance(v, str):
-        return [v]
-    if isinstance(v, list):
-        return [str(x) for x in v]
-    return []
-
-
 def build_customer_map() -> dict[str, list[str]]:
-    """档案 id → ERP 客户代码列表（显式 erp_khzl 优先，否则按 id 前缀匹配）。"""
+    """档案 id → ERP 客户代码列表。
+
+    代码来自档案自己的 `erp_khzl` 声明（CustomerProfile 已解析好，这里不再读 yaml）。
+    没声明 erp_khzl 的档案不参与归组 —— 宁可漏统计，也不要按 id 前缀瞎猜
+    （`IBL10` 和 `igl` 前缀根本对不上）。
+    """
+    from customer_profile import list_profiles, load_profile
     out: dict[str, list[str]] = {}
-    for p in sorted(CUSTOMERS.glob("*.yaml")):
-        if p.name.startswith("_"):
-            continue
-        explicit = parse_khzl_list(p)
-        if explicit:
-            out[p.stem] = explicit
+    for cid in list_profiles():
+        codes = load_profile(cid).erp_khzl
+        if codes:
+            out[cid] = codes
     return out
 
 
@@ -274,6 +264,109 @@ def write_draft(cust: str, pid: str, res: dict, min_rate: float, min_cov: float,
     return out
 
 
+def sanitize_id(code: str) -> str:
+    """ERP 客户代码 → 档案 id：小写、只留字母数字（`FES 22` → `fes22`）。"""
+    return re.sub(r"[^a-z0-9]+", "", code.lower())
+
+
+def corpus_profile(subset: list[dict]) -> str:
+    """一句话画出这个客户的「语料画像」——写进 notes，方便人认人。"""
+    years = sorted({y for d in subset if (y := year_of(d)) is not None})
+    span = f"{years[0]}-{years[-1]}" if years else "年份未知"
+    bits = [f"全部 {len(subset)} 份单据（{span}）"]
+    for f, label in (("CPLB", "常见产品类别"), ("SHFS", "送货方式"), ("BZFS", "包装方式")):
+        c = Counter(fmt_val(d.get(f)) for d in subset if filled(d.get(f)))
+        if c:
+            v, n = c.most_common(1)[0]
+            bits.append(f"{label}「{v}」({n * 100 // sum(c.values())}%)")
+    return "，".join(bits)
+
+
+def bootstrap_profile(cust: str, pid: str, subset: list[dict], res: dict,
+                      args, common_fixed: set[str]) -> Path:
+    """给「还没收到询价文件」的客户建一份**只含语料能证明的部分**的档案。"""
+    adopted = {f: r for f, r in res["rows"].items()
+               if r["tier"] == "采纳" and f in WRITABLE and f not in common_fixed}
+    lines = [
+        "# ═══════════════════════════════════════════════════════════════",
+        f"# 客户档案：{cust}（自动生成草稿 —— 尚未收到询价文件）",
+        "#",
+        f"# 来源：真实 ERP 语料 {args.corpus}",
+        f"#       客户代码 {cust}，{res['total']} 份单据（{args.since}+），年份 {res['years']}",
+        "# 生成：uv run ./scripts/derive_customer_defaults.py --bootstrap",
+        "#",
+        f"# 这份档案只含**语料能证明的部分**：erp_defaults 的门槛是覆盖率 ≥{args.min_cov:.0%}",
+        f"# 且一致率 ≥{args.min_rate:.0%}。fields / detect / rules **必须等第一份真实询价",
+        "# 文件来了再校准** —— 现在写等于凭空猜列名（用 scripts/calibrate_customer.py）。",
+        "# status 保持 draft：没被真实询价文件验证过，不进自动识别。",
+        "# ═══════════════════════════════════════════════════════════════",
+        f"id: {pid}",
+        f"name: {cust}",
+        "priority: 10",
+        "status: draft",
+        f"erp_khzl: [{cust}]",
+        "notes: >",
+        f"  语料画像：{corpus_profile(subset)}。",
+        f"  默认值只用其中 {res['total']} 份（{args.since}+）统计 —— 更早的取值是 ERP 下拉"
+        "规范化前的废弃写法。",
+        "  尚未收到询价文件；解析规则（fields / detect / rules）待校准。",
+        "",
+        "# ── 1. 身份识别：还不知道他们的文件名/标签长什么样，先留空 ──────────",
+        "detect:",
+        "  filename_keywords: []",
+        "  label_signatures: []",
+        "",
+        "# ── 2. 列名别名表：等真实询价文件──────────────────────────────",
+        "fields: {}",
+        "",
+        "# ── 3. 默认值层：语料统计出来的常用值（只补空，客户写明了听客户的）──",
+        "erp_defaults:",
+    ]
+    if not adopted:
+        lines.append("  {}   # 语料里没有字段同时满足覆盖率与一致率阈值")
+    for f, r in adopted.items():
+        val = coerce(f, r["mode"])
+        lines.append(
+            f"  {f}: {json.dumps(val, ensure_ascii=False)}"
+            f"    # {WRITABLE[f]}：覆盖 {r['coverage'] * 100:.0f}%"
+            f"（{r['n_filled']}/{res['total']}），一致 {r['rate'] * 100:.0f}%"
+        )
+
+    lines += ["", "# ── 人看的偏好表（必须与上面落库值一致，校验器会拦）───────────"]
+    if adopted:
+        lines.append("preferences:")
+        for f, r in adopted.items():
+            val = coerce(f, r["mode"])
+            shown = json.dumps(val, ensure_ascii=False) if not isinstance(val, bool) else str(val).lower()
+            lines.append(
+                f"  - {{ field: {f}, value: {shown},"
+                f" reason: \"语料 {r['n_filled']}/{res['total']} 份一致 {r['rate'] * 100:.0f}%"
+                f"（覆盖 {r['coverage'] * 100:.0f}%）\" }}"
+            )
+    else:
+        lines.append("preferences: []")
+
+    leftovers = [(f, r) for f, r in res["rows"].items()
+                 if f in WRITABLE and r["tier"] != "采纳" and f not in common_fixed]
+    if leftovers:
+        lines += ["", "# ── 没给默认值的字段（不是漏了，是数据不支持）──────────────"]
+        for f, r in leftovers:
+            if r["tier"] == "从不填":
+                why = "语料 0 填充（报价阶段不填）"
+                val = ""
+            elif r["tier"] == "需业务定(不稳定)":
+                why = f"只 {r['rate'] * 100:.0f}% 一致，每单在变"
+                val = str(r["mode"])
+            else:
+                why = f"覆盖仅 {r['coverage'] * 100:.0f}%"
+                val = str(r["mode"])
+            lines.append(f"#   {f:<10} {val[:24]:<26} {why}")
+
+    out = CUSTOMERS / f"{pid}.yaml"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="从真实 ERP 语料反推客户常用字段")
     ap.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
@@ -285,6 +378,9 @@ def main() -> None:
     ap.add_argument("--min-records", type=int, default=30)
     ap.add_argument("--json", action="store_true", help="额外打印 JSON（erp_defaults 字典）")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不写草稿文件")
+    ap.add_argument("--bootstrap", action="store_true",
+                    help="给单据数达标的客户直接建档案 customers/<id>.yaml（已存在则跳过）")
+    ap.add_argument("--force", action="store_true", help="--bootstrap 时覆盖已存在档案")
     args = ap.parse_args()
 
     recs = load(args.corpus)
@@ -295,6 +391,41 @@ def main() -> None:
         k = fmt_val(d.get("KHZL") or "")
         if k:
             groups.setdefault(k, []).append(d)
+
+    # ── 批量建档：单据数达标的客户，即使还没收到询价文件也先把业务数据铺好 ──
+    if args.bootstrap:
+        from customer_profile import DEFAULTS_ID, load_profile
+        common_fixed = set(load_profile(DEFAULTS_ID).erp_fixed_values())
+        made, existed, small = [], [], []
+        for code in sorted(groups, key=lambda c: -len(groups[c])):
+            n = len(groups[code])
+            if n < args.min_records:
+                small.append((code, n))
+                continue
+            pid = sanitize_id(code)
+            target = CUSTOMERS / f"{pid}.yaml"
+            # 已经有档案认领了这个客户代码（如 NGV10→ngv），别再建一份重复的
+            owner = resolve(code, profiles)
+            if owner or (target.exists() and not args.force):
+                existed.append(f"{code}→{owner or pid}")
+                continue
+            res = analyse(groups[code], args.since, args.min_rate, args.min_cov)
+            if args.dry_run:
+                adopted = sum(1 for f, r in res["rows"].items()
+                              if r["tier"] == "采纳" and f in WRITABLE and f not in common_fixed)
+                print(f"  （dry-run）{pid:<10} {n:5d} 份  默认值 {adopted} 个")
+                made.append((code, pid, n, adopted))
+                continue
+            out = bootstrap_profile(code, pid, groups[code], res, args, common_fixed)
+            adopted = sum(1 for f, r in res["rows"].items()
+                          if r["tier"] == "采纳" and f in WRITABLE and f not in common_fixed)
+            made.append((code, pid, n, adopted))
+            print(f"  建档 {pid:<10} {n:5d} 份  默认值 {adopted} 个  → {out.relative_to(REPO)}")
+        print(f"\n新建 {len(made)} 份档案；已存在跳过 {len(existed)} 个"
+              f"（{', '.join(existed) if existed else '无'}）；"
+              f"单据 < {args.min_records} 份的 {len(small)} 个客户未建档"
+              f"（共 {sum(n for _, n in small)} 份）")
+        return
 
     targets: list[tuple[str, str]] = []
     if args.customer:

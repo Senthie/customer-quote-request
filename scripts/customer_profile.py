@@ -114,6 +114,17 @@ def profiles_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "customers"
 
 
+def _as_str_list(value: Any) -> list:
+    """`erp_khzl: NGV10` / `[NGV10, NGVS16]` 两种写法都接受，统一成字符串列表。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return []
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """递归合并：dict 逐键合并，其它类型（含 list）整体替换。"""
     out = copy.deepcopy(base)
@@ -211,6 +222,9 @@ class CustomerProfile:
     ignored_labels: list = field(default_factory=list)
     sections: list = field(default_factory=list)
     preferences: list = field(default_factory=list)
+    # ERP 客户资料代码（KHZL，如 NGV10 / IBL10 / "FES 22"）：语料统计要按它归组。
+    # 一个档案可对应多个代码（NGV = NGV10 + NGVS16）。
+    erp_khzl: list = field(default_factory=list)
     source_path: Optional[Path] = None
     # 内部：别名索引 [(归一化别名, 规范键)]，按别名长度倒序（最长优先）
     _alias_index: list = field(default_factory=list, repr=False)
@@ -235,6 +249,7 @@ class CustomerProfile:
             ignored_labels=list(raw.get("ignored_labels") or []),
             sections=list(raw.get("sections") or []),
             preferences=list(raw.get("preferences") or []),
+            erp_khzl=_as_str_list(raw.get("erp_khzl")),
             source_path=source_path,
         )
         prof._build_alias_index()
