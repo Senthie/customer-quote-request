@@ -148,6 +148,14 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 > 「`SHFS` 突然有值了」去查引擎。
 > ↳ 重算/校准命令、两率判据（覆盖率×一致率，业务确认可越线）、`erp_khzl` 归组：
 > `customer-quote-request/references/customer-erp-defaults-derivation.md`。
+>
+> 🔁 **跑回归/校准样本前先看两条**：
+> - 批量建档（`--bootstrap --min-records 100` 给还没收到询价的客户铺默认值、draft 档案约定、
+>   子技能只对 calibrated 强制）→ `customer-quote-request/references/batch-profile-bootstrap.md`
+> - **别直接拿仓库样本跑 `main.py`**（`customer-files/processed/*/PUZZLE COLOUR DISNEY.xlsx`
+>   是 test_pipeline 的基线，跑一次就没了）—— 用
+>   `customer-quote-request/scripts/run_sample_safely.sh <样本> --customer igl`，
+>   原理与恢复办法见 `customer-quote-request/references/pipeline-local-run-safety.md`。
 > 机制与坑见 `customer-quote-request/references/spec-fields-and-linked-dropdowns.md`。
 
 > ★ **`ECPMC` 2026-10-21 起不再留空**：业务拍板「IGL 按 NGV 口径做」→ 档案已声明

@@ -740,6 +740,13 @@ width / height / binding / content / content gsm / content paper / printing of c
 > 依据业务口径」**（次多 `DPU` 304 份是德国国内线）。
 > 两率为什么不能合成一个、布尔字符串化会怎样、改默认值要连带动哪四处：
 > `customer-quote-request/references/customer-erp-defaults-derivation.md`。
+>
+> 🔁 **跑回归/校准样本前先看两条**：
+> - 批量建档（`--bootstrap --min-records 100` 给还没收到询价的客户铺默认值、draft 档案约定、
+>   子技能只对 calibrated 强制）→ `customer-quote-request/references/batch-profile-bootstrap.md`
+> - **别直接拿仓库样本跑 `main.py`** —— 它会移走输入文件，`test_pipeline` 会静默 skip 全绿。
+>   用 `customer-quote-request/scripts/run_sample_safely.sh <样本> --customer ngv`，
+>   原理与恢复办法见 `customer-quote-request/references/pipeline-local-run-safety.md`。
 
 要自己复核这个缺口：
 ```bash

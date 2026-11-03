@@ -103,6 +103,8 @@ uv run ./scripts/customer_profile.py --validate && uv run pytest -q
 
 ## 7. 批量建档的边界
 
+- **阈值（业务 2026-11-03 森西拍板）**：语料里单据 **> 100 份**才建档；**≤ 100 份明确不建档**
+  （175 个客户 / 2399 份，平均 13 份，统计不可信）—— 等真实询价来了再按 README 的 3 步走。
 - `--bootstrap` 只写**语料能证明的部分**：`erp_defaults` + `erp_khzl` + notes 里的语料画像。
 - `fields / detect / rules` 一律留空，`status: draft` —— 没收到真实询价文件，写解析规则就是猜列名。
 - 子技能只对 `status: calibrated` 强制要求（`tests/test_skill_docs.py::calibrated_profiles`），

@@ -12,11 +12,14 @@ id: igl
 name: IGL
 priority: 100
 status: calibrated
-# ERP 里的客户资料代码（KHZL）。真实语料里 IBL10 的单据 CPMC 形如
-# 「Christine 揭盖糊盒套装 NPD2023 Holo Box Disney」——联系人 Christine 与
-# 本档案 4 份 IGL 样本的 Requested By 一致，产品线（Disney 授权书）也对得上。
+# ERP 里的客户资料代码（KHZL）。
+# ★ 语料实测是 **IBL10**（3123 份，2020–2026）：单据 `CPMC` 直接写着
+#   `IGLOO-贴纸锁线胶装书-…`，IBL = IGLOO Books Ltd（本档案 = Igloo Books）
+#   → IBL10 就是 igl，不是别家。
+# ★ 森西 2026-11-03 口述「真实代码是 IGL10」：语料里查不到 IGL10，两个都收进来 ——
+#   哪天 ERP 侧把资料代码改成 IGL10，统计/校准自动接上，不用再改档案。
 # 用 scripts/derive_customer_defaults.py 统计客户默认值时要靠它归组。
-erp_khzl: [IBL10]
+erp_khzl: [IBL10, IGL10]
 notes: >
   香港书商，报价单是「横向键值对」表格：第一行 Imprint | Autumn | Complexity | Low …
   同一行右侧还可能续上第 3、4 组键值（如 Group/Series Number | | 6366）。
