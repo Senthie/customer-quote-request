@@ -262,3 +262,39 @@ def test_cli_file(tmp_path):
     assert L.main([str(p)]) == 0
     p.write_text(json.dumps({"CPMS": GOOD.replace("\n", "\r\n")}, ensure_ascii=False), encoding="utf-8")
     assert L.main([str(p)]) == 1
+
+
+# ── 6. 规格属性该在字段里，不在正文（业务 2026-10-30）──────────────
+def test_CPMS090_正文写了规格但字段空着():
+    """业务 2026-10-30：「这些值由你推导出，并且填到对应的值，这样也可以减轻
+    CPMS 的负担」—— 正文写了纸箱包装、字段 `BZFS` 却空着，就是漏落字段。"""
+    record = {"BZFS": "", "TBLX": "", "ZBLX": "", "ZXFS": "", "DKMC": "", "ZXLB": ""}
+    text = ("书籍方向：【长书脊】产品规格：【228.6*254*0】\n\n"
+            "封面：300g单粉(FSC)，4C/0C\n内文：24PP，350g单粉(FSC)，4C/4C\n"
+            "装订：锁线胶装\n包装：纸箱包装\n装箱：40本/箱\n")
+    codes = {f.code for f in L.lint_text(text, SPEC, record) if f.code.startswith("CPMS09")}
+    assert "CPMS090" in codes, [f.as_dict() for f in L.lint_text(text, SPEC, record)]
+
+
+def test_CPMS100_字段已有值正文重复就提示删():
+    """字段已承载 → 正文再写一遍是重复（`cpms_dup_warn` 只管物理规格类，
+    运输/币种这类会合理出现在「客户目标价」行的不在此列）。"""
+    record = {"BZFS": "纸箱包装", "TBLX": "", "ZBLX": "", "ZXFS": "", "DKMC": "", "ZXLB": "",
+              "SHFS": "FOB 盐田", "BZ": "美元"}
+    text = ("书籍方向：【长书脊】产品规格：【228.6*254*0】\n\n"
+            "封面：300g单粉(FSC)，4C/0C\n内文：24PP，350g单粉(FSC)，4C/4C\n"
+            "装订：锁线胶装\n包装：纸箱包装\n装箱：40本/箱\n"
+            "客户目标价：FOB 盐田，美元 0.85\n")
+    found = [f for f in L.lint_text(text, SPEC, record)]
+    codes = {f.code for f in found}
+    assert "CPMS100" in codes, [f.as_dict() for f in found]
+    # 运输/币种类的重复不报（它们在「客户目标价」行是正常写法）
+    dup_msgs = " ".join(f.msg for f in found if f.code == "CPMS100")
+    assert "SHFS" not in dup_msgs and "BZ=" not in dup_msgs, dup_msgs
+
+
+def test_没有record时CPMS090不判():
+    """`--text` 模式没有字段可对照 → 不能凭空报「字段空着」。"""
+    text = "书籍方向：【长书脊】产品规格：【228.6*254*0】\n包装：纸箱包装\n"
+    codes = {f.code for f in L.lint_text(text, SPEC)}
+    assert "CPMS090" not in codes and "CPMS100" not in codes

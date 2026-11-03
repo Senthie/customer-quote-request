@@ -1,0 +1,161 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# 「规格 / 物流」11 字段的推导表 —— 客户原文有证据就落字段，别塞进 CPMS 正文
+#
+# 业务背景（业务 2026-10-30，森西原话）：
+#   「BZFS TBLX SHFS SHDQ ZXLB ZBLX ZXFS DKMC YSLX chkBSYTB BZ：没有一处推导代码。
+#    我认为在你填写 CPMS 的时候，这些值由你推导出，并且填到对应的值，
+#    这样也可以减轻 CPMS 的负担。」
+#
+# 也就是说这 11 个字段以前只有两种来源：客户档案 `erp_fixed`（写死）和
+# `erp_defaults`（补空默认值），没有任何一处从**客户原文**推。于是这些信息
+# 全被写进 `CPMS` 的产品描述里（纸箱包装/不打卡板/FOB…），字段却空着 ——
+# 业务核对时还要反着从描述里抄回字段。
+#
+# 优先级（与 main.py 一致，从高到低）：
+#   ① 客户原文证据 → 本文件的 `evidence`（命中即赋值，**必须留证据原文**）
+#   ② 客户档案 `erp_defaults` → main.py step13b 兜底（只补空）
+#   ③ 都没有 → 字段留空，进内部确认清单问客户（**不猜**）
+#
+# ⚠️ 三条硬规矩
+#   1. `match` 只写**客户文件里真实出现过的说法**。宁可推不出来（走默认值/问客户），
+#      也不要写一条自己编的同义词 —— ERP 对枚举外的值是**静默丢弃**，错了不报错。
+#   2. 命中多个规则时**按本文件顺序先到先得**，所以具体的（`FOB蛇口`）要写在
+#      笼统的（`FOB`）前面，否则笼统规则会把具体的吃掉。
+#   3. `cpms_keywords` 是给 `cpms_lint` 用的：CPMS 正文出现这些词，说明这内容
+#      本来该在字段里 —— 字段空着就提示搬过去，字段已有值就提示正文可删。
+#
+# 维护：新增说法直接往对应字段的 `evidence` 里加，并在 `tests/test_spec_fields.py`
+# 补一条「这个说法 → 这个枚举」的用例；改枚举值前先看 assets/erp_form_schema.yaml。
+# ═══════════════════════════════════════════════════════════════════════════
+version: 1
+captured_at: "2026-10-30"
+source: "业务（森西）2026-10-30：写 CPMS 时顺手推导这 11 个字段，减轻 CPMS 正文负担"
+
+fields:
+
+  # ── 币种：客户目标价用什么货币结算（最常出现在询价正文）───────────────
+  # 实测语料：`€` 12 次 / `USD` 12 次 / `$` 12 次（147 份客户原文扫描）
+  BZ:
+    label: 客户目标价币种
+    evidence:
+      - { match: '€|\bEUR\b|欧[元罗]',              value: 欧元 }
+      - { match: '\bUSD\b|US\s*\$|美[元金]',        value: 美元 }
+      - { match: '\bRMB\b|\bCNY\b|人民币',          value: 人民币 }
+      - { match: '\bHKD\b|港[币元]',                value: 港币 }
+      - { match: '\bGBP\b|£|英镑',                  value: 英镑 }
+      - { match: '\bJPY\b|日元|円',                 value: 日元 }
+    cpms_keywords: ["目标价", "币种", "美元", "欧元", "人民币"]
+
+  # ── 包装方式：外包装用什么（纸箱 / 牛皮纸 / 胶袋 / 卡板摆放）───────────
+  # 实测语料：`carton` / `export carton` 46 次 —— 这是最常见的证据。
+  BZFS:
+    label: 包装方式
+    evidence:
+      - { match: '(?i)\b(?:export\s+)?cartons?\b|Karton(?:s|agen)?\b|纸箱',  value: 纸箱包装 }
+      - { match: '(?i)kraft\s*paper|牛皮纸',                                  value: 牛皮纸包装 }
+      - { match: '(?i)poly\s*bag|polybag|OPP\s*bag|胶袋',                     value: 胶袋包装 }
+    cpms_dup_warn: true          # 值写进正文就是重复（CPMS100 会提示删）
+    cpms_keywords: ["包装方式", "纸箱包装", "牛皮纸包装", "胶袋包装"]
+
+  # ── 台板类型 + 不使用台板（勾选框）：两者是一件事的两面 ────────────────
+  # 「不打托盘 / 无卡板 / Kartonage」→ 不打卡板 + chkBSYTB=true；
+  # 客户写了具体卡板规格（1.2*0.8 欧式…）→ 按原文对枚举，对不上就不猜。
+  # 实测语料：pallet 在客户原文里 0 次命中 —— 所以这一条基本走档案默认值。
+  TBLX:
+    label: 台板类型
+    evidence:
+      - { match: '(?i)no\s+pallets?|ohne\s+palette|not?\s+on\s+pallets?|不(?:打|用)卡板|不(?:打|用)台板|无卡板|不用托盘', value: 不打卡板 }
+      - { match: '1\.2\s*(?:m|\*)\s*\*?\s*0\.8\s*m?.*欧式.*实木',  value: 1.2m*0.8m(欧式)实木消毒卡板 }
+      - { match: '1\.2\s*\*\s*1\.0\s*m?.*欧式.*实木',               value: 1.2*1.0m(欧式)实木消毒卡板 }
+    cpms_dup_warn: true          # 值写进正文就是重复（CPMS100 会提示删）
+    cpms_keywords: ["台板", "卡板", "托盘"]
+  chkBSYTB:
+    label: 不使用台板
+    # 与 TBLX 联动：TBLX=不打卡板 → 这个勾选框必须是 true（业务口径：勾选框和
+    # 下拉是同一件事）。客户原文单独只写「不打托盘」也认（见上面 evidence）。
+    derive_from: { field: TBLX, when_value: 不打卡板, then: true }
+    evidence:
+      - { match: '(?i)no\s+pallets?|ohne\s+palette|不(?:打|用)卡板|不(?:打|用)台板|无卡板|不用托盘', value: true }
+    cpms_keywords: ["不使用台板"]
+
+  # ── 送货方式 / 运输类型 / 送货地区：三件套，同一个交货条件 ─────────────
+  # 实测语料：`FOB` 26 次（`FOB (Incoterms 2020)` / `free Harbour (FOB)`）。
+  # ⚠️ 只说 `FOB` 不指定口岸 → 口岸推不出来（NGV 是 `FOB(拼柜)`、IGL 常走盐田），
+  #    宁可留空让客户档案默认值兜，也不要瞎猜 —— 派生一个错口岸 = 报价基数错。
+  # ⚠️ `free Harbour (FOB)` 也**不认**：它只说「母港/自由港交货」，没写哪个口岸
+  #    （NGV 的 Rossmann 单就是这种），映射到香港/FOBHK 属于编 —— 留空比猜错好。
+  SHFS:
+    label: 送货方式
+    evidence:
+      - { match: '(?i)fob\s*(?:深圳)?\s*盐田|盐田港?',   value: FOB 盐田 }
+      - { match: '(?i)fob\s*蛇口|蛇口',                  value: FOB蛇口 }
+      - { match: '(?i)fob\s*(?:香港|hk)\b', value: FOB 香港 }
+      - { match: '(?i)\bCIF\b',                          value: CIF }
+      - { match: '(?i)\bDAP\b',                          value: DAP }
+      - { match: '(?i)\bDPU\b',                          value: DPU }
+      - { match: '(?i)factory\s*pick|工厂自提|\bEXW\b',   value: 工厂自提 }
+    cpms_keywords: ["送货方式", "FOB", "CIF", "DAP", "DPU"]
+  YSLX:
+    label: 运输类型
+    evidence:
+      - { match: '(?i)fob\s*(?:深圳)?\s*盐田|盐田港?',   value: FOB盐田(普通) }
+      - { match: '(?i)fob\s*蛇口|蛇口',                  value: FOB蛇口 }
+      - { match: '(?i)fob\s*(?:香港|hk)\b', value: FOBHK }
+      - { match: '(?i)\bCIF\b',                          value: CIF }
+      - { match: '(?i)\bDPU\b',                          value: DPU }
+      - { match: '(?i)factory\s*pick|工厂自提|\bEXW\b|送国内|内销', value: 国内 }
+    cpms_keywords: ["运输类型", "FOB", "CIF", "DPU"]
+  SHDQ:
+    label: 送货地区
+    # 可选值由 YSLX 决定（SHDQ.linked_to，业务 2026-10-30）：外贸 8 种共用一套、
+    # 国内一套。这里只按**客户明确写的送货地**推，不从 YSLX 反推（没有 1:1 关系：
+    # FOB(拼柜) 可以走盐田/蛇口/N…，NGV 走的是 FOB(NGV)）。
+    evidence:
+      - { match: '(?i)盐田',                    value: FOB盐田(普通) }
+      - { match: '(?i)蛇口',                    value: FOB蛇口 }
+      - { match: '(?i)香港|\bHK\b', value: 香港 }
+      - { match: '(?i)日本|Tokyo|Tokio',         value: 日本（Tokyo） }
+      - { match: '(?i)东莞凤岗|凤岗',            value: 东莞凤岗 }
+      - { match: '(?i)深圳(?!\s*盐田)',          value: 深圳 }
+      - { match: '(?i)factory\s*pick|工厂自提',   value: 工厂自提 }
+    cpms_keywords: ["送货地区"]
+
+  # ── 纸箱 / 纸板 / 装箱方式 / 底卡：物理包装规格 ────────────────────────
+  # 客户很少写（要写就写得很具体），所以这些多数走客户档案默认值。
+  # ⚠️ `A=B`/`B3B`/`K=K` 这类坑纸型号在**材料描述**里出现 —— 那是「用纸」，
+  #    不等于「纸箱纸板等级」。只有原文明确说**外箱/纸板**（carton board /
+  #    Wellpappe / 纸箱）时才认，避免把内文用纸当成外箱材质。
+  ZBLX:
+    label: 纸板类型
+    evidence:
+      - { match: '(?i)(?:纸箱|外箱|carton|wellpappe)[^。\n]{0,40}\bK=K\b[^。\n]{0,10}耐破', value: K=K加强芯(耐破) }
+      - { match: '(?i)(?:纸箱|外箱|carton|wellpappe)[^。\n]{0,40}\bK=K\b',  value: K=K加强芯双坑箱 }
+      - { match: '(?i)(?:纸箱|外箱|carton|wellpappe)[^。\n]{0,40}\bA=A\b',  value: A=A双坑纸板 }
+      - { match: '(?i)(?:纸箱|外箱|carton|wellpappe)[^。\n]{0,40}\bA3B\b',  value: A3B单坑纸板 }
+      - { match: '(?i)(?:纸箱|外箱|carton|wellpappe)[^。\n]{0,40}\bA=B\b',  value: A=B双坑纸板 }
+    cpms_dup_warn: true          # 值写进正文就是重复（CPMS100 会提示删）
+    cpms_keywords: ["纸板类型"]
+  ZXLB:
+    label: 纸箱类别
+    evidence:
+      - { match: '(?i)天地盖\s*(?:纸箱|盒)?|two[- ]piece\s*carton', value: 天地盖纸箱 }
+      - { match: '(?i)半翼箱|half[- ]slotted',                     value: 半翼箱纸箱 }
+      - { match: '(?i)特殊纸箱|special\s*carton',                  value: 特殊纸箱 }
+    cpms_dup_warn: true          # 值写进正文就是重复（CPMS100 会提示删）
+    cpms_keywords: ["纸箱类别"]
+  ZXFS:
+    label: 装箱方式
+    evidence:
+      - { match: '(?i)flat[- ]?pack|flach\s*liegend|平放|平装',      value: 平装 }
+      - { match: '(?i)upright|stehend|竖放|竖装',                    value: 竖装 }
+    cpms_dup_warn: true          # 值写进正文就是重复（CPMS100 会提示删）
+    cpms_keywords: ["装箱方式", "平装", "竖装"]
+  DKMC:
+    label: 底卡名称
+    evidence:
+      - { match: '(?i)底卡[^。\n]{0,20}B3B|\bB3B\b[^。\n]{0,10}底卡',     value: B3B坑纸板 }
+      - { match: '(?i)底卡[^。\n]{0,20}K=K|\bK=K\b[^。\n]{0,10}底卡',     value: K=K加强芯 }
+      - { match: '(?i)底卡[^。\n]{0,20}A=B|\bA=B\b[^。\n]{0,10}底卡',     value: A=B普通芯 }
+      - { match: '(?i)(?:无需|不用|没有)底卡|kein(?:e)?\s*rückkarton',     value: 无需 }
+    cpms_dup_warn: true          # 值写进正文就是重复（CPMS100 会提示删）
+    cpms_keywords: ["底卡"]

@@ -43,9 +43,13 @@ EXPECTED_VALUES = {
     "CPMS": "",                      # ★ 必须为空：由 agent 亲自撰写
 }
 # 脚本不该碰的字段 → 应等于模板默认值
+# ⚠️ 2026-10-30：`BZFS` 已从这份名单移出 —— 它现在由 `assets/spec_fields.yaml` 从
+#    客户原文推（样本文件里有 `carton` 字样 → `纸箱包装`，那是设计行为，不是「被改写」）。
+#    同类字段（TBLX/SHFS/SHDQ/ZXLB/ZBLX/ZXFS/DKMC/YSLX/BZ/chkBSYTB）仍在名单里：
+#    这个样本里**没有**它们的证据，所以必须保持模板默认值 —— 正好守住「不许瞎猜」。
 UNTOUCHED = [
     "BDBH", "YWY", "KHZL", "GDY", "Remark", "CPMX",
-    "BZFS", "TBLX", "SHFS", "FSCMC", "OLD_KHDDH", "SFYPJ", "Remark1",
+    "TBLX", "SHFS", "FSCMC", "OLD_KHDDH", "SFYPJ", "Remark1",
     "CPLX", "KHDDH", "ZXLB", "ZBLX", "ZXFS", "DKMC",          # ECPMC 2026-10-21 移出：igl 已开
     "YSLX", "SHDQ", "KHDQ", "BGMS", "Remark4", "Remark3",
 ]
@@ -251,15 +255,22 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
     assert erp["version"] == profile.version
     # ★ 2026-10-30（B 方案）：格式契约版本单独一个号 —— 不跟口径版本混
     assert erp["schema_version"] == 3, erp["schema_version"]
-    # 内部确认清单：报价已过期 → 一条卡交付的 Q_OFFER_DEADLINE
+    # 内部确认清单：报价已过期 → 一条卡交付的 Q_OFFER_DEADLINE；
+    # ★ 2026-10-30 起还要有「规格/物流字段推不出来」的条目（spec_fields.gap_items）——
+    #   这个夹具用的是空 CustomerData，客户原文没证据、igl 档案也没有默认值，
+    #   所以那 9 个字段（BZFS 除外：模板默认空、且无证据）都会各来一条待确认。
     from question_answers import ITEM_KEYS
     qa = erp["question_answers"]
-    assert isinstance(qa, list) and len(qa) == 1, qa
+    assert isinstance(qa, list) and len(qa) == 10, [q["id"] for q in qa]
     assert list(qa[0]) == list(ITEM_KEYS), "条目必须是固定 9 键（顺序敏感）"
     assert qa[0]["id"] == "Q_OFFER_DEADLINE" and qa[0]["field"] == "Reminder"
     assert qa[0]["status"] == "open" and qa[0]["blocking"] is True
     assert qa[0]["source"] == "pipeline" and qa[0]["answer"] == ""
     assert qa[0]["answered_at"] is None
+    # 规格缺口条目：不卡交付（业务 2026-10-19：装箱待确认也能交付），字段名挂在 field 上
+    spec_gaps = [q for q in qa if q["id"] != "Q_OFFER_DEADLINE"]
+    assert all(q["blocking"] is False for q in spec_gaps), spec_gaps
+    assert {"SHDQ", "YSLX", "ZBLX"} <= {q["field"] for q in spec_gaps}
     for key in tpl_keys:
         assert key in erp, key
 
@@ -272,7 +283,11 @@ def test_step6_内部字段追加与_strip_internal(tmp_path):
     # ③ 没有提醒时 Reminder 是空字符串（不是 null —— null 只留给「值为无」）
     erp3 = _run("no_reminder", False, "")
     assert erp3["Reminder"] == "" and erp3["CPMC_ZH"] == ""
-    assert erp3["question_answers"] == [], "没有待确认项 → 空数组（不是 null）"
+    # question_answers 仍是**数组**（不是 null）；这里没有 deadline、夹具又是空
+    # CustomerData，所以只剩「规格/物流字段推不出来」那批（2026-10-30 起）
+    qa3 = erp3["question_answers"]
+    assert isinstance(qa3, list) and qa3, "应为数组（不是 null）"
+    assert all(q["id"].startswith("Q_") and q["blocking"] is False for q in qa3)
 
 
 # ── 业务决策（2026-09-23）在端到端上的表现 ─────────────────────────────

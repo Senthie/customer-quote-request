@@ -227,6 +227,34 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
                     f"（答完才知道回填哪里），正文只留结论")
     # v2 旧产物没有 question_answers 键 → 不判（不回头改历史产物）
 
+    # ── CPMS090 / CPMS100：规格属性该在 ERP 字段里，不在正文（业务 2026-10-30）──
+    # 业务原话：「这些值由你推导出，并且填到对应的值，这样也可以减轻 CPMS 的负担」。
+    # 判据 = assets/spec_fields.yaml 的 `cpms_keywords`（字段 → 正文里代表这块内容的词）：
+    #   * 字段空着 + 正文提到   → CPMS090：先把值落字段（能推就推，推不出问客户）
+    #   * 字段有值 + 正文重复   → CPMS100：正文可删（只对 cpms_dup_warn 的物理规格类）
+    # `--text` 模式没有 record → 判不了，跳过。
+    if record:
+        try:
+            from spec_fields import load_rules as _spec_field_rules
+            spec_meta = _spec_field_rules().get("fields") or {}
+        except Exception:            # 规则表缺失/损坏 → 不判（不许拖垮 lint）
+            spec_meta = {}
+        for field, meta in spec_meta.items():
+            keywords = [str(k) for k in (meta.get("cpms_keywords") or []) if str(k)]
+            hit = next((k for k in keywords if k in text), "")
+            if not hit:
+                continue
+            label = str(meta.get("label") or field)
+            value = record.get(field)
+            if value in (None, ""):
+                add("CPMS090", 0,
+                    f"正文写了「{hit}」，但 {field}（{label}）是空的 —— 规格属性要落到字段里"
+                    f"（客户原文有证据就推、推不出就问客户，见 assets/spec_fields.yaml）")
+            elif meta.get("cpms_dup_warn") and str(value) in text:
+                add("CPMS100", 0,
+                    f"正文重复了 {field}={value}（{label}）—— 字段已经承载这个值，"
+                    f"正文可删（业务 2026-10-30：减轻 CPMS 负担）")
+
     if len(text.strip()) < 60:
         add("CPMS070", 0, f"CPMS 过短（{len(text.strip())} 字）—— 是否漏了部件或装箱要求")
     elif len(text.strip()) > 4000:

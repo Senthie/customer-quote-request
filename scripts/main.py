@@ -1516,6 +1516,33 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     logger.info("  来源: 无（等待 agent 亲力亲为）")
     default_count += 1
 
+    # ── 13a. 规格 / 物流字段推导（客户原文证据优先，业务 2026-10-30）─────────
+    # 业务原话（森西）：「BZFS TBLX SHFS SHDQ ZXLB ZBLX ZXFS DKMC YSLX chkBSYTB BZ：
+    #   没有一处推导代码。我认为在你填写 CPMS 的时候，这些值由你推导出，并且填到
+    #   对应的值，这样也可以减轻 CPMS 的负担。」
+    # 于是：客户原文里**有证据**就落字段（并留证据原文到日志），没有就交给下一步的
+    # 客户默认值；两者都没有 → 留空 + 内部确认清单问客户（step6，见 spec_fields.gap_items）。
+    # 规则表：assets/spec_fields.yaml；⚠️ 只认客户真实出现过的说法，不猜。
+    # 放在 13b 之前的理由与 13b 的注释一致：`assigned` 只能记录「谁真的给过值」。
+    spec_items = []
+    if str(profile.rule("spec_fields.enabled", True)).strip().lower() not in ("false", "0", "no"):
+        try:
+            from spec_fields import derive as derive_spec_fields, evidence_text as spec_evidence_text
+
+            spec_text = spec_evidence_text(customer_data)
+            spec_items = [item for item in derive_spec_fields(spec_text)
+                          if item["field"] in template and item["field"] not in assigned]
+        except Exception as spec_error:   # 规则表坏了不许拖垮整份报价
+            logger.warn(f"  规格字段推导失败（跳过，走客户默认值）: {spec_error}")
+            spec_items = []
+    for item in spec_items:
+        index = list(template.keys()).index(item["field"]) + 1
+        assign(item["field"], item["value"],
+               f"客户原文证据（{item['field']} ← …{item['evidence']}…）", index)
+    if spec_items:
+        logger.info(f"  规格/物流字段由客户原文推出 {len(spec_items)} 个: "
+                    f"{' '.join(i['field'] for i in spec_items)}")
+
     # ── 13b. 客户默认值 erp_defaults —— **只补空，不覆盖** ──────────────
     # 业务 2026-10-30 拍板（NGV 11 条）：「如果客户的询价文件中没有提到，就使用默认值；
     # 客户写了就听客户的」。与 step 1 的 erp_fixed 是两种口径，别混：
@@ -1986,6 +2013,15 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
             record_fields=erp_fields,
             today=datetime.now().strftime("%Y-%m-%d"),
         )
+        # ★ 2026-10-30（森西）：规格/物流字段推不出来（客户原文没证据、客户档案也没
+        #   默认值）→ 进内部确认清单问客户，别留空让人猜。这些字段本该由我们推，
+        #   见 assets/spec_fields.yaml + main.py step13a。
+        try:
+            from spec_fields import gap_items as spec_gap_items
+            questions = questions + spec_gap_items(
+                record, today=datetime.now().strftime("%Y-%m-%d"))
+        except Exception as gap_error:
+            logger.warn(f"  规格字段缺口清单生成失败（跳过）: {gap_error}")
         providers["question_answers"] = questions
         # Reminder = 卡交付的未确认项文本快照（权威来源是上面的 question_answers）
         providers["reminder"] = questions_reminder_text(questions)

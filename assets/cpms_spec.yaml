@@ -301,3 +301,11 @@ rules:
   #   CPMS 是给客户/ERP 看的成品描述，不是我们的待办本 —— 待办要落到
   #   question_answers（每条记录内的内部确认清单），答完了才知道回填哪里。
   CPMS080: {level: warn,  desc: "CPMS 正文写了「待确认 / 待定 / TBD」，但本条记录没有 field=CPMS 的未关闭确认项 —— 待办要落 question_answers"}
+  # ★ 2026-10-30（森西）：包装/台板/纸箱/纸板/装箱/底卡这些**规格属性**有专门的
+  #   ERP 字段（BZFS / TBLX / ZXLB / ZBLX / ZXFS / DKMC …），该由 `spec_fields`
+  #   从客户原文推出来落字段。写进 CPMS 正文等于同一件事记两处，字段还空着 ——
+  #   业务核对时得反着抄回来。所以：
+  #     CPMS090  字段空着、正文却写了 → 先落字段（能推就推，推不出就问客户）
+  #     CPMS100  字段已有值、正文又逐字写一遍 → 正文可以删（「减轻 CPMS 负担」）
+  CPMS090: {level: warn,  desc: "CPMS 正文写了规格属性（包装/台板/纸板/装箱/底卡），但对应 ERP 字段为空 —— 该落到字段里"}
+  CPMS100: {level: warn,  desc: "CPMS 正文重复了 ERP 字段已有的规格值 —— 正文可删（字段已承载）"}
