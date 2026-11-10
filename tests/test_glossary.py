@@ -4,6 +4,7 @@
 进 ERP 的中文用词优先照它写。测试只钉**判据**，不钉全表内容 ——
 词表会增补，钉死条目会让每次更新都红灯。
 """
+import json
 import sys
 from pathlib import Path
 
@@ -59,3 +60,21 @@ def test_体检只看材料工艺值_跳过叙述段():
 def test_词表外写法会被点名():
     r = G.check("封面：230g单粉卡，4C+UV/0C")
     assert r["zh_unknown"] == ["单粉卡"], "自己另造的近义词必须被点名，别静默放行"
+
+
+def test_check_json逐条体检产物并在有词表外写法时非零退出(tmp_path, capsys):
+    """交付前一条命令：整份 ERP 产物过一遍词表。"""
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps([{"CPMC": "甲", "CPMS": "封面：230g单粉咭(C1S)，4C+UV/0C"}],
+                               ensure_ascii=False), encoding="utf-8")
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps([{"CPMC": "乙", "CPMS": "封面：230g单粉卡，4C+UV/0C"}],
+                              ensure_ascii=False), encoding="utf-8")
+
+    sys.argv = ["glossary.py", "--check-json", str(good)]
+    assert G.main() == 0
+    assert "✅" in capsys.readouterr().out
+
+    sys.argv = ["glossary.py", "--check-json", str(bad)]
+    assert G.main() == 1, "有词表外写法就要非零退出，否则闸门形同虚设"
+    assert "词表外  单粉卡" in capsys.readouterr().out

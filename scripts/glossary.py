@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -154,6 +155,8 @@ def main() -> int:
     ap.add_argument("--search", metavar="EN", help="模糊查（前缀/包含）")
     ap.add_argument("--zh", metavar="中文", help="反查：中文词在词表里吗")
     ap.add_argument("--check", metavar="TEXT", help="体检一段中文/中英混排正文")
+    ap.add_argument("--check-json", metavar="ERP_JSON",
+                    help="体检整份 ERP 产物：逐条记录查 CPMS（交付前一条命令）")
     ap.add_argument("--dump", action="store_true", help="打印全表")
     args = ap.parse_args()
 
@@ -178,6 +181,22 @@ def main() -> int:
         for w in r["zh_unknown"]:
             print(f"未收录  {w}")
         return 0
+    if args.check_json:
+        doc = json.loads(Path(args.check_json).read_text(encoding="utf-8"))
+        records = doc if isinstance(doc, list) else [doc]
+        bad = 0
+        for i, rec in enumerate(records, 1):
+            r = check(rec.get("CPMS") or "", table)
+            print(f"[{i}/{len(records)}] {rec.get('CPMC') or ''}")
+            for en, zhs in r["en_hits"]:
+                print(f"  EN→ZH  {en}\t{' / '.join(zhs)}")
+            if r["zh_unknown"]:
+                bad += 1
+                for w in r["zh_unknown"]:
+                    print(f"  词表外  {w}")
+            else:
+                print("  ✅ 用词全部在内部词表内")
+        return 1 if bad else 0
     if args.dump:
         for en, zhs in table.items():
             for zh in zhs:
