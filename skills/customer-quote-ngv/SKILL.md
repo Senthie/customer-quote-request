@@ -529,6 +529,13 @@ width / height / binding / content / content gsm / content paper / printing of c
 ① **只看表头会误判「客户没给装订/用纸」** —— 规格按 A/B/C 组写在表尾，判「没有」前先整表 dump；
 ② 这种表抽出来的产物是 `32.00;其他` + 全 0，`CPMS011` 会逼你写「0\*0\*0 共 1 款」的假概要行 →
 **CPMS 必须写**（业务 2026-11-03：「CMPS 需要填写」；`CPMS` 空 = `CPMS040` = 未完成、不得交付）。
+> ⚠️ 这条口径当天被推翻过一次（先「不充 CPMS」→ 后「需要填写」）。业务短指令
+> （`不充 CPMS` / `B` / `合并`）怎么判读才不会再翻车 —— **先认牌（本单 vs 长期口径）、
+> 复述确认、撞闸门先报冲突**：见 `references/terse-business-instructions.md`。
+> ⚠️ 定时任务（`*/5` 的 CQR job）还有两个反复踩的坑：**预跑脚本的 `CPMS_TODO` 是启动时快照**
+> （动手前先现跑一次 `cpms_todo.py` + 看产物 mtime），以及**同 repo 可能有另一个 Hermes 会话在写同一份产物**
+> （`sibling subagent` 警告 / mtime 自己变 / 提交前 `git status`，**只 add 自己的文件、永不 `git add -A`**）：
+> 见 `references/cron-concurrency-and-stale-todo.md`。也记着：**不许为了止住重复待办去放宽交付闸门**。
 写法模板（概要用【长书脊】+ `共【款数】款，每款【语言数】语言`，下面 封面/内文/装订/装箱 四段，
 客户没给的包装/转版段落整段不写）：见 `references/anfrage-titel-mengen-表.md` §5。
 出数命令：`parse_titel_mengen.py`（抽结构）→ `titel_mengen_to_erp.py`（结构 + 表尾规格块 +

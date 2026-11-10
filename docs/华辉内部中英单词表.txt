@@ -1,0 +1,615 @@
+2 wire stitching	骑马钉
+board book binding	板纸书(合板)
+3 edges golden gilt	三面烫金边
+book block	毛书
+Accordion	风琴式折页
+both(2/s)side art paper	双粉纸
+acid-free and lignin free paper	无酸及不变色纸
+both side	双面
+acid-free paper	无酸纸
+both side art card	双粉咭(C2S)
+adhesive binding	胶装/无线胶装
+both side art paper	双粉纸(C2S)
+adhesive tape double	双面胶纸
+bound volume	合订书/合订本
+bound edition	合订书/合订本
+adhesive tape single	单面胶纸
+box	盒
+advance copies	新书样本/船头版
+Brazil	巴西
+after-press	印后
+Brochure	小册子
+booklet	小册子
+pamphlet	小册子
+handbook	小册子
+air freight	空运
+airlift	空运
+air-express	空运
+air-ferry	空运
+brown wrapping	牛皮纸
+kraft	牛皮纸
+vellum	牛皮纸
+Album	相簿
+building in	压线/压衬
+Arlin	布纹纸/书皮纸
+bulk	大货/厚度
+arlin paper	书皮纸
+bunting	旗布
+art board	粉咭
+calendering	磨光
+art paper	粉纸
+calender varnishing	磨光
+Artwork	书稿
+carbonless paper	兔炭纸
+Assembly	执件/装配
+card	咭
+Austria	奥地利
+card board	咭纸
+Austrian	奥地利的
+card box	咭盒
+auto-lock	自动扣底
+carton	纸箱
+back board(card)	背板(咭)
+cartridge paper	图画纸
+Backbone	书脊
+case bound	精装
+edition binding	精装
+bamboo spine	竹节脊
+case bound book	精装书
+hardpaper	精装书
+hardcover	精装书
+Bellyband	腰带
+B-flute	坑纸/粗坑纸
+case making	做皮壳
+1 ply B9 corrugated board	B9单层坑纸
+Binding	装订
+case(PLC)	硬皮壳
+binding board	灰板/板纸
+casing in	上皮壳
+Black	黑色
+cassette tape	录音带
+blind blocking	击凹
+cast coated card	玻璃粉咭
+Blister	吸塑
+cast coated paper	玻璃粉纸
+blister card	吸塑咭/商品吊售卡
+catalog	目录册
+blister pack	吸塑罩
+center sewn	车中线
+blister varnishing	吸塑油
+center sewn in two section	车中线手反两贴
+Block	书芯
+chipboard	粗纸板
+blocking	烫金﹑烫色﹑模压
+chrome coated board	玻璃纸
+bluelies	蓝粉/蓝纸
+CIF	到岸价
+blueprints	蓝粉/蓝纸
+clamshell blister	贝壳胶盒,像贝壳一样可以对扣的胶盒
+Blues	蓝粉/蓝纸
+clay coated news back/greyboard	粉灰咭(CCNB)
+Board	咭纸
+clay coated white back	灰心白底(CCWB)
+Board book	板纸书
+clear	透明
+Client	客户
+die-cutting	模切/啤
+Cloth	布
+direct mailing	邮递直销
+display box	展示盒/陈列盒
+coated art kraft board	粉面牛咭
+document	文件
+coated duplex board	粉灰咭
+double wall carton	双坑箱
+double-side tap	双面胶
+coated one side	单粉(C1S)
+doulbling	双钩
+coated paper	铜版纸
+drawn on cover	反封面
+coated two side	双粉(C2S)
+drill hole/bore	钻孔
+collate	排
+dummy	白样(生产前的样本)
+collate card	执咭
+duotone	双色调
+collating	执张/配页
+duplex board	粉灰咭
+colour filter	滤色片
+E-flute	E-坑纸
+colour proof	色稿
+elastic band(round/flat)	橡根带
+colour separation	电子分色(分色/电分)
+Electro-static Printing	静电印刷
+colour woodfree	色书纸
+electro-static vinyl paper	静电纸
+components	黏配件
+embossing	击凸
+concealed wire-o	隐藏式wire-o
+embossing die	击凹凸模
+concertina fold	风琴式折页
+endpaper	衬纸
+concertina bound	风琴折装钉﹐如果用于板纸书指内文对裱
+conference room	会议室
+end-papering	贴衬纸
+confirmed sample	已签署的样本
+endpaper pasted down on cover	封面裱衬纸(扫衬)
+conqueror paper	刚古纸
+endpaper paste on	贴衬
+content	内容/目录/内文
+ends	前后衬纸/封里纸
+copy/copies	本
+envelope	信封
+corner gluing(4 corners)	粘角(四角)
+envelope making	做信封
+correst grain	跟纹/顺纹
+export	出口
+corrugated E-flute box	坑盒
+exported carton	出口纸箱
+corrugated paper/board	瓦楞纸/坑纸
+eyelet	鸡眼
+courier	速递
+fancy paper	花纹纸
+cover	封面
+feather	毛绒
+cover drawn on	反封面
+Figure/iconograph/illustration	图表/插图
+covering	反封面/上封面
+film	菲林
+creasing	啤折线/压折痕
+Finland	芬兰
+Cross grain	不顺纹
+Finnish	芬兰的
+fix(affix)accessories	黏配件
+customer service deparment	客户服务部
+flap	旗/翼仔
+cut flush	切正三边(封面及内文的三边一起切齐)
+flat	平的
+cutting	切纸
+flexible binding	假精装
+Cyan	青蓝
+flexible magnetic rubber	胶磁
+debossing	击凹
+flock paper	植毛(纸)
+delivery note	送货单
+flow chart	流程图
+Diary/daybook	日记簿
+fluorescent	荧光墨/发荧光的
+die cut	啤
+flyeaf	衬纸/封里纸
+die-cut mould	啤板
+Foam/sponge	海绵
+die-cutter	啤机/模切机
+FOB	离岸价
+dividers	烟的士
+foil stamping	烫色
+hickey	墨屎
+folded and gathered	已折和已排但未装订的书(F&G)
+high bulk paper	高容积纸/特厚纸
+folder	档案夹
+high closs varnish	特光
+folding	折/折书/折页
+hinge	书链
+folding box	折盒
+Holland	荷兰
+Folio	页码
+hologram paper(card)	激光纸(咭)
+fore edge	书口/前切线
+hologram stamping	激光烫
+format	格式
+horizontal	横度
+freight	运费
+hot melt	热溶胶
+french fold jacket/slipcase	法式书套
+hot seal	热压/热封口
+Fur	皮毛
+hot stamping	热烫/烫色
+gate fold	拉页
+H/T band	笃(绳)头布(H.T)
+head and rail bands	笃(绳)头布(H.T)
+headband	笃(绳)头布(H.T)
+gatering	排书/配页
+illustrations	插图
+gathering	排书/配书
+image	影像
+ghosting	鬼影
+imitation gold	仿金
+gift box	礼盒
+imposition	拼版
+glassine paper	白腊纸
+Impression	印数/印张/压印
+Gloss(y) art(paper)	光粉纸(G/A)
+imprint	版权页
+Glue	胶水
+gluewater	胶水
+gumwater	胶水
+indent	订货
+gluing	涂胶
+index	索引
+gold blocking	烫金
+indexing	索引裁切/打烟的士
+gold paper(card)	金纸(咭)
+Indonesia	印尼
+gold stamping	金烫/烫金
+Indonesian	印尼的
+Grain direction	丝缕方向/纸纹方向
+information	讯息
+grams per square metre	克/平方米(GSM)
+Insert	插页
+inset	插页
+foldout	插页
+gravure Printing	滚筒式印刷/凹版印刷
+inset	套贴
+Green	绿色
+interleaves	内隔页
+greyboard	双灰
+international standard book number	国际标准书籍号码(ISBN)
+grey board	灰板
+ivory board	通咭
+gripper	牙口
+ivory card	白通纸
+grommet	鸡眼
+jacket	书套/护封/封套/书衣
+Gross weight	毛重
+jacketting	上书套/上护封
+guillotine	切纸机
+Japan	日本
+half title page	半书名页或/部首专页
+Japanese	日本的
+half-tone	半色调
+job number	工程编号
+hollow back	通脊
+joint	书脊槽
+hardback	精装
+kiss cut	啤半穿
+hard back	精装书
+Korean	韩国的
+hard bound	精装/精装书
+kraft card	牛皮咭
+hard cover	精装
+kraft wrap	包头
+Head margin	书的天头
+label	标签
+heat-seal calender varnish	磨光吸塑
+laminated indexing(index lamination)	透明胶索引
+heat-sealed coating	吸塑油
+laminating	过胶/压塑料膜
+height	高
+lamination	过胶(PP胶)
+landscape	横度书/横式书页/横度
+mechanical matt	充哑粉纸
+Leaf	张页(2PP)
+mechanical paper	充粉纸
+leaflet	小折张/单张/折页
+mechanical printing paper	充书纸
+leaves	对页
+memo pad/blotter	记事簿
+length	长
+metal color	金属墨
+lettershop	人封邮寄服务/人信
+metallic	金属的
+Lid	盒盖
+metal plate	铁片
+library bound	图书式装订(一般指分衬加白杨布﹑车侧线后上壳的装订)
+millboard	板纸
+mirror	镜
+missing	缺页
+lid and base box	天地盒
+misting	溅墨
+light weight coated paper	轻粉纸/充粉纸(LWC)
+mix grain	内文中用混合纸纹
+limited edition	珍藏本/有限印本
+mould	模
+Limp bound	平装/串线胶装
+mounting	对裱
+line copy	线条稿(无半色调)
+mount(pasted)	裱纸
+line drawing	线书稿(无半色调)
+moveable	可移
+line per inch	每英寸线数(LPI)
+muli-joints gluing	驳盒
+lining	裱纸/裱背/皮壳贴被纸
+multi-colour	多色
+Lithography	平版印刷术
+offset	平版印刷术
+NCR paper	药水纸
+Lock	锁
+negative	负片/阴片
+lock-bottom	扣底
+net weight/suttle	净重
+Logo	商标
+newspaper	报纸
+Long	长纹(L)
+newsprint	新闻纸/白报纸
+Long grain	纸长纹
+nipping	压印线/书贴压紧
+Loop	环圈
+non-moveable	不可移
+machine	机器
+notch binding	胶装
+machine finish	加光(M.F.)
+notch bound	通气胶装(NB)
+machine varnishing	机过油(光/哑)
+oblong	横度书/长开本
+magazine	杂志
+journul	杂志
+odd size	怪度/不平常尺寸
+magenta	品红/洋红
+Offset Printing	柯式印刷
+magnet	磁石
+one side	单面
+Mail card	邮寄咭
+one side art card	单粉咭(C1S)
+mailing carton	邮寄盒
+one side greyboard white back	灰芯单粉咭
+missing leaf	缺页
+on-line press varnishing	印油(glossy/matt)(光/哑)
+makeready sheet	校版纸
+opacity	不透明度
+Open Wire-O	开放式YO书﹐即没有脊位
+make-up(montage)	拼版/整版
+orange	橙色
+Manual	手册
+enchiridion	手册
+order form	订购表
+manual gluing	手粘盒
+original	原稿
+margin	书边白位
+origination	印前
+match box(2)	火柴盒
+others	其它
+Matt art card	哑粉咭
+out of register	套印不准
+Matt art paper	哑粉纸(M/A)
+overlap cover(gate fold cover)	翼仔封面
+maximum	最大
+over print	加印在其上/迭印
+mechanical art paper	充粉纸
+ozalid/plotter	蓝纸/蓝粉
+packaging	包装
+punch	冲
+packging box	包装盒/彩盒
+punch board	打孔
+padded foam board	垫海绵
+punch to shape	冲型状
+Page	页数
+PVC box	PVC胶盒
+Page number	页码
+PVC window	透明胶片窗口
+pages(page to view)	页数
+quarter bound	双封面
+pallet	卡板
+raw material	原材料
+Panel	版屏/办/栏
+ream	令
+paper back	平装书
+reception	大堂(写字楼正门口)
+parchment	羊皮纸
+recto	右边的书页(一般页码是单数)
+pasting end	扫衬
+recycle paper	再造纸
+perfect binding	无线装订
+register	套准/定位/规位
+perfect bound	平装/胶装﹐特指磨脊胶装
+register mark	十字位
+perforation	针线/打排孔
+registration	套准/定位/规位
+photo bag	相袋
+registration mark	套准记号/十字位
+photocopy	影印
+reprint	重印
+PH value	酸缄度
+revise	校订/修正
+PIX	图案
+ribbon marker/riband	丝带
+plastic	塑料
+right reading	正读
+plastic comb binding	塑料夹活页装订
+rigid box	浆糊盒
+plastic magnet	胶磁
+ring binder	铁环(圈)/活页册
+plastic mirror	胶镜
+ring binding	铁环装
+plastic spiral	胶线圈
+rivet	窝锭
+Plate	印板
+roll	卷
+Plate making	制版
+round and backing	圆脊
+playing card varnishing	啤牌油
+round back	圆脊
+PMS color(pantone)	专色
+round corner	圆角
+pocket	袋
+rounding and backing	圆脊
+polybag	胶袋
+running sheet	印张
+polybag self-adhesive	自贴胶袋
+saddle stitching	骑马钉
+polybag zip lock	密实胶袋
+sales department	营业部
+pop-ups	立体
+same size	同尺寸(S/S)
+pop-ups book	立体书
+Sample	样本
+swatch	样本
+portrait	长书脊
+sample room	样办室/展览室
+poster	海报/单张广告
+pre-press	印前
+sand paper	沙纸
+press	印刷﹑印刷机
+press varnishing	印油(glossy/matt)(光/哑)
+schedule	计划货期
+printed ink	油墨
+scoring	啤线/压线/啤折线/压折痕
+printed sheet	印张
+scratching	刮花/拖花
+printing press	印刷机
+imprinter	印刷机
+screen	网屏
+process	四色墨
+screws	螺丝
+process colour	四原色
+scuffing	擦痕(印件)
+pull and push	推拉书
+scumming	弄脏/糊版(印件)
+section	组数/贴
+special colours	专色
+section sewn	穿线
+specimen	样本
+self-cover	自封
+spine	书脊
+self ends	自衬
+spiral	铁线圈
+Semi-gloss	半光亮
+speral binding	螺旋装订
+set off	过底/背面粘脏
+spitting	溅墨
+sewing	串线/缝线/线钉
+split ends	分衬
+shade	色辉/色泽
+spoilage	损坏/废品
+sharp	清晰的
+sponge	海绵
+sheet	一张纸
+spot varnish(gloss/matt)	印油(光/哑)
+sheet-fed	平张印刷/平张给纸
+spreads	对页
+sheet fed press	平张印刷机
+special color	专色
+sheet per hour	每小时印张数(S.P.H.)
+spiral binding	螺旋装订
+sheetwise	正反
+sheetwork	正反
+spiral bound	螺旋装(蛇装)
+short	短纹(S)
+shrink wrapped(individual/assort per pack)	收缩包装(独立/每包)
+spot UV varnishing(glossy/matt)	局部UV油(光/哑)
+side saddle stitching	侧钉
+spot varnish(glossy/matt)	局部印油(光/哑)
+side sewn	车侧线
+spot varnishing(glossy/matt)	局部印油
+side stitching	平钉
+square back	方脊/平脊
+signature	组数/贴
+stamping	烫
+signaturing	齐贴
+staples	装订用铁丝钉
+silk-screen	丝网
+stapling	钉盒/铁线平订
+Silk-screen Printing	丝网印刷
+step indexing	打索引/打梯级
+silk screening	丝印
+sticker	胶贴纸/贴纸
+silk screen pvc sheet	丝印PVC胶片
+stiffener	加固板(E-flute)
+silver paper(card)	银纸(咭)
+Stock	仓存
+silver stamping	银烫/烫银
+String	绳
+singer sewn	车中线
+stripping	拼版
+single-coated paper	单面粉纸
+substance	克重/基重
+Size	尺寸
+Sweden	瑞典
+sketch	草图/简图
+Swedish	瑞典的
+slip case	书套盒/书盒
+synthetic(yupo)paper	合成纸
+Slur	重影
+tacky	发粘的/粘性的
+smashing	压书/书贴压紧
+tab	检索(咭)
+smear	油渍/背面弄脏
+smoothness	平滑度
+tail edge	地脚
+smudge	粘脏/污点
+text	内文
+smyth sewn	穿线
+The Netherlands	荷兰
+Soft cover	平装
+thickness	厚度
+Soft PVC	软胶
+thread sewn	穿线
+solid	实地/满地
+three-knife trimmer	三面刀
+trim width portrait	直度
+solid bleached sulphate	单粉咭(C1S)(SBS)
+thumb edge	书口
+South Korea	韩国
+thumb index	指按式索引
+spacer	夹层
+tight(fixed) back	死脊
+Tint	淡调
+wafer seal	透明胶贴纸
+tints	平网
+wastage	损耗
+tipping	贴
+water-based varnishing	过水油(过水溶性光油)
+tipping in	粘单张/套粘
+water-base varnishing	水油
+tone	色调
+waterproof(gloss/matt)	防水(光/哑)
+top edge	天头
+wax paper	腊油纸
+tracing paper	牛油纸
+web-fed	卷筒给纸
+trade mark	商标
+web press	轮转印刷机
+transparency	透明原稿
+web print	滚筒
+Tray box	地盒
+white	白
+Trim	切正/切齐
+whiteness	白度
+trimming	裁切
+width	宽
+triple wall carton	三坑箱
+windowing	粘窗/贴窗
+Turn around	一周
+wire-o	双线圈
+typesetting	排字
+wire-o binding	双线圈钉装/WIRE-O钉装
+U.K.	英国
+wire-o bound	双线圈装
+uncut pages	未切之页
+wire-stitching	铁线平订
+underrun	印数不足
+with the grain	跟纹/顺纹
+unprinted page	白页
+work and tumble	牙口反/天地轮转
+unprinted leaf	白页
+workshop	工场
+upright	正度书/直式
+work&turn	自反/左右轮转
+U.S.A	美国
+woodfree	道林纸/书纸(W/F)
+UV varnishing	过UV油/紫外光固化油
+wrap	包页
+vacuum packing	真空包装
+wrinkles	印张的皱纹
+Varninshing	上光油
+writing pad	写字簿
+Velcro	魔朮贴
+yellow	黄色
+Vender	供货商
+yupo paper	合成纸
+Verso	左边的书页(一般页码是双数)
+yuppo paper	胶底纸
+video tape	录像带
+zine	锌
+Volume	册
+zine plate	锌版
+v-shape die-cutting	啤V位
+zip lock bag	密实胶袋
+Colour Density	颜色密度/深浅度
+raster	光栅
+Fitting	试箱
+Paperback	平装书
+Hardback	精装书
+perfect binding	无线胶装书
+Adjunct	辅料﹐配件﹐附属物
+Bead	小珠子,珠子
+Bow	蝴蝶结
+bowknot	蝴蝶结
