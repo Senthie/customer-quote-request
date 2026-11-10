@@ -1091,6 +1091,17 @@ uv run ./scripts/customer_profile.py --prefs ngv
   `cpms_content_audit` 的溯源是**子串匹配**、不归一 `60.000`。写 `数量共60.000本（每款20.000本）`
   → 0 无出处；写 `60000本` → 退出码 3（`60000/20000/15000` 全报无出处）。NGV 的
   `60.000 / 17.500 / 30.100` 都是点作千分位，**别翻译成中文习惯的数字形态**。
+- ★ **德式「小数逗号」和「千分位点」要分开处理**（2026-11-10 一次补 5 单实测）：
+  千分位照抄客户写法（上一条）；**小数逗号**（`1,8 mm boards` / `spread thickness 2,8 mm`）若按规范
+  写成 `1.8mm`，audit 必然报「无出处」→ 回原文核实后在汇报里标「误报」，**不许删厚度**；
+  需要 0 无出处的书面证据就跑 `/tmp` 下的临时 `--accepted` 白名单，
+  **别塞进 `customers/ngv.cpms_accepted.json`**（那是业务口径白名单，不是格式补丁）。
+  同批其它写法坑：双面印色一面是专色，**优先一行写全**（`4C+哑胶/1C+专色+光油` 实测只吃 CPMS054 ——
+  `cpms_lint` 的印色正则止于 `/1C`，背面工艺不校验；拆行容易写成 `/0C` + 子项自相矛盾）；
+  `1.8mm` 灰板不在 5 档换算表 → 写 mm、认下 CPMS054 warn、不插值；
+  `TZS/CPSL1/CD/KD` 落错时概要行仍按字段写（`TZS≤1` 不写「共N款」、`CD/KD=0` 保持 `0*0*0`），
+  真实款数/尺寸/数量写进 `备注` 与 `封面/内文` 行，并在汇报里给「字段/现值/原文/应然值」。
+  全套：`customer-quote-request/references/cpms-audit-and-lint-false-positives.md`。
 - ★ **料号 `5/20/8478438/FSM` 会撞「印色」正则**：`cpms_lint` 把 `5/20` 当成 `4/0C` 那类印色
   → `CPMS052`。别改数字、也别删料号（转录九问要求料号抄全）—— 把它放到 `- ` 开头的三级子项行，
   lint 在解析标签前就跳过这类行：`- 料号：5/20/… Hubschrauber、…`。
@@ -1098,7 +1109,8 @@ uv run ./scripts/customer_profile.py --prefs ngv
   （实测第一眼读到 `CPMS` 为空，几分钟后快照里已有别人写的 313 字）。纪律：`cp` 到 `/tmp/` 留原值 →
   写回前重新 `json.load`（不要用几分钟前读进内存的对象）→ **合并**别人版本里有出处的事实
   （漏抄也是缺陷）→ `json.dumps(ensure_ascii=False, indent=2)` 保持键序 → 收尾断言
-  `list(out)[:59]==模板键序` 且 `changed ⊆ {CPMS, CPMC, CPMC_ZH}`。
+  `list(out)[:59]==模板键序` 且 `changed ⊆ {CPMS, CPMC, CPMC_ZH, ECPMC, Reminder, question_answers}`
+  （后两者只在关闭 `question_answers` 条目时动；`answer_question()` 会顺带重算 `Reminder`）。
   ★ 2026-10-29 抓到一个新的写者：**后台 CPMS 补写任务**（不是定时 scan）。它会在你交付后几分钟内
   改写 `ERP_*.json` 的 `CPMS`，并**静默覆盖 `CPMS_来源对照.md`**。它的版本 lint 只出 1 warn、
   audit 0 无出处 —— 看着像合格，实际会（a）丢掉概要行的「书籍方向」、（b）把**上一版规格**的事实
@@ -1213,6 +1225,10 @@ uv run ./scripts/customer_profile.py --prefs ngv
       三类判据（2026-10-30 实跑 7 条定下）：① 语料库查到同一单 → `confirmed`，答案写「已出具单号 +
       日期 + 本目录为重复询价留档」；② 字段本来就该空（`KHDH` 询价阶段）→ `waived` + 写根因；
       ③ 真业务决策（客户要改数量/换纸）→ **不动**，汇报里点名。
+      ★ **①b（2026-11-10 `LX25051701` 实跑）**：旧 `offer deadline` 早已过期、但客户**新邮件明确
+      要求更新报价**（`offering this project to Lidl once again` / `update your quotation`）→
+      `confirmed`，答案写「旧截止日属旧询价单（<日期>），按本次 <日期> 邮件继续报价」+ 同项目历史单号；
+      **不许**照 ① 写「不新报价」（客户在催的单会被判死）。有「请报价」字样才算，纯转发不算。
       写答案用 `CQR_Web.answers.answer_question(...)`（与页面 `POST /api/answer` 同一实现，
       只改 `question_answers` + `Reminder`）；收尾 `cpms_todo.py` 归 0、`delivery_gates` 为空。
       ⚠️ `Q_KHDH` 八成是包了层皮的**识别失败**（档案落 `generic`/`igl`，`required_empty` 没生效）——
