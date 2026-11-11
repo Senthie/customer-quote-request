@@ -41,6 +41,28 @@ def wrap(record: dict) -> list:
     return [record]
 
 
+IMPORT_SUFFIX = ".erp-import.json"
+"""导出口径副本的后缀（1.0.65）。
+
+`main.py` 除了主产物 `ERP_<id>_<ts>.json`，还会多写一份 `….erp-import.json`
+（只有 59 个 ERP 键、无内部字段、且经过三处类型翻译）。**它不是一个任务产物**：
+用 `ERP_*.json` 通配时会把它一起抓进来 —— 于是 `cpms_todo` 报「缺 CPMC_ZH」、
+查看器把 null 版本/品名显示出来（1.0.65 只在测试里修了，脚本消费方漏了）。
+所以凡是要「每个任务挑一份产物 / 罗列产物」的地方，都必须排除它。
+"""
+
+
+def is_import_copy(path: str | Path) -> bool:
+    """这个文件是不是导出口径副本（`*.erp-import.json`）。"""
+    return str(path).endswith(IMPORT_SUFFIX)
+
+
+def iter_bundles(directory: str | Path, pattern: str = "ERP_*.json") -> list[Path]:
+    """目录下的**主**产物文件（排除 `.erp-import.json` 副本与 `.bak` 备份），按文件名排序。"""
+    return [p for p in sorted(Path(directory).glob(pattern))
+            if not is_import_copy(p) and not p.name.endswith(".bak")]
+
+
 def _coerce(data: Any, *, where: str = "") -> list:
     """把「数组 / 单对象 / 带 records 的对象」统一成 list[dict]。"""
     if isinstance(data, list):

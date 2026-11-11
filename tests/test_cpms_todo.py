@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -77,6 +78,41 @@ def test_CPMC占位符也算欠账():
               cpmc_en=cpms_todo.CPMC_PLACEHOLDER)
         items = cpms_todo.iter_incomplete(root)
         assert items[0]["missing"] == ["CPMC"]
+
+
+def test_导出口径副本不算欠账(processed: Path):
+    """★ 1.0.65 的 `*.erp-import.json` 只有 59 键、天生没有 CPMC_ZH。
+
+    它比主产物**更新**（step3b 后写），`glob("ERP_*.json")` 取最新会拿到它 →
+    已经写完的 31 单全被报成「缺 CPMC_ZH」（2026-11-11 实测）。判定必须排除副本。
+    """
+    d = _task(processed, "ccc", cpms="这是完整描述", cpmc="图画书")
+    (d / "ERP_ccc_20260101_000000.erp-import.json").write_text(
+        json.dumps([{"KHDH": "CU001", "CPMS": "这是完整描述", "CPMC": "产品名"}],
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # 副本 mtime 更新（真实情况就是后写）
+    later = (d / "ERP_ccc_20260101_000000.json").stat().st_mtime + 10
+    os.utime(d / "ERP_ccc_20260101_000000.erp-import.json", (later, later))
+
+    assert cpms_todo.iter_incomplete(processed) == []
+    assert cpms_todo.format_report([]) == "CPMS_TODO: 0"
+
+
+def test_导出口径副本不掩盖真欠账(processed: Path):
+    """排除副本不等于放过真欠账：主产物 CPMS 空着，照样要点名。"""
+    d = _task(processed, "ddd", cpms="", cpmc="图画书")
+    (d / "ERP_ddd_20260101_000000.erp-import.json").write_text(
+        json.dumps([{"CPMS": "副本里抄的是空的", "CPMC": "产品名"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    later = (d / "ERP_ddd_20260101_000000.json").stat().st_mtime + 10
+    os.utime(d / "ERP_ddd_20260101_000000.erp-import.json", (later, later))
+
+    items = cpms_todo.iter_incomplete(processed)
+    assert len(items) == 1
+    assert items[0]["missing"] == ["CPMS"]
 
 
 def _with_profile(root: Path, task_id: str, profile_id: str) -> None:

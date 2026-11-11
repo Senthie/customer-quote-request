@@ -82,7 +82,11 @@ def _run_pipeline(customer: str, attachment: Path, workdir: Path) -> dict:
          "--failed-dir", str(workdir / "failed")],
         cwd=REPO_ROOT, capture_output=True, text=True)
 
-    found = sorted(workdir.glob("processed/*/ERP_*.json"), key=os.path.getmtime)
+    # 排除 1.0.65 的导出口径副本（`*.erp-import.json`）：它做过三处类型翻译
+    # （SFYPJ→是/否、PXH→1、YYS→null），拿它跟 ERP 导出对照会造出一堆假差异。
+    found = sorted([p for p in workdir.glob("processed/*/ERP_*.json")
+                    if not p.name.endswith(".erp-import.json")],
+                   key=os.path.getmtime)
     if not found:
         print(f"!! 管道没产出 ERP JSON（exit={proc.returncode}）")
         print(proc.stdout[-1500:])

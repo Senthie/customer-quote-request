@@ -144,6 +144,15 @@ def _load_module(name: str):
     return importlib.import_module(name)
 
 
+def _is_import_copy(path: Path) -> bool:
+    """是不是 1.0.65 的导出口径副本（`*.erp-import.json`）。
+
+    判定只认 `scripts/erp_bundle.is_import_copy` 那一份定义 —— 这里不抄后缀字符串，
+    免得哪天后缀变了、页面这边还在用旧判定。
+    """
+    return bool(_load_module("erp_bundle").is_import_copy(path))
+
+
 def read_config_version() -> Optional[int]:
     """当前配置版本 —— 读 customers/_defaults.yaml 的顶层 version（单一真源）。"""
     try:
@@ -553,6 +562,30 @@ def scan_tasks(root: Optional[Path] = None) -> list[dict[str, Any]]:
     return tasks
 
 
+def task_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    """顶部那两个数字的**统计口径**：只算在用任务，不算归档。
+
+    为什么单独一个函数（2026-11-11 业务问「为什么还显示 58 个任务 / 62 条产品记录」）：
+    页面用 `rglob("ERP_*.json")` 扫到的东西里，`processed/_superseded_2026MMDD/`
+    下的旧产物也被算成任务了 —— 实测 58 个任务 / 62 条记录里，**30 个任务 / 30 条记录
+    是归档**，真实在用只有 28 / 32。
+
+    ⚠️ 但归档**不能从列表里砍掉**：那是既有功能（`superseded=True` → 页面打
+    「已被取代」徽章，业务靠它看这一单换过几版）。所以口径是：
+      * 列表：归档照常列出（带徽章）
+      * 计数：只算 `superseded=False` 的
+    返回的 `archived_*` 让页面可以补一句「另有 N 个归档」。
+    """
+    active = [t for t in tasks if not t.get("superseded")]
+    archived = [t for t in tasks if t.get("superseded")]
+    return {
+        "tasks": len(active),
+        "records": sum(int(t.get("record_count") or 0) for t in active),
+        "archived_tasks": len(archived),
+        "archived_records": sum(int(t.get("record_count") or 0) for t in archived),
+    }
+
+
 def scan_exports(root: Optional[Path] = None) -> list[dict[str, Any]]:
     """递归扫描目录下所有 ERP_*.json，最新在前。
 
@@ -562,11 +595,20 @@ def scan_exports(root: Optional[Path] = None) -> list[dict[str, Any]]:
 
     另一个坑（Flask 版顺手修掉）：调用方（路由）**显式传** root，别读模块级全局 ——
     以前 `--dir` 靠 `global PROCESSED_DIR` 改全局，既脏又不可测。
+
+    ⚠️ 归档目录（`_superseded_*/`）**仍然会被扫出来**，标 `superseded=True`，
+    页面用「已被取代」徽章区分 —— 这是既有功能，别在扫描层砍掉。
+    但**统计任务数 / 产品记录数时不算它们**（见 `count_active`），
+    否则页面顶部会把替换掉的旧版本也算成任务（2026-11-11：58/62 里 30/30 是归档）。
     """
     root = Path(root) if root is not None else DEFAULT_PROCESSED_DIR
     if not root.exists():
         return []
-    items = [_summarize(p, root) for p in sorted(root.rglob("ERP_*.json")) if p.is_file()]
+    # ★ 排除 `*.erp-import.json`（1.0.65 的导出口径副本）：它只有 59 个键、
+    #   没有 CPMC_ZH / version / ID，而且比主产物新 —— 列进来会把每条任务都
+    #   变成「主产物是副本」，页面上版本/中文品名显示 null，还把列表撑成两倍。
+    items = [_summarize(p, root) for p in sorted(root.rglob("ERP_*.json"))
+             if p.is_file() and not _is_import_copy(p)]
     items.sort(key=lambda it: (it["mtime"], it["relpath"]), reverse=True)
     return items
 

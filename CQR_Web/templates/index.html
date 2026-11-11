@@ -450,6 +450,7 @@ const state = {
 
     // ★ 2026-10-29 产物是数组：列表按**任务**聚合，详情按**产品记录**分 Tab
     tasks: [],             // 任务列表（一个任务 = 一次报价，可含多条产品记录）
+    summary: null,         // 顶部计数口径（服务端 task_counts：只算在用任务，不含归档）
     records: [],           // 当前任务的 N 条产品记录（/api/export 的 records）
     activeRecord: 0,       // 正在看第几条（0-based）
     validationByRecord: [],
@@ -561,12 +562,30 @@ function applyList(list, pend) {
     state.exports = list.exports || [];
     // 服务端按任务目录聚合好的「任务列表」；老服务端没有 → 前端自己按目录兜一层
     state.tasks = Array.isArray(list.tasks) ? list.tasks : tasksFromExports(state.exports);
+    // 顶部计数口径（只算在用任务、不算 _superseded_* 归档），服务端 data.task_counts 单一真源
+    state.summary = list.summary || null;
     state.scanRoot = list.root || "";
     state.pending = pend.items || [];
     state.pendingRoot = pend.root || "";
     state.scanOk = true;
     state.scanError = "";
     state.lastScanAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+/** 顶部「N 个任务 / M 条产品记录」的口径：只算在用任务，`_superseded_*` 归档不算。
+ *
+ *  服务端 `/api/exports` 的 `summary` 是单一真源（`data.task_counts`）；
+ *  老服务端没这个字段 → 前端按 `superseded` 自己过滤兜一层，规则保持一致。
+ */
+function taskStats() {
+    if (state.summary && typeof state.summary.tasks === "number") return state.summary;
+    const active = state.tasks.filter((t) => !t.superseded);
+    return {
+        tasks: active.length,
+        records: active.reduce((n, t) => n + (t.record_count || 0), 0),
+        archived_tasks: state.tasks.length - active.length,
+        archived_records: 0,
+    };
 }
 
 /** 老服务端（没有 /api/exports 的 tasks 字段）时的兜底：按任务目录把文件聚成任务 */
@@ -985,9 +1004,12 @@ function renderHeader() {
 
     const status = el("span", { class: "status" + (state.scanOk ? "" : " err") });
     if (state.scanOk) {
-        const prodTotal = state.tasks.reduce((n, t) => n + (t.record_count || 0), 0);
-        status.textContent = "已扫描 " + state.tasks.length + " 个任务（"
-            + prodTotal + " 条产品记录）"
+        // ★ 只算在用任务：`_superseded_*` 归档不算（否则数字被放大一倍，
+        //   2026-11-11 实测 58/62 里 30/30 是归档）。口径来自服务端 data.task_counts。
+        const st = taskStats();
+        status.textContent = "已扫描 " + st.tasks + " 个任务（"
+            + st.records + " 条产品记录）"
+            + (st.archived_tasks ? " · 另有 " + st.archived_tasks + " 个归档" : "")
             + (state.lastScanAt ? " · 上次刷新 " + state.lastScanAt + "（每 10 秒自动）" : "");
     } else {
         status.textContent = "未连上服务端（" + state.scanError + "）";
@@ -1152,11 +1174,16 @@ function renderList() {
             oninput: (e) => { state.filter = e.target.value; renderListOnly(); },
         }));
 
-    const totalProducts = items.reduce((n, it) => n + (it.record_count || 0), 0);
+    // ★ 顶部这行也只算在用任务（归档不带进来，否则 58/62 会把业务吓一跳）；
+    //   但归档仍留在列表里、带「已被取代」徽章 —— 那是既有功能，别一起砍。
+    const activeItems = items.filter((it) => !it.superseded);
+    const archivedCount = items.length - activeItems.length;
+    const totalProducts = activeItems.reduce((n, it) => n + (it.record_count || 0), 0);
     const sub = el("div", {
         class: "hint",
         style: "padding:4px 12px 0;font-size:.74rem;color:var(--ink-3)",
-        text: items.length + " 个任务 · 共 " + totalProducts + " 条产品记录",
+        text: activeItems.length + " 个任务 · 共 " + totalProducts + " 条产品记录"
+              + (archivedCount ? "（另有 " + archivedCount + " 个归档 · 标「已被取代」）" : ""),
     });
 
     const box = el("div", { class: "items", id: "itemsBox" });

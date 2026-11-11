@@ -538,6 +538,36 @@ def test_http_exports_列出产物(viewer):
         "要回显真正在扫的目录，方便排错"
 
 
+def test_http_exports_带计数口径_归档不算任务(viewer):
+    """`summary` 只算在用任务：`_superseded_*` 不算（业务 2026-11-11 的提问）。
+
+    页面顶部的「N 个任务 · 共 M 条产品记录」曾经把归档也算进去 —— 实测
+    58 个任务 / 62 条记录里 30 / 30 来自 `_superseded_*`，真实在用只有 28 / 32。
+    归档**仍留在 tasks 列表里**（带 superseded 标记，页面打「已被取代」徽章），
+    只是不进这两个数字。
+    """
+    client, _ = viewer
+    payload = json.loads(_get(client, "/api/exports")[1])
+    assert payload["task_count"] == 2, "列表仍要带归档（既有功能）"
+    assert payload["summary"] == {
+        "tasks": 1, "records": 1, "archived_tasks": 1, "archived_records": 1,
+    }
+
+
+def test_task_counts_只数在用任务():
+    """纯函数口径：superseded=True 的一律不计入 tasks / records。"""
+    tasks = [
+        {"superseded": False, "record_count": 3},
+        {"superseded": False, "record_count": 1},
+        {"superseded": True, "record_count": 5},
+    ]
+    assert ev.task_counts(tasks) == {
+        "tasks": 2, "records": 4, "archived_tasks": 1, "archived_records": 5,
+    }
+    assert ev.task_counts([]) == {"tasks": 0, "records": 0,
+                                  "archived_tasks": 0, "archived_records": 0}
+
+
 def test_http_export_返回内容(viewer):
     client, _ = viewer
     rel = "tid1/ERP_tid1_20260924_010203.json"
@@ -927,6 +957,26 @@ def test_任务列表_同一目录多份产物只按最新那份统计(tmp_path)
     assert len(tasks) == 1, "同一个任务目录 → 一行"
     assert tasks[0]["record_count"] == 1, "只认最新那份，旧的挂 extra_exports"
     assert tasks[0]["extra_exports"] == ["tid/ERP_tid_20261030_010203.json"]
+
+
+def test_列表不把导出口径副本当成产物(tmp_path):
+    """★ `*.erp-import.json` 只有 59 键（无 CPMC_ZH/version/ID），且比主产物新。
+
+    列进来会让「主产物」变成副本 → 页面上版本/中文品名又是一片 null，
+    列表条目也会翻倍（2026-11-11 实测：58 个任务扫出 115 条）。
+    """
+    _make_multi_export(tmp_path, "tid", [_rec(1)], stamp="20261030_020304")
+    copy = tmp_path / "tid" / "ERP_tid_20261030_020304.erp-import.json"
+    copy.write_text(json.dumps([{"CPMC": "英文名", "CPMS": "描述"}], ensure_ascii=False),
+                    encoding="utf-8")
+    os.utime(copy, (1_800_000_900,) * 2)   # 副本更新时间 —— 抢「最新」
+
+    assert [it["filename"] for it in ev.scan_exports(tmp_path)] == ["ERP_tid_20261030_020304.json"]
+
+    task = ev.scan_tasks(tmp_path)[0]
+    assert task["relpath"].endswith(".json") and ".erp-import" not in task["relpath"]
+    assert task["extra_exports"] == []
+    assert task["version"] is not None, "主产物有 version，副本没有 —— 别让副本顶替"
 
 
 def test_接口_api_exports_带任务列表(tmp_path):

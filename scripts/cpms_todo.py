@@ -34,6 +34,12 @@ from typing import Any, Iterable, Optional
 REPO = Path(__file__).resolve().parent.parent
 PROCESSED_DIR = REPO / "customer-files" / "processed"
 
+# 同目录模块（脚本直接跑时脚本目录在 sys.path 上；测试里也插了这一层）
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from erp_bundle import iter_bundles, load_bundle  # noqa: E402
+
 # 中文品名的占位符：agent 没拟名时脚本会填这个
 CPMC_PLACEHOLDER = "【中文品名待定】"
 
@@ -62,8 +68,13 @@ def _is_blank(value: Any) -> bool:
 
 
 def _newest_erp(task_dir: Path) -> Optional[Path]:
-    """一个任务目录里可能有多份 ERP_*.json（重跑过），取最新那份为准。"""
-    files = sorted(task_dir.glob("ERP_*.json"), key=lambda p: p.stat().st_mtime)
+    """一个任务目录里可能有多份 ERP_*.json（重跑过），取最新那份为准。
+
+    必须排除 `*.erp-import.json`（1.0.65 的导出口径副本）：它只有 59 个键、
+    没有 `CPMC_ZH`/`version`/`ID`，拿它当产物会**每一单都误报「缺 CPMC_ZH」**
+    （实测 31 单全是假待办，主产物其实都写好了）。
+    """
+    files = sorted(iter_bundles(task_dir), key=lambda p: p.stat().st_mtime)
     return files[-1] if files else None
 
 

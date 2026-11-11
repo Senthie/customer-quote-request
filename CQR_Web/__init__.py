@@ -32,6 +32,7 @@ from .data import (
     resolve_export,
     scan_exports,
     scan_tasks,
+    task_counts,
     validation_per_record,
 )
 
@@ -55,5 +56,6 @@ __all__ = [
     "resolve_export",
     "scan_exports",
     "scan_tasks",
+    "task_counts",
     "validation_per_record",
 ]

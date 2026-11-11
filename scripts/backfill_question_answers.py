@@ -74,8 +74,9 @@ def erp_files(target: Path) -> list[Path]:
     if target.is_file():
         return [target]
     out = [p for p in sorted(target.glob("ERP_*.json"))
-           # 单对象时代留下的备份（.prearray.bak）不是产物
-           if not p.name.endswith(".bak")]
+           # 单对象时代留下的备份（.prearray.bak）不是产物；
+           # 导出口径副本（*.erp-import.json）只有 59 键，回填它写不了 question_answers
+           if not p.name.endswith(".bak") and not p.name.endswith(".erp-import.json")]
     return out
 
 

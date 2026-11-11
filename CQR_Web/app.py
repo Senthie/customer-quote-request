@@ -61,6 +61,7 @@ from .data import (
     resolve_export,
     scan_exports,
     scan_tasks,
+    task_counts,
     validation_per_record,
 )
 from .upload import (
@@ -133,8 +134,12 @@ def create_app(processed_dir: Optional[Path | str] = None,
         # ★ 2026-10-29：列表页是**任务列表**（一个任务 = 一次报价，可含多个产品）。
         #   `exports` 仍按文件返回（兼容老页面/脚本），`tasks` 是按任务目录聚合的。
         tasks = scan_tasks(root_now)
+        # ★ 2026-11-11：顶部「N 个任务 · 共 M 条产品记录」的统计口径单独给一份 ——
+        #   只算在用任务，不算 `_superseded_*` 归档（归档仍在 tasks 里，带 superseded 标记，
+        #   列表照常显示「已被取代」）。详见 data.task_counts。
         return jsonify(root=str(root_now), count=len(items), exports=items,
-                       task_count=len(tasks), tasks=tasks)
+                       task_count=len(tasks), tasks=tasks,
+                       summary=task_counts(tasks))
 
     # ── 上传（本服务唯一的写入口）────────────────────────────────────────
     @app.post("/api/uploads")

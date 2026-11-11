@@ -44,6 +44,12 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RULES = REPO_ROOT / "assets" / "spec_fields.yaml"
 
+# 同目录模块（脚本直接跑时脚本目录已在 sys.path；测试里也插了这一层）
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from erp_bundle import iter_bundles  # noqa: E402
+
 # 证据片段前后各留多少字符（够看清语境，又不至于把整段原文塞进日志）
 _SNIPPET_PAD = 48
 
@@ -246,7 +252,8 @@ def _cmd_task(task_dir: str) -> int:
     directory = Path(task_dir)
     extracted = next(iter(sorted(directory.glob("*.extracted.json"))), None)
     records: list = []
-    for path in sorted(directory.glob("ERP_*.json")):
+    # 排除 1.0.65 的导出口径副本（`*.erp-import.json`）：它只有 59 键、无内部字段
+    for path in iter_bundles(directory):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
