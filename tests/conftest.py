@@ -38,3 +38,21 @@ def load_one(path) -> dict:
 def erp_records():
     """给测试用的读取函数（避免每个测试文件各写一份 json.loads）。"""
     return load_erp
+
+
+# ★ 2026-11-11（1.0.65）：产物目录里现在有**两份** JSON —— 主产物
+#   `ERP_xxx.json`（含内部字段，供追溯）和导入口径副本
+#   `ERP_xxx.erp-import.json`（只有 59 键，给 ERP 导入端）。
+#   凡是要"取主产物"的测试一律用这个函数，别自己 glob('ERP_*.json')。
+IMPORT_SUFFIX = ".erp-import.json"
+
+
+def erp_artifacts(directory) -> list[Path]:
+    """目录里的主 ERP 产物（排除导入口径副本），按文件名排序。"""
+    return sorted(p for p in Path(directory).glob("ERP_*.json")
+                  if not p.name.endswith(IMPORT_SUFFIX))
+
+
+def import_copies(directory) -> list[Path]:
+    """目录里的导入口径副本（`*.erp-import.json`）。"""
+    return sorted(Path(directory).glob(f"*{IMPORT_SUFFIX}"))

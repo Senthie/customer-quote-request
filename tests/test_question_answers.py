@@ -174,7 +174,8 @@ def pipeline_run(tmp_path_factory):
          "--processed-dir", str(out / "processed"), "--customer", "ngv"],
         cwd=str(REPO), capture_output=True, text=True)
     assert proc.returncode == 0, f"管道没跑通：\n{proc.stdout[-800:]}\n{proc.stderr[-800:]}"
-    erp_files = sorted((out / "processed").rglob("ERP_*.json"))
+    erp_files = sorted(p for p in (out / "processed").rglob("ERP_*.json")
+                       if not p.name.endswith(".erp-import.json"))
     assert erp_files, "没产出 ERP JSON"
     raw = json.loads(erp_files[0].read_text(encoding="utf-8"))
     return {"records": raw, "path": erp_files[0]}

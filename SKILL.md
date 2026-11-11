@@ -14,7 +14,14 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.64（2026-10-30 **规格/物流 11 字段终于有推导代码了**：业务一句
+> **版本：** 1.0.65（2026-11-11 **导出口径适配层**：森西「三处类型偏差做翻译，对接 ERP
+> 的接口」。调研结论：MCP 只能写 59 键里的 10 个（`CPLB`/`CPMS` 等 49 个写不进去），
+> 所以改走 **ERP 导入接口**。产物保持内部表达，导出时按
+> `assets/erp_import_translations.yaml` 翻译：`SFYPJ` true/false→「是」/「否」、
+> `PXH` ""→1、`YYS` ""→null（证据：真实单 `BJXQ261111005`/`BJXQ260706007`）。
+> `main.py` 步骤 3b 自动多写一份 `<原文件名>.erp-import.json`（59 键、键序与模板逐位
+> 一致、幂等）；`tests/test_erp_import_adapter.py` 18 项。
+> —— 前序 1.0.64（2026-10-30 **规格/物流 11 字段终于有推导代码了**：业务一句
 > 「BZFS TBLX SHFS SHDQ ZXLB ZBLX ZXFS DKMC YSLX chkBSYTB BZ：没有一处推导代码。
 > 我认为在你填写 CPMS 的时候，这些值由你推导出，并且填到对应的值，这样也可以减轻
 > CPMS 的负担」。此前这 11 个字段只有两种来源：`erp_fixed` 写死 / `erp_defaults` 补空
@@ -2007,6 +2014,12 @@ customer-quote-request/
 ```
 processed/<task_id>/
 ├── ERP_<task_id>_<YYYYMMDD_HHMMSS>.json   # 交付物：**数组**（一个文件可含多个产品），CPMS 需 agent 补写
+├── ERP_<task_id>_<YYYYMMDD_HHMMSS>.erp-import.json
+│                                          # ★ 1.0.65 起同时产出：**给 ERP 导入端的那一份**
+│                                          #   只有 59 键（内部字段全剥）+ 三处类型翻译
+│                                          #   （SFYPJ→是/否、PXH→1、YYS→null）。规则见
+│                                          #   `assets/erp_import_translations.yaml`，
+│                                          #   实现 `scripts/erp_import_adapter.py`
 ├── <原文件名>.extracted.json               # 抽取明细：values / unmatched_labels / extras_found
 ├── <原文件名>.validation.json              # ★ ERP 取值校验报告（步骤 5b：枚举/类型/必填）
 ├── <原文件名>.csv                          # 转换后的 CSV
@@ -2328,6 +2341,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
 | **1.0.58** | **2026-10-30** | **查看器能写答案**（业务：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）。① 新增 `CQR_Web/answers.py`（纯逻辑，不 import Flask）+ `POST /api/answer`：只改 `question_answers` 的 `answer/status/answered_at`，顺带重算 `Reminder` 快照；有答案 → `confirmed` 并盖 `answered_at`，清空 → 回 `open`，`waived` → 不卡交付；② 详情页清单块每条待确认项带文本框 +「保存答案 / 作废」，未保存草稿存 `state.drafts`（10 秒自动刷新重建 DOM 不丢字，按「产物#第几条#项 id」键）；③ 写盘原子（同目录临时文件 + `os.replace`）、缩进/中文/键序与产出一致；④ **mtime 乐观锁**：页面打开后文件被别人改过 → 409 + 自动重取，不覆盖 agent 刚写的 CPMS；⑤ 拒绝姿势明确：v2 旧产物 409、未知 id/越界记录 404、乱填 status 400、确认但答案空 400；⑥ 页面仍**不许**写 `CPMS`/品名/59 个 ERP 字段；⑦ 新增 `tests/test_cqr_answers.py`（17 项，含 HTTP 层与路径穿越），边界测试把 `answers.py` 也纳入「不许 import Flask / 不许起子进程」 |
+| **1.0.65** | **2026-11-11** | **导出口径适配层**（森西：「三处类型偏差做翻译，对接 ERP 的接口」；前置调研结论：MCP 只能写 59 键里的 10 个，`CPLB`/`CPMS` 等 49 个写不进去，故改走 ERP 导入接口）：新增 `assets/erp_import_translations.yaml` + `scripts/erp_import_adapter.py`，产物保持内部表达（`SFYPJ` 布尔、`PXH`/`YYS` 刻意留空），导出时翻成 ERP 能存的样子：`SFYPJ` true/false→「是」/「否」、`PXH` ""→1、`YYS` ""→null（证据：真实单 `BJXQ261111005`/`BJXQ260706007`），其余 int 字段空串→null；`main.py` 步骤 3b 自动多写一份 `<原文件名>.erp-import.json`（59 键、键序与模板逐位一致、幂等）。`tests/test_erp_import_adapter.py` 18 项 + `test_pipeline` 1 项；`tests/conftest.py` 新增 `erp_artifacts()`/`import_copies()`，修 6 处 `glob("ERP_*.json")` 会同时抓到副本导致的误判 |
 | **1.0.61** | **2026-10-30** | **修「页面上很多 null」**（业务报：「款数与数量…很多的null 这是什么bug」）：根因是页面把 `null` 当有值/当字符串用，共三处 —— ① 列表的版本徽章只判 `version === undefined`，而老产物 JSON 里是 `"version": null` → 拼出 **`vnull`**（实测 6 份 9 月产物中招）；② 摘要行「配置版本 / 格式版本」用 `String(cur.version)`，null 直接打成字面量 `null`；③ 分组徽章「N / M 有值」按 `k in cur` 统计（键在就算），null 也算有值 → 出现「11 / 11 有值」却每格都是 null 的自相矛盾。修法：新增 `hasValue(v)`（null/undefined/空串都不算）统一这三处，徽章改成 `v1（无 version）`、摘要写「缺（第 1 代产物）」、分组徽章统计**真实取值**并在 `title` 里补一句「另有 N 个键存在但值为 null/空（ERP 口径：无 → null）」。**真实 null（无 → null）的格子仍按口径显示 `null（空值）`**。harness 49 项（新增 2 项：null 不再渲染 vnull / 标成 v1） |
 | **1.0.60** | **2026-10-30** | **内部确认清单默认折叠**（业务：「内部确认清单 默认是折叠状态」）：① 标题行整行可点（`role=button`/`aria-expanded`/回车与空格键），折叠时徽章照常报「N 项未确认（M 项卡交付）」+ 右侧一行**首条未确认项预览**（`firstQuestionPeek`）；② 展开状态存 `state.qaOpen`（键 =「产物#第几条」）而不是 `<details>` —— 页面 10 秒整体重建 DOM，DOM 自带状态会被刷回折叠；切 Tab / 保存后重取详情同样保持；③ 折叠时 body **不构建**（不是 CSS 隐藏，省掉 textarea 与刷新开销）；④ `beforeprint` 自动展开，否则打印只有标题；⑤ 页面 harness 新增 12 项断言（默认折叠 0 文本框 / aria / 预览 / 点击展开 / 重建后保持 / 折叠不丢草稿 / 打印前展开），共 47 项 |
 | **1.0.59** | **2026-10-30** | **v2 → v3 回填工具**（森西选 A：「保留现有数据做回填」—— 老产物里 `CPMS`/`CPMC` 是手写的，重跑会丢）：新增 `scripts/backfill_question_answers.py`（`<task_id>` / `ERP_*.json` / `--all` / `--dry-run` / `--force`）。① 清单只从同目录现成的 `*.validation.json`（warnings/errors + reminders）折出，判据复用 `question_answers.build_for_record`，与 `main.py` 同源；② CPMS 正文的「待确认/待定/TBD」各折一条 `field=CPMS`/`blocking=false`/`source=agent` 条目，**否则回填完就踩自己的 CPMS080**；③ `asked_at` 取产物文件名里的运行时刻（不是回填当天，避免伪造时间线）；④ 幂等判据 = `question_answers` **键在不在**（`[]` 也算完成，不重写不报假改动）；`--force` 重算且**同 id 旧答案搬过来**；⑤ 前 59 键与模板不一致 → 报错退出（`0e39e2e2…` 那份 2026-05-25 原始 ERP 导出因此被挡下）；⑥ `CQR_Web/answers.py` 写盘改为**结尾换行跟随原文件**（人改一行答案不连带改文件末尾，往返字节一致）。已回填 16 个在用任务 / 38 条确认项。新增 `tests/test_backfill_question_answers.py`（26 项）+ `test_cqr_answers.py` 补 1 项 |

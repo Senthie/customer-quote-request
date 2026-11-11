@@ -732,7 +732,7 @@ def test_识别必须看正文_文件名撞车也不许判错(tmp_path):
     assert "识别得分偏低" not in run.stdout
 
     erp_files = [p for p in (workdir / "processed").glob("*/*.json")
-                 if p.name.startswith("ERP_")]
+                 if p.name.startswith("ERP_") and not p.name.endswith(".erp-import.json")]
     assert len(erp_files) == 1, erp_files
     result = load_one(erp_files[0])
     # 这些值只有用 ngv 档案才会出现（判成 igl 时全都不对）

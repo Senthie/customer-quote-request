@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import load_erp, load_one
+from conftest import erp_artifacts, import_copies, load_erp, load_one
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -87,7 +87,10 @@ def pipeline_run(tmp_path_factory):
     assert result.returncode == 0, f"main.py 失败:\n{result.stdout}\n{result.stderr}"
 
     erp_files = list((workdir / "processed").glob("*/*.json"))
-    erp_files = [p for p in erp_files if p.name.startswith("ERP_")]
+    # 排除 1.0.65 起同时产出的导入口径副本（<stem>.erp-import.json）——
+    # 这里要的是主产物。副本由 test_导入口径副本同时产出 单独断言。
+    erp_files = [p for p in erp_files
+                 if p.name.startswith("ERP_") and not p.name.endswith(".erp-import.json")]
     assert len(erp_files) == 1, erp_files
     return {
         "workdir": workdir,
@@ -126,7 +129,7 @@ def test_导出文件顶层是数组(pipeline_run):
     哪怕本次只有 1 条产品记录也要包成数组 —— 下游（Web / lint / audit / todo）
     不用先判类型；老的单对象文件仍可读（`erp_bundle.load_bundle` 向下兼容）。
     """
-    files = [p for p in pipeline_run["task_dir"].glob("ERP_*.json")]
+    files = erp_artifacts(pipeline_run["task_dir"])
     assert len(files) == 1
     raw = json.loads(files[0].read_text(encoding="utf-8"))
     assert isinstance(raw, list), f"顶层必须是数组，实际 {type(raw).__name__}"
@@ -500,3 +503,24 @@ def test_样本闸_真跑一次要拦住且原文件不动(tmp_path):
     assert "拒绝执行" in (run.stdout + run.stderr)
     assert sample.exists(), "★ 样本被移走了 —— 这正是要防的事故"
     assert hashlib.md5(sample.read_bytes()).hexdigest() == before, "样本内容变了"
+
+def test_导入口径副本同时产出(pipeline_run):
+    """每次跑完要多一份 `<原文件名>.erp-import.json` —— 给 ERP 导入端的那份。
+
+    业务口径（2026-11-11 森西）：「三处类型偏差做翻译，对接 ERP 的接口」。
+    该副本必须：① 只有 59 键（内部字段全剥）② 键序与模板逐位一致
+    ③ SFYPJ 是「是/否」文本、PXH 是整数、YYS 空值落 null。
+    """
+    task_dir = pipeline_run["task_dir"]
+    copies = import_copies(task_dir)
+    assert len(copies) == 1, f"应有一份导入口径副本，实际 {[p.name for p in task_dir.iterdir()]}"
+    records = json.loads(copies[0].read_text(encoding="utf-8"))
+    assert isinstance(records, list) and len(records) == 1
+    rec = records[0]
+    assert list(rec) == list(json.loads(TEMPLATE.read_text(encoding="utf-8"))), \
+        "导入口径副本的键序必须与 ERP 模板一致"
+    assert "ID" not in rec and "question_answers" not in rec, "内部字段必须剥掉"
+    assert rec["SFYPJ"] in ("是", "否", ""), f"SFYPJ 应是文本枚举，实际 {rec['SFYPJ']!r}"
+    assert isinstance(rec["PXH"], int) and not isinstance(rec["PXH"], bool), \
+        f"PXH 应是整数，实际 {rec['PXH']!r}"
+    assert rec["YYS"] is None or isinstance(rec["YYS"], int), f"YYS 实际 {rec['YYS']!r}"

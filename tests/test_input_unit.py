@@ -169,7 +169,8 @@ def test_端到端_文件夹只产出一份报价(tmp_path):
         capture_output=True, text=True, cwd=REPO_ROOT)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
-    erp_files = list(processed.glob("*/ERP_*.json"))
+    erp_files = [p for p in processed.glob("*/ERP_*.json")
+                 if not p.name.endswith(".erp-import.json")]
     assert len(erp_files) == 1, f"一个文件夹只能出一份报价，实际 {len(erp_files)} 份"
     task_dir = erp_files[0].parent
 
@@ -308,7 +309,8 @@ def test_端到端_两个子目录出两份报价(tmp_path):
         capture_output=True, text=True, cwd=REPO_ROOT)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
-    erp_files = sorted(processed.glob("*/ERP_*.json"))
+    erp_files = sorted(p for p in processed.glob("*/ERP_*.json")
+                       if not p.name.endswith(".erp-import.json"))
     assert len(erp_files) == 2, f"两个子目录应该是两份报价，实际 {len(erp_files)} 份"
 
     quantities = {}

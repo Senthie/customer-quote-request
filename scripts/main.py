@@ -2102,6 +2102,27 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
     logger.info("  状态: 成功")
     output_files.append(output_path)
 
+    # 3b. 导入口径副本 —— 给 ERP 导入端的那份
+    #   业务口径（2026-11-11 森西）：「三处类型偏差做翻译，对接 ERP 的接口」。
+    #   产物本身保持内部表达（布尔 / 刻意留空），差异只在导出这一步翻掉：
+    #   剥掉内部字段（ID/version/question_answers…）+ 按
+    #   assets/erp_import_translations.yaml 翻译 SFYPJ/PXH/YYS。
+    #   规则与证据见 scripts/erp_import_adapter.py 头注释。
+    import_path = task_dir / f"{output_path.stem}.erp-import.json"
+    try:
+        from erp_import_adapter import load_rules, load_template, translate_bundle
+
+        import_records, import_changes = translate_bundle(records, load_template(), load_rules())
+        with open(import_path, "w", encoding="utf-8") as f:
+            json.dump(import_records, f, ensure_ascii=False, indent=2)
+        logger.info(f"  导入口径副本: {import_path.name}（{len(import_records)} 条 / 59 键"
+                    f"，翻译 {len(import_changes)} 处）")
+        for change in import_changes[:10]:
+            logger.info(f"    · {change}")
+        output_files.append(import_path)
+    except Exception as exc:  # noqa: BLE001 - 副本失败不该毁掉主产物
+        logger.warn(f"  ⚠ 导入口径副本生成失败：{type(exc).__name__}: {exc}")
+
     # 4. ERP 取值校验报告（按 assets/erp_form_schema.yaml 的合法枚举核对）
     logger.info("")
     logger.info("[文件 4/5] ERP 取值校验报告")
