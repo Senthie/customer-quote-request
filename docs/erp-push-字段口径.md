@@ -150,30 +150,50 @@ error: Error executing tool erp_quote_create: 产品档案里找不到 '冬季�
 `create()` 只在**没给** `qty_1` 时才补隐藏的 `txtCPSL`；显式给了就只写展示框 `txtCPSL1`，
 ERP 报「请输入【产品数量】」。所以导出只传顶层 `qty`（第 1 档）与 `qty_2..10`。
 
-### 5.2 已知未解：free-text（新产品）分支写不进产品数量
-
-2026-11-12 实测（6 个变体，全部同一句报错）：
+### 5.2 free-text（新产品）分支：已通（2026-11-12 第二次实测）
 
 ```
-status=failed  save_product.ok=true  verify.ok=false
-message: 请输入【产品数量】或者点击【产品数量】旁的按钮，输入【产品数量】资料！
-detail_error: 产品明细行没有落库
+status=created  header_saved=true  detail_saved=true  detail_error=""
+verify: ok=true  row_created=true  qty_saved=true
+bdbh=BJXQ261112008  record_id=89d48f0c-1fe3-4786-a768-a078f84e6f21
+product: source=free-text  category=27.01;普通BB书  qty=410000  单位=本
 ```
 
-| 变体 | 结果 |
-| --- | --- |
-| 只给 `qty` | ✗ 同错 |
-| + `qty_1` 显式 | ✗ 同错 |
-| + `unit=本` | ✗ 同错 |
-| `product_category=27.01` | ✗ 同错 |
-| `product_category=普通BB书` | ✗ 同错 |
-| `languages=1`（排除多语言档位） | ✗ 同错 |
+**唯一硬约束：`qty_1` 绝不能显式传。** `create()` 只在「入参没给 qty_1」时才补隐藏的
+汇总字段 `txtCPSL`；一旦显式传了 `qty_1`，它就只写展示框 → 汇总为空 → 报
+「请输入【产品数量】」→ 明细行存不进去。第 2 档起（`qty_2..10`）可以传。
 
-对照组：协议里 51 字段样例（`name=512961503`，档案能命中的老产品）跑通 `status=created`。
-→ **档案命中路径正常，`product_category` 的新产品路径没接上数量写入**。属于服务端待修。
+上午那次失败（6 个变体全挂）里「只给 `qty`」也炸了，说明当时服务端确实还没接好这条分支；
+下午重试同一份 payload（仍然只给 `qty`、不传 `qty_1`）直接 `created`。→ 服务端已修，
+我们这侧只要守住「不传 qty_1」。
 
-所有实验空单已用 `erp_quote_delete` 清掉。注意：**删除后单号会被 ERP 复用**
-（`BJXQ261112007` 反复出现），所以别靠单号认人，认 `主表备注` 那条追溯串。
+> 注意：成功的那次 `save_product.message` **仍然**带着那句
+> 「请输入【产品数量】…」的页面 alert，但行和数量都落了。**这句 alert 是噪音，
+> 不能当失败依据**——只看 `status` + `verify`。
+
+### 5.2.1 核验看列表页，别看 `erp_quote_detail` 的 null
+
+新建成功后立刻 `erp_quote_detail` 会看到一大批 null：`CPSL1..10`、`DWMC`、`JHRQ`、
+`WCRQ`、`CPSX`、`CPLX`、`FSCMC`、`ZXLB`、`ZBLX`、`ZXFS`、`DKMC`、`YSLX`、`SHDQ`、
+`ECPMC`、`BZ` —— 这些控件在展示态是禁用/只读的，渲染不出值，不代表没落库。
+
+**权威口径是 `erp_quote_list`**（`key=BJXQ...`）。同一个单在列表页里：
+
+```
+最小值/中间值/最大值 = 410000   数量描述 = 410000   单位 = 本
+规格 = 240*330*0   款数 = 10   语言数 = 10   产品类别 = 普通BB书
+产品名称 = 冬季找找图画书(FSC Mix)   ← ERP 自己按 FSC 追加后缀
+预计下单/交货 = 2027-03-15   装订方式 = 快线BB书   包装方式 = 纸箱包装
+是否有配件 = 否   配件描述 = 无   产品类型 = 新产品   修改记录 = 无
+香港单号 = CU26111201（ERP 生成）   制单人 = 张爽
+```
+
+### 5.2.2 脚本直推 vs MCP 工具
+
+`scripts/erp_push.py` 需要 `ERP_MCP_TOKEN`（或 `--token`），仓库和 profile 里目前**都没落盘**
+→ 直接跑会 `HTTP 401 missing_bearer`。要拿到 token 得先 `POST /v1/auth/login`。
+当下可用的推送通道是 MCP 工具 `erp_quote_create`（`confirm=false` 干跑 → `confirm=true` 落库），
+参数结构与本目录下 `*.erp-import.json` 完全一致，**照着文件内容原样贴进去即可**。
 
 ### 5.3 成败只能看 `status`，不能看 `bdbh`
 
