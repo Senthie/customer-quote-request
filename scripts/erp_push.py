@@ -2,49 +2,50 @@
 # -*- coding: utf-8 -*-
 """erp_push.py —— 把 59 键产物**推进 ERP**（流水线的最后一步）。
 
-为什么需要它
-------------
-`main.py` 只做到「把产物落盘」+「多写一份 59 键 `<...>.erp-import.json`」。
-文件躺在 `processed/` 里不会自己进 ERP —— 2026-11-11 业务问「为什么没上传 ERP」，
-答案就是**流水线原本没有这一步**。本脚本补上这一步。
+> 协议依据：`docs/erp-quote-create.md`（2026-11-12，逐字段对照
+> `src/erp_tools/tools/quote_create/service.py` 的 `prepare()` / `create()` /
+> `SUB_FIELD_MAP` / `PRODUCT_ARG_FIELDS` 校对过）。**以那份文档为准，不以猜测为准。**
 
-⚠️ 只能推 10 个字段（2026-11-11 实测，不是权限问题，是表单没有控件）
---------------------------------------------------------------------
-ERP「新增客户报价需求」页 `BJ_KHBJXQ/Add.aspx` 只有 **15 个表头控件** +
-产品明细子页（名称/规格/数量）。`erp_quote_new_form` 的实测清单：
+能写什么（59 键里 24 个）
+-------------------------
+表头 9 个：`customer` / `sales` / `contact` / `phone` / `mobile` / `fax` /
+          `discount` / `remark` / `product_memo`
+明细 14 个（`products[0]`）：`binding`→`ZDFS`、`packing`→`BZFS`、`pallet`→`TBLX`、
+          `delivery`→`SHFS`、`delivery_date`→`JHRQ`、`expected_date`→`WCRQ`、
+          `parts_desc`→`Remark1`、`modify_log`→`Remark3`、`inspection`→`Remark4`、
+          `product_desc`→`CPMS`、`attribute`→`CPSX`、`product_type`→`CPLX`、
+          `cases`→`TZS`、`languages`→`YYS`
++ `name`（`CPMC`）/ `spec`（`CD*KD*GD`，**只校验不落库**）/ `qty`（写 `txtCPSL`+`txtCPSL1`）
 
-    txtBDBH(只读) txtKHID txtKHMC(只读) txtKHBM txtYGID txtYGXM txtGDYXM
-    txtDJTX txtLXR txtLXDH txtSJ txtCZ txtZKL txtRemark txtCPMX
-    + 产品明细：名称 / 规格 / 数量
+写不进去的（由 ERP 从**产品档案**反查回填，或页面没有对应控件）
+--------------------------------------------------------------
+`CPLB`（产品类别，树形下拉）、`CD`/`KD`/`GD`（尺寸——`spec` 传了也只校验）、
+`DWMC`（单位）、`CPSL2…CPSL10`（只写汇总 `txtCPSL`，阶梯丢失）、
+`FSCMC`、`KHDH`、`KHDDH`、`ECPMC`、`BZ`、`KHMBDJ`、`YSLX`/`SHDQ`/`KHDQ`、
+`ZXLB`/`ZBLX`/`ZXFS`/`DKMC`（装箱细项）、`SFYPJ` 及各 `chk*` 布尔、`Drop_SJFX`、
+`OLD_KHDDH`、`BGMS`。→ 脚本把它们列进 `not_writable`，进 ERP 后由录单同事补
+（业务 2026-11-11：「未定选项可以去 ERP 后修改」）。
 
-59 键里能对上的是 **10 个**（`KHZL`→txtKHID、`YWY`→txtYGXM、`GDY`→txtGDYXM、
-`LXR`→txtLXR、电话/手机/传真、`ZKL`→txtZKL、`Remark`、`CPMX`、`CPMC`+尺寸+数量）。
-其余 49 个（`CPLB`/`CPMS`/`TZS`/`YYS`/`CD`/`KD`/`GD`/`FSCMC`/`BZFS`/`TBLX`/`SHFS`/
-`YSLX`/`SHDQ`/`ZXLB`/`ZBLX`/`ZXFS`/`DKMC`/`SFYPJ`/`KHDH`/`KHDDH`/`ECPMC`/`JHRQ`/
-`WCRQ`/`Remark1-4`/`CPSL1-10`/`CPSX`…）**在这张页面上根本没有输入框** ——
-MCP 是驱动浏览器填表，页面上不存在的控件填不进去。这些字段要么由 ERP 侧的
-**导入接口**一次性写入，要么由录单同事在建单后的明细/编辑页补齐（业务 2026-11-11
-口径：「未定选项可以去 ERP 后修改」）。
-
-所以本脚本的定位是：**先把单建出来（客户 + 产品 + 数量 + 一个能追溯的 Remark），
-剩下的字段进 ERP 后补**。不要在脚本里假装能写全 59 键。
+两条硬约束（踩过）
+------------------
+1. **产品名必须在【产品档案】里唯一匹配**（精确同名优先）——2026-11-11 实测：
+   `产品档案里找不到 '冬季找找图画书'`。而且**尺寸/类别/单位都是从档案反查的**，
+   所以产品档案条目本身得对。
+2. **一次只支持 1 条明细**（`len(products)!=1` → `status=unsupported`）→ 一条产品记录
+   一次 `create`，N 条就调 N 次。
 
 用法
 ----
     # ① 干跑（默认；MCP 侧 confirm=false，不写库）
-    uv run ./scripts/erp_push.py customer-files/processed/<task>/ERP_xxx.erp-import.json
+    uv run ./scripts/erp_push.py <产物>/ERP_xxx.erp-import.json --customer NGV10 --qty 410000
 
-    # ② 真写（建主表 + 产品明细，返回表单编号 BDBH）
-    uv run ./scripts/erp_push.py ... --confirm --qty 410000
+    # ② 真写（逐条建主表 + 明细，返回表单编号 BDBH）
+    uv run ./scripts/erp_push.py ... --confirm
 
-    # 客户代号不确定时显式给（NGV→NGV10、igl→IBL10；默认取客户档案 erp_khzl[0]）
-    uv run ./scripts/erp_push.py ... --customer NGVS16
+输出：stdout 一份 JSON，同时写 `<产物>.erp-push.json` + 追加 `customer-files/.erp_push_log.jsonl`。
 
-输出：stdout 一份 JSON（给 agent/上层读），同时把结果写到
-`<产物>.erp-push.json`、追加一行到 `customer-files/.erp_push_log.jsonl`。
-
-幂等：同一个 task（= 产物里的 `ID`）已有 `status=created` 记录 → 拒绝再推，
-除非 `--force`（重复推会在 ERP 里生成第二张单，业务最怕这个）。
+幂等：同一个 task（产物里的 `ID`）已有 `status=created` 记录 → 默认拒推（`--force` 才再推）。
+ERP 里重复建单是最麻烦的错误，宁可少推一次也不要多推。
 """
 from __future__ import annotations
 
@@ -69,11 +70,43 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 from erp_bundle import load_bundle  # noqa: E402
 
 DEFAULT_MCP_URL = "https://14.12.0.173:8443/mcp"
-# ERP 里「新增报价需求」页只能写这些 —— 其余字段见模块 docstring
-WRITABLE_HEADER = (
-    "KHZL", "YWY", "GDY", "LXR", "LXDH", "SJ", "CZ", "ZKL", "Remark", "CPMX",
-)
 CPMC_PLACEHOLDER = "【中文品名待定】"
+
+# 59 键 → erp_quote_create 明细入参（协议见 docs/erp-quote-create.md §4）
+PRODUCT_ARG_MAP: dict[str, str] = {
+    "ZDFS": "binding",
+    "BZFS": "packing",
+    "TBLX": "pallet",
+    "SHFS": "delivery",
+    "JHRQ": "delivery_date",
+    "WCRQ": "expected_date",
+    "Remark1": "parts_desc",
+    "Remark3": "modify_log",
+    "Remark4": "inspection",
+    "CPMS": "product_desc",
+    "CPSX": "attribute",
+    "CPLX": "product_type",
+    "TZS": "cases",
+    "YYS": "languages",
+}
+
+# 59 键 → erp_quote_create 表头入参
+HEADER_ARG_MAP: dict[str, tuple[str, str]] = {
+    "LXR": ("contact", "str"),
+    "LXDH": ("phone", "str"),
+    "SJ": ("mobile", "str"),
+    "CZ": ("fax", "str"),
+    "ZKL": ("discount", "str"),
+    "CPMX": ("product_memo", "str"),
+}
+
+# 这些字段 create 一定写不进去（ERP 从产品档案反查，或页面无控件）
+NOT_WRITABLE = (
+    "CPLB", "CD", "KD", "GD", "DWMC", "FSCMC", "KHDH", "KHDDH", "ECPMC",
+    "BZ", "KHMBDJ", "YSLX", "SHDQ", "KHDQ", "ZXLB", "ZBLX", "ZXFS", "DKMC",
+    "SFYPJ", "chkXBJF", "chkZDBJF", "chkBSYTB", "chkBSYJZX", "Drop_SJFX",
+    "OLD_KHDDH", "BGMS",
+) + tuple(f"CPSL{i}" for i in range(2, 11))
 
 
 # ─────────────────────────── MCP 客户端（stdlib，无新依赖） ───────────────────────────
@@ -84,12 +117,12 @@ class McpError(RuntimeError):
 class McpHttpClient:
     """极简 MCP streamable-HTTP 客户端：initialize → tools/call。
 
-    只实现本脚本需要的两个动作。响应可能是 SSE（`data: {...}`）也可能是裸 JSON，
-    两种都解 —— 服务端版本不同返回不同 framed 类型。
+    响应可能是 SSE（`data: {...}`）也可能是裸 JSON，两种都解 —— 服务端版本不同
+    framed 类型不同。
     """
 
     def __init__(self, url: str = DEFAULT_MCP_URL, token: str = "",
-                 timeout: float = 120.0, verify_ssl: bool = False):
+                 timeout: float = 180.0, verify_ssl: bool = False):
         self.url = url
         self.token = token
         self.timeout = timeout
@@ -97,11 +130,10 @@ class McpHttpClient:
         self._last_headers: dict[str, str] = {}
         self._id = 0
         self._ctx = ssl.create_default_context()
-        if not verify_ssl:  # 自签证书（14.12.0.173 的 SAN 里没有这个 IP），同 MCP 配置
+        if not verify_ssl:  # 自签证书（SAN 里没有 14.12.0.173），同 Hermes MCP 配置
             self._ctx.check_hostname = False
             self._ctx.verify_mode = ssl.CERT_NONE
 
-    # -- 传输层 ------------------------------------------------------------
     def _post(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(self.url, data=data, method="POST")
@@ -115,7 +147,7 @@ class McpHttpClient:
             with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
                 raw = resp.read().decode("utf-8", "replace")
                 headers = {k.lower(): v for k, v in resp.headers.items()}
-        except urllib.error.HTTPError as exc:  # 带上响应体，别只报状态码
+        except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")[:500]
             raise McpError(f"HTTP {exc.code} {self.url}: {body}") from exc
         except urllib.error.URLError as exc:
@@ -131,21 +163,19 @@ class McpHttpClient:
         if not notify:
             self._id += 1
             payload["id"] = self._id
-        body, headers = self._post(payload)
+        body, _ = self._post(payload)
         if notify:
             return {}
         if "error" in body:
             raise McpError(f"{method} 失败：{body['error']}")
         return body.get("result", body)
 
-    # -- 协议层 ------------------------------------------------------------
     def initialize(self) -> dict[str, Any]:
         result = self._rpc("initialize", {
             "protocolVersion": "2025-06-18",
             "capabilities": {},
             "clientInfo": {"name": "cqr-erp-push", "version": "1.0"},
         })
-        # 服务端在 initialize 的响应头里给 session id；后续请求必须带上
         self.session_id = (self._last_headers.get("mcp-session-id")
                            or self._last_headers.get("x-session-id"))
         self._rpc("notifications/initialized", notify=True)
@@ -153,9 +183,7 @@ class McpHttpClient:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
-        # MCP 把工具返回值放在 content[].text（JSON 字符串）
-        content = result.get("content") or []
-        for item in content:
+        for item in result.get("content") or []:
             if isinstance(item, dict) and item.get("type") == "text":
                 try:
                     return json.loads(item["text"])
@@ -165,7 +193,6 @@ class McpHttpClient:
 
 
 def _parse_body(raw: str) -> dict[str, Any]:
-    """兼容两种响应：裸 JSON / SSE（`event: message` + `data: {...}`）。"""
     text = (raw or "").strip()
     if not text:
         return {}
@@ -194,80 +221,124 @@ def _profile_customer_code(profile_id: str) -> str:
 
         codes = load_profile(profile_id).rule("erp_khzl", []) or []
         return str(codes[0]).strip() if codes else ""
-    except Exception:  # noqa: BLE001 —— 读不到档案就让调用方显式给 --customer
+    except Exception:  # noqa: BLE001
         return ""
 
 
-def build_payload(
-    records: list[dict[str, Any]],
+def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
+    if override:
+        return int(override)
+    total = sum(int(v) for v in (record.get(f"CPSL{i}") for i in range(1, 11))
+                if isinstance(v, (int, float)))
+    return total or None
+
+
+def build_call(
+    record: dict[str, Any],
     *,
-    customer: str = "",
-    qty_override: Optional[int] = None,
-    profile_id: str = "",
+    customer: str,
+    qty: Optional[int],
 ) -> tuple[dict[str, Any], list[str]]:
-    """把产物记录折成 `erp_quote_create` 的入参 + 一组「推不进去的字段」说明。"""
+    """单条产品记录 → 一次 `erp_quote_create` 的入参（ERP 一次只收 1 条明细）。"""
     problems: list[str] = []
-    if not records:
-        return {}, ["产物里没有记录"]
-    head = records[0]
+    name = str(record.get("CPMC") or record.get("CPMC_ZH") or "").strip()
+    if not name or name == CPMC_PLACEHOLDER:
+        problems.append("CPMC 还是占位符/空 → 先写中文品名再推")
 
-    code = (customer or str(head.get("KHZL") or "").strip()
-            or _profile_customer_code(profile_id))
-    if not code:
-        problems.append("客户代码未知：产物 KHZL 为空且档案里没有 erp_khzl → 请用 --customer 指定")
+    cd, kd, gd = record.get("CD"), record.get("KD"), record.get("GD")
+    spec = f"{cd}*{kd}*{gd or 0}" if cd not in (None, "") and kd not in (None, "") else ""
 
-    products: list[dict[str, Any]] = []
-    for idx, rec in enumerate(records, 1):
-        name = str(rec.get("CPMC") or rec.get("CPMC_ZH") or "").strip()
-        if not name or name == CPMC_PLACEHOLDER:
-            problems.append(f"第{idx}条 CPMC 还是占位符/空 → 先写中文品名再推")
-        cd, kd, gd = rec.get("CD"), rec.get("KD"), rec.get("GD")
-        spec = ""
-        if cd not in (None, "") and kd not in (None, ""):
-            spec = f"{cd}*{kd}*{gd or 0}"
-        qty = qty_override
-        if qty is None:
-            slots = [rec.get(f"CPSL{i}") for i in range(1, 11)]
-            total = sum(int(v) for v in slots if isinstance(v, (int, float)))
-            qty = total or None
-        if not qty:
-            problems.append(
-                f"第{idx}条数量未知（CPSL1-10 全空/为 0）→ 用 --qty 指定本单数量"
-                "（ERP 明细的「产品数量」是必填的实体数量，不是阶梯）")
-        products.append({"name": name, "spec": spec, "qty": qty or 0})
+    qty = _record_qty(record, qty)
+    if not qty:
+        problems.append("数量未知（CPSL1-10 全空/为 0）→ 用 --qty 指定（ERP 明细的「产品数量」是实体数量）")
 
-    khddh = str(head.get("KHDDH") or "").strip()
-    ecpmc = str(head.get("ECPMC") or "").strip()
-    remark = str(head.get("Remark") or "").strip()
+    product: dict[str, Any] = {"name": name, "spec": spec, "qty": qty or 0}
+    for key, arg in PRODUCT_ARG_MAP.items():
+        val = record.get(key)
+        if val in (None, "", [], 0):
+            continue  # 0/空不传：别把 `TZS=0` 这类噪音塞进 ERP
+        product[arg] = val
+
+    khddh = str(record.get("KHDDH") or "").strip()
+    ecpmc = str(record.get("ECPMC") or "").strip()
+    remark = str(record.get("Remark") or "").strip()
     if not remark:
-        # 用「香港单号 / 原始品名」当追溯串：ERP 里一眼能认出是这条询价
+        # 「香港单号 / 原始品名」当追溯串：ERP 里一眼认出是哪条询价
         remark = " / ".join(x for x in (khddh, ecpmc) if x)
 
     payload: dict[str, Any] = {
-        "customer": code,
-        "products": products,
+        "customer": customer,
+        "products": [product],
         "remark": remark[:500],
     }
-    for key in ("LXR", "LXDH", "SJ", "CZ", "ZKL", "CPMX"):
-        val = head.get(key)
+    for key, (arg, _) in HEADER_ARG_MAP.items():
+        val = record.get(key)
         if val not in (None, ""):
-            payload[key.lower()] = str(val)
-    # ★ YWY/GDY 故意不传：产物里是生成标记 `KM`（不是 ERP 真人），传了会被拒；
+            payload[arg] = str(val)
+    # ★ YWY/GDY 故意不传：产物里是生成标记 `KM`（不是 ERP 真人），传了被拒；
     #   ERP 会按客户资料自动带出业务员/跟单员（实测 NGV10 → 陈纯 / 肖也）。
     return payload, problems
 
 
+def build_calls(
+    records: list[dict[str, Any]],
+    *,
+    customer: str = "",
+    qty: Optional[int] = None,
+    profile_id: str = "",
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """整份产物 → N 次 create 的入参（N = 产品记录数；ERP 一次只收 1 条明细）。"""
+    if not records:
+        return [], ["产物里没有记录"]
+    problems: list[str] = []
+    code = (customer or str(records[0].get("KHZL") or "").strip()
+            or _profile_customer_code(profile_id))
+    if not code:
+        problems.append("客户代码未知：产物 KHZL 为空且档案里没有 erp_khzl → 请用 --customer 指定")
+
+    calls: list[dict[str, Any]] = []
+    for idx, rec in enumerate(records, 1):
+        payload, probs = build_call(rec, customer=code, qty=qty)
+        if len(records) > 1:
+            probs = [f"第{idx}条：{p}" for p in probs]
+        problems.extend(probs)
+        calls.append(payload)
+    return calls, problems
+
+
+# 兼容旧调用（单条）：返回第一条的 payload
+def build_payload(records: list[dict[str, Any]], *, customer: str = "",
+                  qty_override: Optional[int] = None,
+                  profile_id: str = "") -> tuple[dict[str, Any], list[str]]:
+    calls, problems = build_calls(records, customer=customer, qty=qty_override,
+                                  profile_id=profile_id)
+    return (calls[0] if calls else {}), problems
+
+
+def _is_emptyish(key: str, val: Any) -> bool:
+    """判断「这个字段其实没有值」。
+
+    `GD=0` 对业务是**有意义的 0**（客户没给厚度 = 0，不是没填），必须报出来；
+    而 `CPSL2=0` / `chkXBJF=False` 这种默认值报出来只是噪音。
+    """
+    if val is None or val == "" or val == []:
+        return True
+    if isinstance(val, bool):
+        return not val
+    if isinstance(val, (int, float)) and not val:
+        return key.startswith("CPSL") or key in ("KHMBDJ", "BZ")
+    return False
+
+
 def unwritable_fields(records: list[dict[str, Any]]) -> dict[str, str]:
-    """这单有哪些字段**推不进 ERP**（要给业务签字确认的清单）。"""
+    """这单有哪些字段**create 写不进去**（要给业务签字确认的清单）。"""
     head = records[0] if records else {}
     out: dict[str, str] = {}
-    for key, rec_key in (("CPLB", "CPLB"), ("CPMS", "CPMS"), ("TZS", "TZS"), ("YYS", "YYS"),
-                         ("KHDH", "KHDH"), ("KHDDH", "KHDDH"), ("ECPMC", "ECPMC"),
-                         ("ZDFS", "ZDFS"), ("FSCMC", "FSCMC"), ("BZFS", "BZFS"),
-                         ("TBLX", "TBLX"), ("SHFS", "SHFS"), ("JHRQ", "JHRQ")):
-        val = head.get(rec_key)
-        if val not in (None, "", 0, []):
-            out[key] = str(val)
+    for key in NOT_WRITABLE:
+        val = head.get(key)
+        if _is_emptyish(key, val):
+            continue
+        out[key] = str(val)
     return out
 
 
@@ -311,6 +382,23 @@ def sidecar_path(artifact: Path) -> Path:
 
 
 # ─────────────────────────── 主流程 ───────────────────────────
+def _classify(result: dict[str, Any]) -> tuple[str, Optional[str], Optional[str]]:
+    """ERP 返回 → (status, bdbh, error)。以 `status` 为准，不靠 alert 文案。"""
+    if isinstance(result, dict) and "raw" in result:
+        # MCP 把工具异常包成一条 text：「Error executing tool …: 产品档案里找不到 X」
+        return "error", None, str(result.get("raw"))
+    status = str(result.get("status") or "")
+    bdbh = result.get("bdbh") or result.get("BDBH")
+    if status == "created" or bdbh:
+        return "created", bdbh, None
+    if status == "needs_confirmation":
+        return "dry_run", None, None
+    if status in ("invalid", "unsupported", "rejected", "partial", "failed"):
+        msg = result.get("message") or result.get("detail_error") or str(result.get("errors") or "")
+        return status, None, msg
+    return status or "unknown", None, None
+
+
 def push(
     artifact: Path,
     *,
@@ -334,33 +422,48 @@ def push(
                 "log": str(PUSH_LOG),
             }
 
-    payload, problems = build_payload(records, customer=customer, qty_override=qty)
+    calls, problems = build_calls(records, customer=customer, qty=qty)
     report: dict[str, Any] = {
         "task_id": task_id,
         "artifact": str(artifact),
         "confirm": confirm,
-        "payload": payload,
+        "record_count": len(records),
+        "calls": calls,
         "problems": problems,
         "not_writable": unwritable_fields(records),
+        "results": [],
     }
     if problems:
         report["status"] = "invalid"
         return report
 
-    result = client.call_tool("erp_quote_create", {**payload, "confirm": bool(confirm)})
-    report["erp_response"] = result
-    status = str(result.get("status") or "")
-    if status == "created" or result.get("bdbh") or result.get("BDBH"):
+    for idx, payload in enumerate(calls, 1):
+        result = client.call_tool("erp_quote_create", {**payload, "confirm": bool(confirm)})
+        status, bdbh, error = _classify(result)
+        report["results"].append({
+            "record": idx,
+            "status": status,
+            "bdbh": bdbh,
+            "error": error,
+            "erp_response": result,
+        })
+        if status == "created":
+            append_log({"task_id": task_id, "record": idx, "bdbh": bdbh, "status": "created",
+                        "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "artifact": str(artifact),
+                        "customer": payload.get("customer"),
+                        "product": payload["products"][0]["name"]})
+
+    statuses = [r["status"] for r in report["results"]]
+    if all(s == "created" for s in statuses):
         report["status"] = "created"
-        report["bdbh"] = result.get("bdbh") or result.get("BDBH")
-    elif status == "needs_confirmation":
+        report["bdbh"] = [r["bdbh"] for r in report["results"]]
+    elif all(s == "dry_run" for s in statuses):
         report["status"] = "dry_run"
-    elif isinstance(result, dict) and "raw" in result:
-        # MCP 把工具异常包成一条 text：「Error executing tool …: 产品档案里找不到 X」
-        report["status"] = "error"
-        report["error"] = str(result.get("raw"))
+    elif any(s == "created" for s in statuses):
+        report["status"] = "partial"  # 有的建了有的没建 —— 必须人看一眼
     else:
-        report["status"] = status or "unknown"
+        report["status"] = statuses[0] if statuses else "unknown"
+        report["error"] = next((r["error"] for r in report["results"] if r["error"]), None)
     return report
 
 
@@ -368,7 +471,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="把 59 键产物推进 ERP（新增报价需求）")
     ap.add_argument("artifact", help="ERP_*.json 或 *.erp-import.json")
     ap.add_argument("--customer", default="", help="ERP 客户代号（NGV10 / NGVS16 / IBL10…）")
-    ap.add_argument("--qty", type=int, default=None, help="本单数量（CPSL 全空时必填）")
+    ap.add_argument("--qty", type=int, default=None, help="本单数量（CPSL 全空时必填；多条记录时共用）")
     ap.add_argument("--confirm", action="store_true", help="真写 ERP；不加 = 干跑")
     ap.add_argument("--force", action="store_true", help="同一 task 已推过也再推一次")
     ap.add_argument("--token", default="", help="MCP token（默认 $ERP_MCP_TOKEN）")
@@ -384,7 +487,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     client = McpHttpClient(url=args.url, token=token)
     try:
         client.initialize()
-    except McpError as exc:  # 连不上就别装成功
+    except McpError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False, indent=2))
         return 3
 
@@ -394,13 +497,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     sidecar = sidecar_path(path)
     sidecar.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    if report.get("status") in ("created", "dry_run"):
-        append_log({
-            "task_id": report.get("task_id"), "bdbh": report.get("bdbh"),
-            "status": "created" if report["status"] == "created" else "dry_run",
-            "at": report["at"], "artifact": str(path),
-            "customer": report["payload"].get("customer"),
-        })
+    if report.get("status") == "dry_run":
+        append_log({"task_id": report.get("task_id"), "status": "dry_run", "at": report["at"],
+                    "artifact": str(path)})
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report.get("status") in ("created", "dry_run") else 1
 
