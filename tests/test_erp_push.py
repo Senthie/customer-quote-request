@@ -142,12 +142,63 @@ def test_数量档位拆到qty_n(tmp_path: Path):
 
 
 # ── ERP 必填 ────────────────────────────────────────────────
-@pytest.mark.parametrize("key", ["ZDFS", "JHRQ", "WCRQ", "Remark1", "CPSX", "CPLX", "Remark3"])
+# 2026-11-12 森西拍板：这 7 个客户常不给的，按业务口径兜底（见 FIELD_DEFAULTS /
+# BINDING_BY_CATEGORY），**不再拦**；剩下 7 个仍然硬拦。
+DEFAULTED_KEYS = ["ZDFS", "Remark1", "CPSX", "CPLX", "Remark3"]
+
+
+@pytest.mark.parametrize("key", ["JHRQ", "WCRQ", "CPMS", "BZFS", "TBLX", "SHFS", "Remark4"])
 def test_ERP必填缺一个就拦(key: str, tmp_path: Path):
-    """14 个必填缺任何一个 → 不许推（否则 create 建了主表、明细被拒 = 空单）。"""
+    """14 个必填、非兜底项缺任何一个 → 不许推（否则 create 建了主表、明细被拒 = 空单）。"""
     rec = _rec(**{key: ""})
     _, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
     assert any("ERP 必填缺失" in p for p in problems), key
+
+
+@pytest.mark.parametrize("key", DEFAULTED_KEYS)
+def test_可兜底的必填缺了不拦但记进defaulted(key: str, tmp_path: Path):
+    """兜底项缺了照样能推，但必须出现在 `defaulted[]` 里给业务复核。"""
+    rec = _rec(**{key: ""})
+    _, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
+    assert problems == [], problems
+    filled = {d["erp_field"] for d in erp_push.defaulted_fields([rec])}
+    assert erp_push.PRODUCT_FIELD_MAP[key] in filled, key
+
+
+def test_兜底值本身符合业务口径(tmp_path: Path):
+    """CPSX→三岁以下、CPLX→新产品、Remark1/3→无、BB 类目→快线BB书。"""
+    rec = _rec(ZDFS="", Remark1="", CPSX=None, CPLX="", Remark3="")
+    payload, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
+    assert problems == []
+    fields = payload["products"][0]["fields"]
+    assert fields["attribute"] == "三岁以下"
+    assert fields["product_type"] == "新产品"
+    assert fields["parts_desc"] == "无"
+    assert fields["modify_log"] == "无"
+    assert fields["binding"] == "快线BB书"
+
+
+def test_非BB类目不瞎填装订(tmp_path: Path):
+    """不是 BB 书就别替客户选装订方式 —— 让它照常拦住。"""
+    rec = _rec(ZDFS="", CPLB="01.02;精装书")
+    _, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
+    assert any("binding" in p for p in problems)
+
+
+def test_日期兜底只补空值(tmp_path: Path):
+    """--date 只填 JHRQ/WCRQ 的空值，已有值不覆盖。"""
+    rec = _rec(JHRQ="", WCRQ="")
+    payload, _ = erp_push.build_payload([rec], customer="NGV10", qty_override=100,
+                                        default_date="2027-03-15")
+    fields = payload["products"][0]["fields"]
+    assert fields["delivery_date"] == "2027-03-15"
+    assert fields["expected_date"] == "2027-03-15"
+    rec2 = _rec(JHRQ="2027/12/01", WCRQ="")
+    payload2, _ = erp_push.build_payload([rec2], customer="NGV10", qty_override=100,
+                                         default_date="2027-03-15")
+    f2 = payload2["products"][0]["fields"]
+    assert f2["delivery_date"] == "2027/12/01"
+    assert f2["expected_date"] == "2027-03-15"
 
 
 def test_必填齐全就放行(tmp_path: Path):

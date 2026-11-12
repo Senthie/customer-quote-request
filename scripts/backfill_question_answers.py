@@ -50,6 +50,7 @@ from typing import Any, Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from erp_bundle import is_sidecar  # noqa: E402
 from internal_fields import internal_field_keys  # noqa: E402
 from question_answers import (QUESTIONS_KEY, SCHEMA_VERSION,  # noqa: E402
                               build_for_record, effective_status,
@@ -74,9 +75,9 @@ def erp_files(target: Path) -> list[Path]:
     if target.is_file():
         return [target]
     out = [p for p in sorted(target.glob("ERP_*.json"))
-           # 单对象时代留下的备份（.prearray.bak）不是产物；
-           # 导出口径副本（*.erp-import.json）只有 59 键，回填它写不了 question_answers
-           if not p.name.endswith(".bak") and not p.name.endswith(".erp-import.json")]
+           # 单对象时代留下的备份（.prearray.bak）、导出口径副本（*.erp-import.json）、
+           # ERP 推送报告（*.erp-push.json）都不是产物 —— 判定收敛在 erp_bundle。
+           if not is_sidecar(p)]
     return out
 
 

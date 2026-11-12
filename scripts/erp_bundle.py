@@ -52,15 +52,41 @@ IMPORT_SUFFIX = ".erp-import.json"
 """
 
 
+PUSH_SUFFIX = ".erp-push.json"
+"""推送 ERP 的结果侧档（1.0.71）。
+
+`scripts/erp_push.py` 写完会把结果写成 `<产物>.erp-push.json`（内容是
+`{task_id, artifact, confirm, calls:[...], status}`，**不是** ERP 记录）。
+它在文件名上同样以 `ERP_` 开头、以 `.json` 结尾 → `glob("ERP_*.json")` 会抓到它，
+而且 mtime **比主产物新** → 「取最新那份」的地方一律选错文件。
+
+真实事故（2026-11-12 凌晨 cron）：`cpms_todo` 对任务 `179d3e1f…` 报
+「缺=CPMS/CPMC/CPMC_ZH/ECPMC」，产物路径指的是 `.erp-push.json` ——
+主产物其实早就写全了（`cpms_lint` 0 error / 0 warn、`CPMS_来源对照.md` 齐备），
+于是这条假欠账每 5 分钟被交给一个新 agent 会话，反复「重写」一份已完成的任务。
+"""
+
+
+def is_push_report(path: str | Path) -> bool:
+    """这个文件是不是 ERP 推送结果报告（`*.erp-push.json`）。"""
+    return str(path).endswith(PUSH_SUFFIX)
+
+
+def is_sidecar(path: str | Path) -> bool:
+    """不是任务产物的 JSON 侧档：导出口径副本、推送报告、备份。"""
+    return (is_import_copy(path) or is_push_report(path)
+            or str(path).endswith(".bak"))
+
+
 def is_import_copy(path: str | Path) -> bool:
     """这个文件是不是导出口径副本（`*.erp-import.json`）。"""
     return str(path).endswith(IMPORT_SUFFIX)
 
 
 def iter_bundles(directory: str | Path, pattern: str = "ERP_*.json") -> list[Path]:
-    """目录下的**主**产物文件（排除 `.erp-import.json` 副本与 `.bak` 备份），按文件名排序。"""
+    """目录下的**主**产物文件（排除 `.erp-import.json` 副本 / `.erp-push.json` 报告 / `.bak`）。"""
     return [p for p in sorted(Path(directory).glob(pattern))
-            if not is_import_copy(p) and not p.name.endswith(".bak")]
+            if not is_sidecar(p)]
 
 
 def _coerce(data: Any, *, where: str = "") -> list:

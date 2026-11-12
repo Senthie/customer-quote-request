@@ -26,10 +26,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ROOT = REPO_ROOT / "customer-files" / "processed"
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from erp_bundle import is_sidecar  # noqa: E402
+
 
 def iter_erp_files(root: Path, include_superseded: bool = False):
     for p in sorted(root.rglob("ERP_*.json")):
         if not include_superseded and any(part.startswith("_superseded") for part in p.parts):
+            continue
+        # 侧档（`.erp-import.json` / `.erp-push.json`）不是产物：前者已是 59 键副本，
+        # 后者是推送报告 —— 把它们包成数组会毁掉报告。
+        if is_sidecar(p):
             continue
         yield p
 

@@ -115,6 +115,41 @@ def test_导出口径副本不掩盖真欠账(processed: Path):
     assert items[0]["missing"] == ["CPMS"]
 
 
+def test_ERP推送报告不算欠账(processed: Path):
+    """★ 1.0.71：`erp_push.py` 写的 `*.erp-push.json` 也不是产物。
+
+    真实事故（2026-11-12 凌晨 cron，任务 `179d3e1f…`）：主产物 CPMS/CPMC/CPMC_ZH/ECPMC
+    早就写全了（`cpms_lint` 0 error），但推送报告 mtime 更新、文件名同样以 `ERP_` 开头，
+    `glob("ERP_*.json")` 取最新就拿到报告 → 报「缺=CPMS/CPMC/CPMC_ZH/ECPMC」，
+    每 5 分钟把一条假欠账交给一个新 agent 会话。
+    """
+    d = _task(processed, "ppp", cpms="这是完整描述", cpmc="冬季找找图画书")
+    (d / "ERP_ppp_20260101_000000.erp-push.json").write_text(
+        json.dumps({"task_id": "ppp", "artifact": "…erp-import.json",
+                    "confirm": False, "calls": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    later = (d / "ERP_ppp_20260101_000000.json").stat().st_mtime + 10
+    os.utime(d / "ERP_ppp_20260101_000000.erp-push.json", (later, later))
+
+    assert cpms_todo.iter_incomplete(processed) == []
+    assert cpms_todo.format_report([]) == "CPMS_TODO: 0"
+
+
+def test_ERP推送报告不掩盖真欠账(processed: Path):
+    """排除推送报告不等于放过真欠账：主产物 CPMS 空着，照样要点名。"""
+    d = _task(processed, "qqq", cpms="", cpmc="图画书")
+    (d / "ERP_qqq_20260101_000000.erp-push.json").write_text(
+        json.dumps({"task_id": "qqq", "calls": []}, ensure_ascii=False), encoding="utf-8")
+    later = (d / "ERP_qqq_20260101_000000.json").stat().st_mtime + 10
+    os.utime(d / "ERP_qqq_20260101_000000.erp-push.json", (later, later))
+
+    items = cpms_todo.iter_incomplete(processed)
+    assert len(items) == 1
+    assert items[0]["missing"] == ["CPMS"]
+    assert "erp-push" not in items[0]["erp_file"]
+
+
 def _with_profile(root: Path, task_id: str, profile_id: str) -> None:
     """给任务目录的 extracted.json 写上客户档案 id（cpms_todo 靠它判 ECPMC 要不要查）。"""
     p = next((root / task_id).glob("*.extracted.json"))

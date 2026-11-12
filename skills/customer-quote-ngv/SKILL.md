@@ -537,10 +537,16 @@ width / height / binding / content / content gsm / content paper / printing of c
 > ⚠️ 这条口径当天被推翻过一次（先「不充 CPMS」→ 后「需要填写」）。业务短指令
 > （`不充 CPMS` / `B` / `合并`）怎么判读才不会再翻车 —— **先认牌（本单 vs 长期口径）、
 > 复述确认、撞闸门先报冲突**：见 `references/terse-business-instructions.md`。
-> ⚠️ 定时任务（`*/5` 的 CQR job）还有两个反复踩的坑：**预跑脚本的 `CPMS_TODO` 是启动时快照**
-> （动手前先现跑一次 `cpms_todo.py` + 看产物 mtime），以及**同 repo 可能有另一个 Hermes 会话在写同一份产物**
-> （`sibling subagent` 警告 / mtime 自己变 / 提交前 `git status`，**只 add 自己的文件、永不 `git add -A`**）：
-> 见 `references/cron-concurrency-and-stale-todo.md`。也记着：**不许为了止住重复待办去放宽交付闸门**。
+> ⚠️ 定时任务（`*/5` 的 CQR job）还有三个反复踩的坑：**预跑脚本的 `CPMS_TODO` 是启动时快照**
+> （动手前先现跑一次 `cpms_todo.py` + 看产物 mtime）；**同 repo 可能有另一个 Hermes 会话在写同一份产物**
+> （`sibling subagent` 警告 / mtime 自己变 / 提交前 `git status`，**只 add 自己的文件、永不 `git add -A`**）；
+> 以及 ★ **报出来的「产物路径」可能是侧档** —— `ERP_*.erp-push.json`（推送报告）/ `ERP_*.erp-import.json`
+> （59 键副本）文件名同样以 `ERP_` 开头且 **mtime 更新**，拿它判「缺 CPMS/CPMC_ZH/ECPMC」永远是假欠账
+> （2026-11-12 实测：主产物 429 字 CPMS、四道门全绿，却被每 5 分钟报一次）。**动手前三步**：
+> `ls -la <task_dir>` 看有没有侧档 → 直接打印主产物的 `len(CPMS)`/品名三件套 → 现跑 `cpms_todo.py` 应为 0；
+> 齐了就**只复核不重写**。工具侧判定收敛在 `erp_bundle.is_sidecar()`，别再自己写 `endswith(".erp-import.json")`。
+> 另：**门禁看退出码别看 `| tail` 后的 `$?`**（那是 `tail` 的），用 `PIPESTATUS[0]` 或 `pipefail`。
+> 见 `references/cron-concurrency-and-stale-todo.md` §1/§6。也记着：**不许为了止住重复待办去放宽交付闸门**。
 写法模板（概要用【长书脊】+ `共【款数】款，每款【语言数】语言`，下面 封面/内文/装订/装箱 四段，
 客户没给的包装/转版段落整段不写）：见 `references/anfrage-titel-mengen-表.md` §5。
 出数命令：`parse_titel_mengen.py`（抽结构）→ `titel_mengen_to_erp.py`（结构 + 表尾规格块 +
@@ -1154,6 +1160,14 @@ uv run ./scripts/customer_profile.py --prefs ngv
   → 只在复合词/项目号里出现的数字**宁可不写、写进汇报**，不要改写成 `1000` 去骗审计。
   细节见 `references/lidl-anlage-表与并发补写.md` §3 / §4。
   完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`；
+  ★ **用词冲突一律按内部单词表**（`单粉卡`→`单粉咭(C1S)`、`光油`→`印油(光)`、`方背`→`方脊`、
+  装订段 `普通BB书`→`板纸书(合板)`；`CPLB` 仍落树节点名）：判据、可照抄的合规模板
+  （存量 34 份产物里只有 A00130 `9458bd4c…` 能过 `glossary.py --check-json`）、
+  以及「书籍方向必写/`CPSL` 不填总量/`CPMC` 不带（N款）/`ZDFS` 不猜/印色 4C-4C vs 4/0c 交业务」
+  这几条已用真实单 `BJXQ260904006` 核实的口径，见 **`customer-quote-request` 技能的
+  `references/cpms-wording-authority-glossary-vs-spec.md`**；
+  ★ **产物要推进 ERP** 用 `scripts/erp_push.py`（MCP 只能写 59 键里的 10 个、产品名须在产品档案
+  唯一匹配、`YWY=KM` 不能传），配方见同技能的 `references/erp-push-and-write-limits.md`。
   ★ **2026-11-11 实测：并发写者会连字段一起改**（`CPSL1` 被填成数量合计、`CPMC` 被加上「（N款）」、
   概要行被补上书籍方向、`question_answers` 里出现主会话里口头给过的「业务指示」），
   而且会连带覆盖 `<同名>.erp-import.json` 与 `CPMS_来源对照.md`。
@@ -1167,6 +1181,15 @@ uv run ./scripts/customer_profile.py --prefs ngv
     给过就留（本次「把这份 eml 当新报价」就是森西在会话里说的），查不到才当编造删。合并顺序（留底 → 30 秒后再 stat →
   逐键 diff → 按「口径/事实/编造」三分 → 重生成导出口径副本 → 四道门）与
   「克重换算句 / 千分位写法为什么会被 audit 反咬」见 `references/并发合并与克重换算门禁.md`。
+  ★ **CPMS 用词以内部单词表为准，会和 `assets/cpms_spec.yaml` 的闭集词表打架**（2026-11-11 实测，A00142）：
+  客户 `art card C1S` 写 **`单粉咭(C1S)`**（不是 `单粉卡`）、`glossy print-varnish` 写 **`印油(光)`**（不是 `光油`）、
+  `board book binding` 写 **`板纸书(合板)，方脊`**（不是 `board book binding，方背`）。`CPLB` 字段仍落
+  `27.01;普通BB书`（树节点 ≠ 正文用词，两者不要「统一」）。**两条门都绿才算写完**：
+  `glossary.py --check-json` + `cpms_lint.py`；拿不准就先 `glossary.py --check "一行候选"` 试。
+  概要行的「书籍方向」**不许因为 `Drop_SJFX` 为空就删**（CPMS013 要求写，真实单 `BJXQ260904006` 也写【长书脊】）。
+  对照表 + 两个 audit 噪声（换算值不一定会报无出处；`NNNgsm` 未写多为浮点误命中）见总纲
+  `references/cpms-wording-glossary-vs-closed-set.md`；
+  「查真实同号单当应然值校验器（CPSL 全空→不填、ZDFS 线路不抄）」见总纲 `references/real-erp-as-oracle.md`。
   **同一单出现多个任务目录 / 两个实例并发时怎么判「谁是交付件」、为什么已归档的重复件不许补 CPMS**，
   见总纲 `references/cron-concurrency-and-duplicate-tasks.md`。
   顺带一条（2026-10-29 实测）：**仓库常被并行的 subagent 同时改**（`patch` 会提示
@@ -1265,6 +1288,8 @@ uv run ./scripts/customer_profile.py --prefs ngv
       把 `A00152` 切成数字 token `00152` 判「无出处」。
 - [ ] `cpms_todo.py` 现在**四个字段都查**（2026-10-21 补）：`CPMS` 空 / `CPMC`·`CPMC_ZH` 是占位符 /
       档案声明了 `rules.ecpmc.source_keys` 但 `ECPMC` 空 —— `CPMS_TODO: 0` 才是真的写完。
+      ★ 但先看它给的路径是不是**主产物**：`.erp-push.json` / `.erp-import.json` 也会被 `ERP_*.json`
+      抓到（2026-11-12 假欠账），见 `references/cron-concurrency-and-stale-todo.md` §6。
 - [ ] ★ **`question_answers` 内部确认清单**（schema v3，2026-10-30 起）：
       `cpms_todo` 会多报一条 `缺=确认清单(Q_XXX)` —— 卡交付（`blocking=true`）的项没确认完不许交付。
       收尾动作：把业务/客户确认过的事实写进 `answer`（`status` 可不动，填了 answer 就算已确认），

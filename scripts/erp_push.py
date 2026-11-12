@@ -130,6 +130,18 @@ MANDATORY_FIELDS: dict[str, str] = {
     "inspection": "Remark4",
 }
 
+# ★ 业务默认值（2026-11-12 森西拍板）：ERP 必填、客户没给 → 用这些兜底。
+#   只补**空值**，且每个都记进 push 报告的 `defaulted[]`，业务一眼看得出哪些是兜的。
+FIELD_DEFAULTS: dict[str, tuple[Any, str]] = {
+    "CPSX": ("三岁以下", "客户未指定产品属性 → 业务口径默认三岁以下"),
+    "CPLX": ("新产品", "新询价默认按新产品报"),
+    "Remark1": ("无", "无配件"),
+    "Remark3": ("无", "无修改记录"),
+}
+
+# 装订方式按产品类别推导（产物 CPLB 形如 `27.01;普通BB书`）
+BINDING_BY_CATEGORY: tuple[tuple[str, str], ...] = (("BB", "快线BB书"),)
+
 # 59 键 → erp_quote_create 表头入参
 HEADER_ARG_MAP: dict[str, tuple[str, str]] = {
     "LXR": ("contact", "str"),
@@ -282,11 +294,32 @@ def _norm_value(key: str, val: Any) -> Any:
     return val
 
 
+def apply_defaults(record: dict[str, Any], fields: dict[str, Any]
+                   ) -> dict[str, tuple[Any, str]]:
+    """客户没给、按业务口径兜底的必填字段 → `{erp_arg: (value, reason)}`。
+
+    只补 `fields` 里**还没有**的键；返回的就是「兜了哪些」，进报告给业务复核。
+    """
+    out: dict[str, tuple[Any, str]] = {}
+    cplb = str(record.get("CPLB") or "")
+    if "binding" not in fields:
+        for token, val in BINDING_BY_CATEGORY:
+            if token in cplb:
+                out["binding"] = (val, f"产品类别含「{token}」→ 装订方式取 {val}")
+                break
+    for key, (val, reason) in FIELD_DEFAULTS.items():
+        arg = PRODUCT_FIELD_MAP.get(key)
+        if arg and arg not in fields:
+            out[arg] = (val, reason)
+    return out
+
+
 def build_call(
     record: dict[str, Any],
     *,
     customer: str,
     qty: Optional[int],
+    default_date: str = "",
 ) -> tuple[dict[str, Any], list[str]]:
     """单条产品记录 → 一次 `erp_quote_create` 的入参（ERP 一次只收 1 条明细）。"""
     problems: list[str] = []
@@ -318,6 +351,15 @@ def build_call(
             fields[arg] = int(val)
     if qty:
         fields["qty_1"] = int(qty)
+
+    # ★ 业务兜底：缺日期用 --date（JHRQ/WCRQ 同值），缺必填用 FIELD_DEFAULTS
+    if default_date:
+        for key in ("JHRQ", "WCRQ"):
+            if not str(record.get(key) or "").strip():
+                fields[PRODUCT_FIELD_MAP[key]] = default_date
+    for arg, (val, _reason) in apply_defaults(record, fields).items():
+        fields[arg] = val
+
     product["fields"] = fields
 
     # ★ 14 个 ERP 必填：缺一个 → 主表建了、明细被拒 = 一条空单（协议 §3.4）
@@ -353,6 +395,7 @@ def build_calls(
     customer: str = "",
     qty: Optional[int] = None,
     profile_id: str = "",
+    default_date: str = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """整份产物 → N 次 create 的入参（N = 产品记录数；ERP 一次只收 1 条明细）。"""
     if not records:
@@ -365,7 +408,8 @@ def build_calls(
 
     calls: list[dict[str, Any]] = []
     for idx, rec in enumerate(records, 1):
-        payload, probs = build_call(rec, customer=code, qty=qty)
+        payload, probs = build_call(rec, customer=code, qty=qty,
+                                    default_date=default_date)
         if len(records) > 1:
             probs = [f"第{idx}条：{p}" for p in probs]
         problems.extend(probs)
@@ -376,10 +420,26 @@ def build_calls(
 # 兼容旧调用（单条）：返回第一条的 payload
 def build_payload(records: list[dict[str, Any]], *, customer: str = "",
                   qty_override: Optional[int] = None,
-                  profile_id: str = "") -> tuple[dict[str, Any], list[str]]:
+                  profile_id: str = "",
+                  default_date: str = "") -> tuple[dict[str, Any], list[str]]:
     calls, problems = build_calls(records, customer=customer, qty=qty_override,
-                                  profile_id=profile_id)
+                                  profile_id=profile_id, default_date=default_date)
     return (calls[0] if calls else {}), problems
+
+
+def defaulted_fields(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """这单有哪些字段是**按业务口径兜的**（不是客户给的）——给业务签字看。"""
+    out: list[dict[str, Any]] = []
+    for idx, rec in enumerate(records, 1):
+        fields: dict[str, Any] = {}
+        for key, arg in PRODUCT_FIELD_MAP.items():
+            val = rec.get(key)
+            if val not in (None, "", []):
+                fields[arg] = _norm_value(key, val)
+        for arg, (val, reason) in apply_defaults(rec, fields).items():
+            out.append({"record": idx, "erp_field": arg, "value": val,
+                        "reason": reason})
+    return out
 
 
 def _is_emptyish(key: str, val: Any) -> bool:
@@ -474,6 +534,7 @@ def push(
     qty: Optional[int] = None,
     confirm: bool = False,
     force: bool = False,
+    default_date: str = "",
 ) -> dict[str, Any]:
     records = load_bundle(artifact)
     task_id = str(records[0].get("ID") or artifact.parent.name) if records else ""
@@ -489,7 +550,8 @@ def push(
                 "log": str(PUSH_LOG),
             }
 
-    calls, problems = build_calls(records, customer=customer, qty=qty)
+    calls, problems = build_calls(records, customer=customer, qty=qty,
+                                  default_date=default_date)
     report: dict[str, Any] = {
         "task_id": task_id,
         "artifact": str(artifact),
@@ -497,6 +559,7 @@ def push(
         "record_count": len(records),
         "calls": calls,
         "problems": problems,
+        "defaulted": defaulted_fields(records),
         "not_writable": unwritable_fields(records),
         "results": [],
     }
@@ -540,6 +603,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--customer", default="", help="ERP 客户代号（NGV10 / NGVS16 / IBL10…）")
     ap.add_argument("--qty", type=int, default=None, help="本单数量（CPSL 全空时必填；多条记录时共用）")
     ap.add_argument("--confirm", action="store_true", help="真写 ERP；不加 = 干跑")
+    ap.add_argument("--date", dest="default_date", default="",
+                    help="JHRQ/WCRQ 缺值时的兜底日期（ERP 必填），形如 2027-03-15")
     ap.add_argument("--force", action="store_true", help="同一 task 已推过也再推一次")
     ap.add_argument("--token", default="", help="MCP token（默认 $ERP_MCP_TOKEN）")
     ap.add_argument("--url", default=DEFAULT_MCP_URL)
@@ -559,7 +624,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 3
 
     report = push(path, client=client, customer=args.customer, qty=args.qty,
-                  confirm=args.confirm, force=args.force)
+                  confirm=args.confirm, force=args.force,
+                  default_date=args.default_date)
     report["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
     sidecar = sidecar_path(path)

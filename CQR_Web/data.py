@@ -153,6 +153,16 @@ def _is_import_copy(path: Path) -> bool:
     return bool(_load_module("erp_bundle").is_import_copy(path))
 
 
+def _is_sidecar(path: Path) -> bool:
+    """不是任务产物的 JSON 侧档（导出口径副本 / ERP 推送报告 / 备份）。
+
+    1.0.71：`erp_push.py` 写的 `*.erp-push.json` 也以 `ERP_` 开头、以 `.json` 结尾，
+    而且 mtime 比主产物新 —— 不排除它，页面会把一份「推送报告」当成任务，
+    版本/品名一片空（cpms_todo 那边同样会报假欠账）。
+    """
+    return bool(_load_module("erp_bundle").is_sidecar(path))
+
+
 def read_config_version() -> Optional[int]:
     """当前配置版本 —— 读 customers/_defaults.yaml 的顶层 version（单一真源）。"""
     try:
@@ -607,8 +617,11 @@ def scan_exports(root: Optional[Path] = None) -> list[dict[str, Any]]:
     # ★ 排除 `*.erp-import.json`（1.0.65 的导出口径副本）：它只有 59 个键、
     #   没有 CPMC_ZH / version / ID，而且比主产物新 —— 列进来会把每条任务都
     #   变成「主产物是副本」，页面上版本/中文品名显示 null，还把列表撑成两倍。
+    # ★ 排除侧档：`*.erp-import.json`（导出口径副本，只有 59 个键）与
+    #   `*.erp-push.json`（erp_push.py 的推送报告，根本不是 ERP 记录）——
+    #   两者都比主产物新，列进来会把每条任务都变成「主产物是副本/报告」。
     items = [_summarize(p, root) for p in sorted(root.rglob("ERP_*.json"))
-             if p.is_file() and not _is_import_copy(p)]
+             if p.is_file() and not _is_sidecar(p)]
     items.sort(key=lambda it: (it["mtime"], it["relpath"]), reverse=True)
     return items
 

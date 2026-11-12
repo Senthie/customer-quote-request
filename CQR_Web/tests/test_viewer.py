@@ -979,6 +979,27 @@ def test_列表不把导出口径副本当成产物(tmp_path):
     assert task["version"] is not None, "主产物有 version，副本没有 —— 别让副本顶替"
 
 
+def test_列表不把ERP推送报告当成产物(tmp_path):
+    """★ `*.erp-push.json` 是 `erp_push.py` 的推送结果报告（`{task_id, calls, …}`），
+    根本不是 ERP 记录，但文件名同样以 `ERP_` 开头且比主产物新。
+
+    不排除它，列表会多出一条「任务」：无版本、无品名、记录数为 0
+    （2026-11-12 实况：`cpms_todo` 就是被它骗出一轮假欠账）。
+    """
+    _make_multi_export(tmp_path, "tid", [_rec(1)], stamp="20261030_020304")
+    push = tmp_path / "tid" / "ERP_tid_20261030_020304.erp-push.json"
+    push.write_text(json.dumps({"task_id": "tid", "confirm": False, "calls": []},
+                               ensure_ascii=False), encoding="utf-8")
+    os.utime(push, (1_800_000_900,) * 2)   # 报告更新时间 —— 抢「最新」
+
+    assert [it["filename"] for it in ev.scan_exports(tmp_path)] == ["ERP_tid_20261030_020304.json"]
+
+    task = ev.scan_tasks(tmp_path)[0]
+    assert ".erp-push" not in task["relpath"]
+    assert task["record_count"] == 1
+    assert task["version"] is not None
+
+
 def test_接口_api_exports_带任务列表(tmp_path):
     _make_multi_export(tmp_path, "multi", [_rec(1), _rec(2)])
     payload = create_app(processed_dir=tmp_path).test_client().get("/api/exports").get_json()
