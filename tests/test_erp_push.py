@@ -23,6 +23,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import erp_push  # noqa: E402
+import erp_mcp_export  # noqa: E402
+
+
+def erp_payload(rec: dict, qty: int = 100):
+    """单条记录 → (一次 create 的入参, 问题列表)。"""
+    return erp_push.build_payload([rec], customer="NGV10", qty_override=qty)
 
 
 def _rec(**over):
@@ -113,7 +119,8 @@ def test_51字段映射(tmp_path: Path):
     assert f["carton_type"] == "普通纸箱" and f["board_type"] == "A=B双坑纸板"
     assert f["packing_orientation"] == "平装" and f["bottom_card"] == "B3B坑纸板"
     assert f["transport_type"] == "FOB(拼柜)"
-    assert f["qty_1"] == 410000                 # qty 必须等于 qty_1
+    # ★ qty_1 不显式传：给了会盖掉 create() 对隐藏 txtCPSL 的补写
+    assert "qty_1" not in f
 
 
 def test_表头不传KM(tmp_path: Path):
@@ -137,7 +144,8 @@ def test_数量档位拆到qty_n(tmp_path: Path):
     payload, _ = erp_push.build_payload([_rec(CPSL1=3000, CPSL2=5000, CPSL3=7000)],
                                         customer="NGV10")
     f = payload["products"][0]["fields"]
-    assert f["qty_1"] == 30000 and f["qty_2"] == 50000 and f["qty_3"] == 70000
+    assert "qty_1" not in f        # 第 1 档由顶层 qty 写
+    assert f["qty_2"] == 50000 and f["qty_3"] == 70000
     # qty 必须等于第 1 档（总量），不是三档相加
     assert payload["products"][0]["qty"] == 30000
 
@@ -169,6 +177,24 @@ def test_MCP客户端还在(tmp_path: Path):
     assert erp_push.DEFAULT_MCP_URL.startswith("https://") and erp_push.DEFAULT_MCP_URL.endswith("/mcp")
 
 
+# ── 判定成败：status 优先于 bdbh ────────────────────────────
+def test_带bdbh但status_failed不算成功(tmp_path: Path):
+    """ERP `failed` / `partial` 也会返回 bdbh（主表已建、明细没落）。
+
+    只看 bdbh 会把空单报成 created —— 2026-11-12 `BJXQ261112007` 就这么漏过去一次。
+    """
+    res = {"status": "failed", "ok": False, "bdbh": "BJXQ261112007",
+           "detail_error": "产品明细行没有落库"}
+    status, bdbh, err = erp_push._classify(res)
+    assert status == "failed" and bdbh is None
+    assert "空单" in err and "BJXQ261112007" in err
+
+
+def test_真正created才报成功(tmp_path: Path):
+    status, bdbh, err = erp_push._classify({"status": "created", "bdbh": "BJXQ261112009"})
+    assert status == "created" and bdbh == "BJXQ261112009" and err is None
+
+
 # ── 六种 ERP 响应落点 ──────────────────────────────────────
 def test_产品档案不命中单独归类(tmp_path: Path):
     """档案挡住时主表已建 → 必须标成 archive_missing + 提示清空单，不能混进普通 error。"""
@@ -181,6 +207,62 @@ def test_产品档案不命中单独归类(tmp_path: Path):
 def test_普通异常仍是error(tmp_path: Path):
     status, _, _ = erp_push._classify({"raw": "Error executing tool erp_quote_create: 会话过期"})
     assert status == "error"
+
+
+# ── 服务端 pydantic schema 对齐（assets/erp_quote_create_schema.json） ──
+def test_schema_tab已入库且字段数对得上(tmp_path: Path):
+    """入参类型以服务端 `inputSchema` 为准，仓库里存一份当单一事实源。"""
+    assert erp_mcp_export.SCHEMA_PATH.is_file(), "assets 里缺 schema 快照"
+    assert len(erp_mcp_export.FIELD_TYPES) == 51
+    assert erp_mcp_export.NUMERIC_FIELDS and erp_mcp_export.BOOLEAN_FIELDS
+    # 所有我们映射的 MCP 字段名都必须在 schema 里
+    known = set(erp_mcp_export.FIELD_TYPES)
+    mapped = set(erp_mcp_export.PRODUCT_FIELD_MAP.values()) | set(
+        erp_mcp_export.QTY_SLOT_MAP.values())
+    assert mapped <= known, f"映射到 schema 里没有的字段：{mapped - known}"
+
+
+def test_数字字段字符串会被掰成number(tmp_path: Path):
+    """产物里尺寸/数量常是字符串，pydantic 要 number —— 不掰就 422 整单进不去。"""
+    rec = _rec(CD="240", KD="330", GD="0", PXH="1", TZS="10", YYS="10", KHMBDJ="2.5")
+    payload, problems = erp_payload(rec)
+    assert problems == [], problems
+    f = payload["products"][0]["fields"]
+    for key, want in (("length_mm", 240), ("width_mm", 330), ("height_mm", 0),
+                      ("sort_no", 1), ("cases", 10), ("languages", 10)):
+        assert f[key] == want and isinstance(f[key], int), (key, f[key])
+    assert f["target_price"] == 2.5 and isinstance(f["target_price"], float)
+
+
+def test_布尔字段只接受布尔(tmp_path: Path):
+    rec = _rec(chkBSYTB="false", chkZDBJF="是")
+    payload, problems = erp_payload(rec)
+    assert problems == [], problems
+    f = payload["products"][0]["fields"]
+    assert f["no_pallet"] is False and f["has_schedule"] is True
+
+
+def test_数字字段塞不进数字就丢掉并报错(tmp_path: Path):
+    """宁可少一个字段，也不要送错类型（类型错 pydantic 直接 422）。"""
+    payload, problems = erp_payload(_rec(KHMBDJ="面议"))
+    assert any("target_price" in p for p in problems)
+    assert "target_price" not in payload["products"][0]["fields"]
+
+
+def test_产品类别带上才不要求档案(tmp_path: Path):
+    """协议 2026-11-12 新增：搜不到档案时给 `product_category` 即可建明细。"""
+    payload, _ = erp_payload(_rec())
+    assert payload["products"][0]["product_category"] == "27.01;普通BB书"
+    empty, _ = erp_payload(_rec(CPLB=""))
+    assert "product_category" not in empty["products"][0]
+
+
+def test_validate_call能抓出类型错(tmp_path: Path):
+    bad = {"customer": "NGV10", "products": [
+        {"name": "x", "spec": "1*1", "qty": 10, "fields": {"cases": "10", "no_pallet": "否"}}]}
+    problems = erp_mcp_export.validate_call(bad)
+    assert any("cases" in p for p in problems)
+    assert any("no_pallet" in p for p in problems)
 
 
 # ── ERP 必填 ────────────────────────────────────────────────

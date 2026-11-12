@@ -528,7 +528,8 @@ def test_导入口径副本同时产出(pipeline_run):
     assert call["products"] and len(call["products"]) == 1  # ERP 一次只收 1 条明细
 
     product = call["products"][0]
-    assert set(product) == {"name", "spec", "qty", "fields"}
+    assert set(product) <= {"name", "spec", "qty", "product_category", "fields"}
+    assert {"name", "spec", "qty"} <= set(product)   # schema 里这三个 required
     assert product["qty"] > 0
     fields = product["fields"]
 

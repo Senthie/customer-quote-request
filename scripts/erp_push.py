@@ -92,6 +92,7 @@ from erp_mcp_export import (  # noqa: E402
     defaulted_fields,
     is_mcp_payload,
     unwritable_fields,
+    validate_call,
 )
 
 
@@ -276,13 +277,18 @@ def _classify(result: dict[str, Any]) -> tuple[str, Optional[str], Optional[str]
         return "error", None, raw
     status = str(result.get("status") or "")
     bdbh = result.get("bdbh") or result.get("BDBH")
-    if status == "created" or bdbh:
+    # ★ status 优先于 bdbh：`failed` / `partial` 也带 bdbh（主表已建、明细没落），
+    #   先判 bdbh 会把空单报成 created（2026-11-12 BJXQ261112007 踩过）。
+    if status in ("failed", "partial", "rejected", "invalid", "unsupported"):
+        msg = (result.get("detail_error") or result.get("message")
+               or str(result.get("errors") or ""))
+        if status == "partial" or (bdbh and status == "failed"):
+            msg = f"{msg}（主表已建：{bdbh}，明细未落库 → 是空单，要删）"
+        return status, None, msg
+    if status == "created" or (bdbh and not status):
         return "created", bdbh, None
     if status == "needs_confirmation":
         return "dry_run", None, None
-    if status in ("invalid", "unsupported", "rejected", "partial", "failed"):
-        msg = result.get("message") or result.get("detail_error") or str(result.get("errors") or "")
-        return status, None, msg
     return status or "unknown", None, None
 
 
@@ -372,14 +378,10 @@ def push(
         problems: list[str] = []
         for idx, call in enumerate(calls, 1):
             prefix = f"第{idx}条：" if len(calls) > 1 else ""
+            problems.extend(validate_call(call))
             if not call.get("customer"):
                 problems.append(prefix + "customer 为空（导出时客户代号没解析出来）")
             for product in call.get("products") or []:
-                name = str(product.get("name") or "").strip()
-                if not name or name == CPMC_PLACEHOLDER:
-                    problems.append(prefix + "产品名是占位符/空")
-                if not product.get("qty"):
-                    problems.append(prefix + "数量未知 → 用 --qty 指定单款本数")
                 fields = product.get("fields") or {}
                 missing = [f"{arg}({src})" for arg, src in MANDATORY_FIELDS.items()
                            if arg not in fields]

@@ -33,9 +33,60 @@
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Optional
 
 CPMC_PLACEHOLDER = "【中文品名待定】"
+
+# ★ 入参类型以服务端 pydantic 模型为准（`erp_quote_create.inputSchema` 就是它生成的）。
+#   存一份在 assets 里当"单一事实源"，改协议时重抓一次即可，
+#   **不要把类型手抄成第二份会漂移的常量**。
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "assets" / "erp_quote_create_schema.json"
+
+
+def _load_schema() -> dict[str, Any]:
+    try:
+        return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))["inputSchema"]
+    except Exception:  # noqa: BLE001 - 缺文件时退化成"不校验类型"，不该拖垮导出
+        return {}
+
+
+_SCHEMA = _load_schema()
+
+
+def _type_of(node: dict[str, Any]) -> str:
+    """`anyOf: [{type: number}, {type: null}]` → `number`。"""
+    if "type" in node:
+        return str(node["type"])
+    for branch in node.get("anyOf") or []:
+        if branch.get("type") and branch["type"] != "null":
+            return str(branch["type"])
+    return "string"
+
+
+# 明细 51 字段 → 期望类型（number / boolean / string）
+FIELD_TYPES: dict[str, str] = {
+    name: _type_of(node)
+    for name, node in ((_SCHEMA.get("$defs", {}).get("QuoteProductFields", {})
+                        .get("properties") or {}).items())
+}
+# 表头参数类型
+HEADER_TYPES: dict[str, str] = {
+    name: _type_of(node)
+    for name, node in ((_SCHEMA.get("properties") or {}).items())
+}
+# `products[]` 除 `fields` 外的三个必填 + 可选 product_category
+_PRODUCT_INPUT_PROPS = ((_SCHEMA.get("$defs", {}).get("QuoteProductInput", {})
+                         .get("properties") or {}))
+PRODUCT_INPUT_TYPES: dict[str, str] = {
+    name: _type_of(node)
+    for name, node in _PRODUCT_INPUT_PROPS.items()
+    if name != "fields"
+}
+NUMERIC_FIELDS = {k for k, v in FIELD_TYPES.items() if v == "number"}
+BOOLEAN_FIELDS = {k for k, v in FIELD_TYPES.items() if v == "boolean"}
+STRING_FIELDS = {k for k, v in FIELD_TYPES.items() if v == "string"}
 
 # 59 键 → erp_quote_create 明细 `fields`（协议 §3.3：51 个「首屏可见且可写」字段）
 PRODUCT_FIELD_MAP: dict[str, str] = {
@@ -135,6 +186,76 @@ def _norm_value(key: str, val: Any) -> Any:
     return val
 
 
+def _coerce_fields(fields: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """按服务端 pydantic 类型把值掰正 —— `number` 不能是 "240"，`boolean` 不能是 "否"。
+
+    返回 (掰过的 fields, 问题列表)。掰不动的不塞进去，宁可少一个字段也不要送错类型
+    （pydantic 会直接 422，整单连主表都进不去）。
+    """
+    out: dict[str, Any] = {}
+    problems: list[str] = []
+    for key, val in fields.items():
+        want = FIELD_TYPES.get(key, "string")
+        if want == "number":
+            if isinstance(val, bool):
+                problems.append(f"{key} 应为数字，拿到布尔 {val!r}")
+                continue
+            if isinstance(val, (int, float)):
+                out[key] = int(val) if float(val).is_integer() else float(val)
+                continue
+            text = str(val).strip().replace(",", "").replace("，", "")
+            try:
+                num = float(text)
+            except (TypeError, ValueError):
+                problems.append(f"{key} 应为数字，拿到 {val!r}")
+                continue
+            out[key] = int(num) if num.is_integer() else num
+        elif want == "boolean":
+            if isinstance(val, bool):
+                out[key] = val
+            elif str(val).strip().lower() in ("true", "1", "是", "y", "yes", "on"):
+                out[key] = True
+            elif str(val).strip().lower() in ("false", "0", "否", "n", "no", "off", ""):
+                out[key] = False
+            else:
+                problems.append(f"{key} 应为布尔，拿到 {val!r}")
+        else:
+            out[key] = str(val)
+    return out, problems
+
+
+def validate_call(call: dict[str, Any]) -> list[str]:
+    """离线按 `erp_quote_create` 的 pydantic schema 校验一份入参。"""
+    problems: list[str] = []
+    if not isinstance(call.get("products"), list) or not call["products"]:
+        return ["products 缺失或为空（schema 里它必填，minItems=1）"]
+    if len(call["products"]) > 1:
+        problems.append(f"products 有 {len(call['products'])} 条，ERP 一次只收 1 条")
+    unknown_header = set(call) - {"products", "confirm"} - set(HEADER_TYPES)
+    if HEADER_TYPES and unknown_header:
+        problems.append(f"表头出现 schema 里没有的参数：{sorted(unknown_header)}")
+    for idx, product in enumerate(call["products"], 1):
+        prefix = f"第{idx}条：" if len(call["products"]) > 1 else ""
+        for required in ("name", "spec", "qty"):
+            if not product.get(required):
+                problems.append(prefix + f"{required} 必填（schema required）")
+        qty = product.get("qty")
+        if qty is not None and (isinstance(qty, bool) or not isinstance(qty, (int, float))
+                                or qty <= 0):
+            problems.append(prefix + f"qty 必须 > 0 的数字，实际 {qty!r}")
+        fields = product.get("fields") or {}
+        unknown = set(fields) - set(FIELD_TYPES) if FIELD_TYPES else set()
+        if unknown:
+            problems.append(prefix + f"fields 里有 schema 不认识的键：{sorted(unknown)}")
+        for key, val in fields.items():
+            want = FIELD_TYPES.get(key, "string")
+            if want == "number" and (isinstance(val, bool) or not isinstance(val, (int, float))):
+                problems.append(prefix + f"{key} 类型应为 number，实际 {type(val).__name__}")
+            if want == "boolean" and not isinstance(val, bool):
+                problems.append(prefix + f"{key} 类型应为 boolean，实际 {type(val).__name__}")
+    return problems
+
+
 def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
     """**单款本数**（业务口径）。`CPSL1..10` 每档存总量，这里取单款，落库前乘款数。"""
     if override:
@@ -207,14 +328,17 @@ def build_call(
             continue
         fields[arg] = _norm_value(key, val)
 
-    # 数量档位 CPSL1..10 → qty_1..qty_10（每档都是**总量** = 单款 × 款数）
+    # 数量档位：**只有第 2 档起**才显式传 qty_n（每档都是总量 = 单款 × 款数）。
+    # ★ `qty_1` 绝不能显式传：`create()` 只在没给 qty_1 时才补隐藏的 `txtCPSL`，
+    #   给了就只写展示框、汇总为空 →「请输入【产品数量】」→ 明细行存不进去
+    #   （2026-11-12 实测，BJXQ261112007 就是这样废掉的）。
     titles = _record_titles(record)
     for key, arg in QTY_SLOT_MAP.items():
+        if arg == "qty_1":
+            continue
         val = record.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
             fields[arg] = int(val) * titles
-    if qty:
-        fields["qty_1"] = int(qty)
 
     # ★ 兜底：缺日期用 default_date（JHRQ/WCRQ 同值），缺必填用 FIELD_DEFAULTS
     if default_date:
@@ -224,7 +348,18 @@ def build_call(
     for arg, (val, _reason) in apply_defaults(record, fields).items():
         fields[arg] = val
 
+    # ★ 类型按服务端 pydantic 掰正（`number` 不接受 "240"、`boolean` 不接受 "否"）
+    fields, type_problems = _coerce_fields(fields)
+    problems.extend(type_problems)
+
     product["fields"] = fields
+
+    # ★ 产品档案搜不到时的**唯一出路**（2026-11-12 协议新增）：
+    #   `product_category` 给产品类别即可当新产品建明细，不要求档案存在。
+    #   我们的 `CPLB` 形如 `27.01;普通BB书`，正是它接受的写法。
+    category = str(record.get("CPLB") or "").strip()
+    if category:
+        product["product_category"] = category
 
     missing = [f"{arg}({src})" for arg, src in MANDATORY_FIELDS.items()
                if arg not in fields]

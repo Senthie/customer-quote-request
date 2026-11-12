@@ -1376,7 +1376,15 @@ uv run ./scripts/customer_profile.py --prefs ngv
       （实测 `CPSL1` 0→总量、`CPMC` 加「（N款）」、概要行补方向、`question_answers` 写业务口头指示），
       不是只改 `CPMS`；逐键 diff 后按「口径 / 客户事实 / 编造」三分（方向留、CPSL 量撤、
       CPMC 后缀撤、业务指示先 `session_search` 核实），合并完
-      **必须重跑 `erp_import_adapter.py`**（副本里也有 CPMS/CPMC）。配方见
+> **推 ERP 前必读：** `customer-quote-request` 的 `references/erp-mcp-push.md`。
+> 三个最容易踩的：① `erp_quote_prepare` **不查产品档案**，只有 `erp_quote_create`
+> 才炸，且会留下**空主表**（清理 4 步、`erp_quote_list` 必须带 `key`）；
+> ② 档案品名是 `{客户方负责人}/{产品类别}/{客户原品名}({FSC类别})`，译名永远匹配不上，
+> **不许改品名去凑**；③ `qty` = **单款本数**，落库 `txtCPSL1` 要 ×款数（TZS）。
+
+      **必须重新生成导出副本**（副本里也有 CPMS/CPMC；1.0.72 起由 `main.py` 3b /
+`erp_mcp_export.export_calls()` 生成 —— **别再跑 `erp_import_adapter.py`**，
+它写的是旧 59 键格式，会覆盖掉 MCP 入参副本）。配方见
       `references/并发合并与克重换算门禁.md`
 - [ ] `ID` = 本次任务号（= 产物目录名；排查问题时拿它对日志）
 - [ ] `compare_with_erp.py` 白名单外差异 0 条

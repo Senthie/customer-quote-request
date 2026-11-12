@@ -1,0 +1,1032 @@
+{
+  "_source": "MCP tools/list → erp_quote_create.inputSchema（pydantic 自动生成）",
+  "_captured_at": "2026-11-12",
+  "_server": "https://14.12.0.173:8443/mcp",
+  "inputSchema": {
+    "properties": {
+      "products": {
+        "description": "产品明细，当前只支持 1 条。每条要 name/spec/qty，明细字段放在 fields 里（也可平铺在同级）",
+        "items": {
+          "$ref": "#/$defs/QuoteProductInput"
+        },
+        "minItems": 1,
+        "title": "Products",
+        "type": "array"
+      },
+      "customer": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "客户名称片段或客户 ID；可先用 erp_quote_customer_search 查",
+        "examples": [
+          "ADG"
+        ],
+        "title": "Customer"
+      },
+      "sales": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "业务员姓名或 GUID；为空时取客户默认业务员",
+        "examples": [
+          "陈小美"
+        ],
+        "title": "Sales"
+      },
+      "merchandiser": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "跟单员姓名或 GUID；选项用 erp_quote_options 查",
+        "title": "Merchandiser"
+      },
+      "price_system": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "单价体系名称或 GUID；选项用 erp_quote_options 查",
+        "title": "Price System"
+      },
+      "contact": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "联系人",
+        "examples": [
+          "陈先生"
+        ],
+        "title": "Contact"
+      },
+      "phone": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "联系电话",
+        "examples": [
+          "0755-12345678"
+        ],
+        "title": "Phone"
+      },
+      "mobile": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "手机；⚠ 实测该 ERP 不落库，提交后回读为空",
+        "title": "Mobile"
+      },
+      "fax": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "传真；⚠ 实测该 ERP 不落库，提交后回读为空",
+        "title": "Fax"
+      },
+      "discount": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "折扣率，如 0.45；为空时取客户默认折扣率",
+        "examples": [
+          "0.45"
+        ],
+        "title": "Discount"
+      },
+      "remark": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "备注（表头 txtRemark）",
+        "title": "Remark"
+      },
+      "product_memo": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "产品描述（表头 txtCPMX）",
+        "title": "Product Memo"
+      },
+      "confirm": {
+        "default": false,
+        "description": "false（默认）只校验并返回 needs_confirmation，不落库；true 才真正保存",
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "products"
+    ],
+    "type": "object",
+    "$defs": {
+      "QuoteProductFields": {
+        "additionalProperties": true,
+        "properties": {
+          "product_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "顶层 name 用于检索产品档案；要覆盖写入的产品名称就用这个字段",
+            "title": "产品名称"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "下拉选项随客户/账号变化，落库时以真实页面为准（默认取产品档案的单位；要覆盖请传显示文字）",
+            "title": "单位"
+          },
+          "customer_order_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "客户单号"
+          },
+          "product_name_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "产品英文名"
+          },
+          "product_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值（来自产品档案）",
+            "examples": [
+              "书版"
+            ],
+            "title": "产品大类"
+          },
+          "length_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "长（MM）"
+          },
+          "width_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "宽（MM）"
+          },
+          "height_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "高（MM）"
+          },
+          "spine_direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "短书脊",
+              "长书脊",
+              "四边裁"
+            ],
+            "title": "书脊方向"
+          },
+          "sort_no": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "排序号"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "胶装/PAD书",
+              "精装书",
+              "骑马钉",
+              "其他",
+              "套装",
+              "车线书"
+            ],
+            "title": "装订方式"
+          },
+          "packing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "纸箱包装",
+              "牛皮纸包装",
+              "胶袋包装",
+              "卡板摆放"
+            ],
+            "title": "包装方式"
+          },
+          "pallet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "1.2m*0.8m(欧式)实木消毒卡板",
+              "1.2*1.0m(欧式)实木消毒卡板",
+              "1.2m*0.8m(欧标)松木消毒卡板",
+              "1.2*1.0松木消毒卡板(四边喷环保蓝漆)",
+              "1.165m*1.165m(欧式)实木消毒木卡板",
+              "1.2*1.0m实木消毒卡板(Highights专用）"
+            ],
+            "title": "台板类型"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "FOB(NGV)",
+              "FOB 盐田",
+              "送香港公司",
+              "DPU",
+              "直交工厂",
+              "DAP"
+            ],
+            "title": "送货方式"
+          },
+          "transport_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "FOB盐田(普通)",
+              "FOBHK",
+              "FOB(拼柜)",
+              "DPU",
+              "CIF",
+              "国内"
+            ],
+            "title": "运输类型"
+          },
+          "delivery_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值（服务端渲染时该下拉是空的（由【送货方式】级联生成），纯 HTTP 提交实测不落库（2026-11-12 建单验证））",
+            "examples": [
+              "FOB盐田(普通)",
+              "香港",
+              "FOB(美加线)",
+              "FOB(NGV)",
+              "DPU",
+              "日本（Tokyo）"
+            ],
+            "title": "送货地区"
+          },
+          "carton_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "普通纸箱",
+              "半翼箱纸箱",
+              "特殊纸箱",
+              "天地盖纸箱"
+            ],
+            "title": "纸箱类别"
+          },
+          "board_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "特殊(看描述)",
+              "A=B双坑纸板",
+              "A3B单坑纸板",
+              "A=A双坑纸板",
+              "K=K加强芯双坑箱",
+              "K=K加强芯(耐破)"
+            ],
+            "title": "纸板类型"
+          },
+          "packing_orientation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "平装",
+              "竖装"
+            ],
+            "title": "装箱方式"
+          },
+          "bottom_card": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "B3B坑纸板",
+              "A=B普通芯",
+              "无需",
+              "K=K加强芯",
+              "卡纸",
+              "特殊指定"
+            ],
+            "title": "底卡名称"
+          },
+          "no_pallet": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "不使用台板"
+          },
+          "no_container": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "不使用集装箱"
+          },
+          "delivery_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。日期字符串，ERP 也接受 2026/11/20",
+            "examples": [
+              "2026-11-20"
+            ],
+            "title": "交货日期"
+          },
+          "expected_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。日期字符串，ERP 也接受 2026/11/20",
+            "examples": [
+              "2026-11-20"
+            ],
+            "title": "预计下单日期"
+          },
+          "has_schedule": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "有排交期"
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "三岁以上",
+              "三岁以下",
+              "其他",
+              "3岁以下（要寄第三方测试）",
+              "3岁以上（要寄第三方测试）"
+            ],
+            "title": "产品属性"
+          },
+          "product_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "新产品",
+              "返单产品",
+              "半返单旧产品",
+              "半返单新产品",
+              "特殊新产品"
+            ],
+            "title": "产品类型"
+          },
+          "fsc_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "FSC Mix",
+              "FSC 100%",
+              "FSC Mix 85%",
+              "FSC Mix Credit",
+              "FSC Recycled 85%",
+              "FSC Recycled 100%"
+            ],
+            "title": "FSC类别"
+          },
+          "has_parts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "是",
+              "否"
+            ],
+            "title": "是否有配件"
+          },
+          "no_quote": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "不需报价"
+          },
+          "product_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填",
+            "title": "产品描述"
+          },
+          "extra_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "补充描述"
+          },
+          "remark": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "备注（明细）"
+          },
+          "parts_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填。部分记录（是否有配件=否）页面上是只读的",
+            "title": "配件描述"
+          },
+          "modify_log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填",
+            "title": "修改记录"
+          },
+          "inspection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填",
+            "title": "检测项目"
+          },
+          "old_hk_order_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "返单香港单号"
+          },
+          "target_price_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "传下拉的显示文字，落库时按真实页面换成提交值",
+            "examples": [
+              "人民币",
+              "港币",
+              "美元",
+              "欧元",
+              "日元",
+              "澳元"
+            ],
+            "title": "客户目标价币种"
+          },
+          "target_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "客户目标价"
+          },
+          "cases": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填",
+            "title": "款数"
+          },
+          "languages": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ERP 必填",
+            "title": "语言数"
+          },
+          "qty_1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第1档报价数量（总量）"
+          },
+          "qty_2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第2档报价数量（总量）"
+          },
+          "qty_3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第3档报价数量（总量）"
+          },
+          "qty_4": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第4档报价数量（总量）"
+          },
+          "qty_5": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第5档报价数量（总量）"
+          },
+          "qty_6": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第6档报价数量（总量）"
+          },
+          "qty_7": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第7档报价数量（总量）"
+          },
+          "qty_8": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第8档报价数量（总量）"
+          },
+          "qty_9": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第9档报价数量（总量）"
+          },
+          "qty_10": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "列表页的 最小值/中间值/最大值 就取自首档/第二档/末档",
+            "title": "第10档报价数量（总量）"
+          }
+        },
+        "title": "产品明细字段",
+        "type": "object"
+      },
+      "QuoteProductInput": {
+        "additionalProperties": true,
+        "description": "`products[]` 里的一条明细：产品标识 + 明细字段。",
+        "properties": {
+          "name": {
+            "description": "产品名称。先按名称在【产品档案】里模糊检索，必须唯一匹配；搜不到就当作新产品，此时必须同时给 product_category",
+            "examples": [
+              "512961503"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "spec": {
+            "description": "规格，形如 210*148；只做非空校验，真正落库的规格仍取产品档案",
+            "examples": [
+              "210*148"
+            ],
+            "title": "Spec",
+            "type": "string"
+          },
+          "qty": {
+            "description": "产品数量，必须 > 0；写入 txtCPSL 与首屏的 txtCPSL1",
+            "examples": [
+              3000
+            ],
+            "exclusiveMinimum": 0,
+            "title": "Qty",
+            "type": "number"
+          },
+          "product_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "产品类别，形如 `27.01;普通BB书`（也接受 `27.01` 或 `普通BB书`）。产品档案搜不到时必填；档案能命中时可省略",
+            "examples": [
+              "27.01;普通BB书",
+              "04.01;STD彩盒"
+            ],
+            "title": "Product Category"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuoteProductFields"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "明细字段，键名用本对象的字段名，或直接用页面控件名（如 txtZDFS）；折叠面板里的 142 个隐藏字段与只读字段会被拒绝。完整清单见 erp_quote_product_form"
+          }
+        },
+        "required": [
+          "name",
+          "spec",
+          "qty"
+        ],
+        "title": "产品明细",
+        "type": "object"
+      }
+    },
+    "title": "erp_quote_createArguments"
+  }
+}
