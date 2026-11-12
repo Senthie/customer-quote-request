@@ -72,22 +72,62 @@ from erp_bundle import load_bundle  # noqa: E402
 DEFAULT_MCP_URL = "https://14.12.0.173:8443/mcp"
 CPMC_PLACEHOLDER = "【中文品名待定】"
 
-# 59 键 → erp_quote_create 明细入参（协议见 docs/erp-quote-create.md §4）
-PRODUCT_ARG_MAP: dict[str, str] = {
+# 59 键 → erp_quote_create 明细 `fields` 入参（协议 docs/erp-quote-create.md §3.3，
+# 51 个「DOM 首屏可见且可写」字段；`erp_quote_product_form` 实测可用）。
+PRODUCT_FIELD_MAP: dict[str, str] = {
+    "CPMC": "product_name",
+    "DWMC": "unit",
+    "KHDH": "customer_order_no",      # ★ 客户单号是**明细级**（txtKHCPMC），不在表头
+    "ECPMC": "product_name_en",
+    "CPDL": "product_group",
+    "CD": "length_mm",
+    "KD": "width_mm",
+    "GD": "height_mm",
+    "Drop_SJFX": "spine_direction",
+    "PXH": "sort_no",
     "ZDFS": "binding",
     "BZFS": "packing",
     "TBLX": "pallet",
     "SHFS": "delivery",
+    "YSLX": "transport_type",
+    "SHDQ": "delivery_area",          # ⚠ 实测不落库（级联下拉，服务端空）
+    "ZXLB": "carton_type",
+    "ZBLX": "board_type",
+    "ZXFS": "packing_orientation",
+    "DKMC": "bottom_card",
+    "chkBSYTB": "no_pallet",
+    "chkBSYJZX": "no_container",
     "JHRQ": "delivery_date",
     "WCRQ": "expected_date",
+    "chkZDBJF": "has_schedule",
+    "CPSX": "attribute",
+    "CPLX": "product_type",
+    "FSCMC": "fsc_category",
+    "SFYPJ": "has_parts",
+    "chkXBJF": "no_quote",
+    "CPMS": "product_desc",
+    "BGMS": "extra_desc",
     "Remark1": "parts_desc",
     "Remark3": "modify_log",
     "Remark4": "inspection",
-    "CPMS": "product_desc",
-    "CPSX": "attribute",
-    "CPLX": "product_type",
+    "OLD_KHDDH": "old_hk_order_no",
+    "BZ": "target_price_currency",
+    "KHMBDJ": "target_price",
     "TZS": "cases",
     "YYS": "languages",
+}
+
+# `CPSL1..10` → `qty_1..qty_10`（报价数量档位，不是每款数量）
+QTY_SLOT_MAP: dict[str, str] = {f"CPSL{i}": f"qty_{i}" for i in range(1, 11)}
+
+# ★ ERP 服务端 14 个必填（协议 §3.4）。缺了 → `prepare` 只给 warning，
+#   但 create 会在「先建主表、再存明细」的第二步被拒，**留下一条空单**。宁可先拦。
+MANDATORY_FIELDS: dict[str, str] = {
+    "binding": "ZDFS", "cases": "TZS", "languages": "YYS", "packing": "BZFS",
+    "pallet": "TBLX", "delivery": "SHFS", "delivery_date": "JHRQ",
+    "parts_desc": "Remark1", "attribute": "CPSX", "product_type": "CPLX",
+    "expected_date": "WCRQ", "product_desc": "CPMS", "modify_log": "Remark3",
+    "inspection": "Remark4",
 }
 
 # 59 键 → erp_quote_create 表头入参
@@ -100,13 +140,8 @@ HEADER_ARG_MAP: dict[str, tuple[str, str]] = {
     "CPMX": ("product_memo", "str"),
 }
 
-# 这些字段 create 一定写不进去（ERP 从产品档案反查，或页面无控件）
-NOT_WRITABLE = (
-    "CPLB", "CD", "KD", "GD", "DWMC", "FSCMC", "KHDH", "KHDDH", "ECPMC",
-    "BZ", "KHMBDJ", "YSLX", "SHDQ", "KHDQ", "ZXLB", "ZBLX", "ZXFS", "DKMC",
-    "SFYPJ", "chkXBJF", "chkZDBJF", "chkBSYTB", "chkBSYJZX", "Drop_SJFX",
-    "OLD_KHDDH", "BGMS",
-) + tuple(f"CPSL{i}" for i in range(2, 11))
+# 59 键里**确实**写不进的 4 个（2026-11-12 按 51 字段协议核对）
+NOT_WRITABLE = ("BDBH", "CPLB", "KHDDH", "KHDQ")
 
 
 # ─────────────────────────── MCP 客户端（stdlib，无新依赖） ───────────────────────────
@@ -226,11 +261,25 @@ def _profile_customer_code(profile_id: str) -> str:
 
 
 def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
+    """本单数量 = **第 1 档**（协议 §4：`qty` 必须等于 `qty_1`，档位不是「加起来」）。
+    `CPSL1..10` 是**报价数量档位**（第1档/第2档…），不是「每款数量」也不是要相加的明细。
+    所以这里只取第 1 档；第 1 档空着才往后找第一个非 0 的档位。
+    """
     if override:
         return int(override)
-    total = sum(int(v) for v in (record.get(f"CPSL{i}") for i in range(1, 11))
-                if isinstance(v, (int, float)))
-    return total or None
+    for i in range(1, 11):
+        val = record.get(f"CPSL{i}")
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
+            return int(val)
+    return None
+
+
+
+def _norm_value(key: str, val: Any) -> Any:
+    """产物内部表达 → ERP 控件能接受的样子（下拉一律传显示文字）。"""
+    if key == "SFYPJ":  # 内部布尔 → 下拉「是/否」
+        return "是" if val else "否"
+    return val
 
 
 def build_call(
@@ -253,11 +302,29 @@ def build_call(
         problems.append("数量未知（CPSL1-10 全空/为 0）→ 用 --qty 指定（ERP 明细的「产品数量」是实体数量）")
 
     product: dict[str, Any] = {"name": name, "spec": spec, "qty": qty or 0}
-    for key, arg in PRODUCT_ARG_MAP.items():
+
+    # 明细 51 字段（协议 §3.3）：产物内部表达 → `fields` 容器
+    fields: dict[str, Any] = {}
+    for key, arg in PRODUCT_FIELD_MAP.items():
         val = record.get(key)
-        if val in (None, "", [], 0):
-            continue  # 0/空不传：别把 `TZS=0` 这类噪音塞进 ERP
-        product[arg] = val
+        if val in (None, "", []):
+            continue
+        fields[arg] = _norm_value(key, val)
+
+    # 数量档位 CPSL1..10 → qty_1..qty_10（第 1 档必须等于顶层 qty）
+    for key, arg in QTY_SLOT_MAP.items():
+        val = record.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
+            fields[arg] = int(val)
+    if qty:
+        fields["qty_1"] = int(qty)
+    product["fields"] = fields
+
+    # ★ 14 个 ERP 必填：缺一个 → 主表建了、明细被拒 = 一条空单（协议 §3.4）
+    missing_mandatory = [f"{arg}({src})" for arg, src in MANDATORY_FIELDS.items()
+                         if arg not in fields]
+    if missing_mandatory:
+        problems.append("ERP 必填缺失（create 会留下空主表）：" + "、".join(missing_mandatory))
 
     khddh = str(record.get("KHDDH") or "").strip()
     ecpmc = str(record.get("ECPMC") or "").strip()
