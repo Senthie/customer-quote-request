@@ -14,7 +14,15 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.68（2026-11-11 **`cpms_todo` 加并发宽限**：业务问「为什么会有 subagent
+> **版本：** 1.0.69（2026-11-11 **流水线补最后一步「推送 ERP」**：业务问「179d3e1f… 的产出
+> 为什么没有上传 ERP」+ 四条口径（①流水线最后要推送 ②问清 MCP 为什么写不全 ③未定项可以进
+> ERP 后改 ④回读核对后续做）。新增 `scripts/erp_push.py`：MCP streamable-HTTP 客户端（stdlib，
+> 无新依赖）→ `erp_quote_create` 建主表 + 产品明细，返回 `BDBH`；幂等日志
+> `customer-files/.erp_push_log.jsonl`；结果写 `<产物>.erp-push.json`。实测两堵墙写进 SKILL：
+> ①新增页只有 15 个控件 → 59 键里只写得进 10 个（49 个无控件）；②**产品名必须先在产品档案
+> 里唯一匹配**（`产品档案里找不到 '冬季找找图画书'`），而 CPMC 是译名/自由文本。
+> `YWY=KM` 不传（ERP 按客户资料自动带业务员/跟单员）。回归 +11（`tests/test_erp_push.py`）。）
+> —— 前序 1.0.68（2026-11-11 **`cpms_todo` 加并发宽限**：业务问「为什么会有 subagent
 > 来覆盖，是定时任务的原因吗」—— 是：`*/5` 的 cron 在 10:06 那轮看到 agent 10:05 刚抽出来的
 > 产物「`CPMS` 空」，把同一条待办交给了另一个 agent 会话，两边 10:10 前后互相覆盖字段 /
 > `CPMS_来源对照.md` / `.erp-import.json`。`pending/` 有 flock，`processed/` 的产物没有互斥。
@@ -319,6 +327,29 @@ uv run pytest -q                                                    # ④ 全绿
 ```
 
 ② 会同时报「客户文件有、CPMS 没写」的漏抄项 —— 逐条判是真漏还是有意不写。
+
+### 最后一步：推进 ERP（`scripts/erp_push.py`，2026-11-11 新增）
+
+四道门全绿 = 文件合格，**但不等于进了 ERP**。`main.py` 只落盘，推送要单独跑：
+
+```bash
+uv run ./scripts/erp_push.py <产物>/ERP_xxx.erp-import.json --customer NGV10 --qty 410000          # 干跑
+uv run ./scripts/erp_push.py <产物>/ERP_xxx.erp-import.json --customer NGV10 --qty 410000 --confirm # 真写
+```
+
+- **只能写 10 个字段**：ERP 新增页 `BJ_KHBJXQ/Add.aspx` 只有 15 个表头控件（`erp_quote_new_form` 实测），
+  对上 59 键的是客户/业务员/跟单员/联系人/电话/手机/传真/折扣/`Remark`/`CPMX` + 产品明细（名称·规格·数量）。
+  `CPLB`/`CPMS`/`TZS`/`YYS`/`FSCMC`/`BZFS`/`KHDH`/`ECPMC`/`CPSL…` 等 **49 个在这张页面上没有控件**，
+  MCP 驱动浏览器填不进去 → 脚本会把它们列进 `not_writable`，进 ERP 后由录单同事补
+  （业务 2026-11-11：「未定选项可以去 ERP 后修改」）。
+- **`YWY`/`GDY` 不要传**：产物里是生成标记 `KM`，不是 ERP 真人；传了被拒。
+  ERP 会按客户资料自动带（实测 NGV10 → 业务员陈纯 / 跟单员肖也 / 折扣 10）。
+- ⚠️ **产品名必须先在产品档案里存在**（2026-11-11 实测硬墙）：
+  `产品档案里找不到 '冬季找找图画书'` —— MCP 的 create 走「档案检索 + 唯一匹配」，
+  而我们的 `CPMC` 是**译名/自由文本**（历史 ERP 里也是自由文本）。撞这堵墙时不要改品名去凑，
+  要么让 ERP 先建产品档案条目，要么走 ERP 侧的导入接口。
+- 幂等：`customer-files/.erp_push_log.jsonl` 里同 `ID` 已有 `created` → 默认拒绝（`--force` 才再推）。
+- 结果写 `<产物>.erp-push.json`（含 `erp_response` 与推不进去的字段清单）。
 
 ### 客户给的是邮件（.eml）时
 
@@ -2370,6 +2401,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
 | **1.0.58** | **2026-10-30** | **查看器能写答案**（业务：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）。① 新增 `CQR_Web/answers.py`（纯逻辑，不 import Flask）+ `POST /api/answer`：只改 `question_answers` 的 `answer/status/answered_at`，顺带重算 `Reminder` 快照；有答案 → `confirmed` 并盖 `answered_at`，清空 → 回 `open`，`waived` → 不卡交付；② 详情页清单块每条待确认项带文本框 +「保存答案 / 作废」，未保存草稿存 `state.drafts`（10 秒自动刷新重建 DOM 不丢字，按「产物#第几条#项 id」键）；③ 写盘原子（同目录临时文件 + `os.replace`）、缩进/中文/键序与产出一致；④ **mtime 乐观锁**：页面打开后文件被别人改过 → 409 + 自动重取，不覆盖 agent 刚写的 CPMS；⑤ 拒绝姿势明确：v2 旧产物 409、未知 id/越界记录 404、乱填 status 400、确认但答案空 400；⑥ 页面仍**不许**写 `CPMS`/品名/59 个 ERP 字段；⑦ 新增 `tests/test_cqr_answers.py`（17 项，含 HTTP 层与路径穿越），边界测试把 `answers.py` 也纳入「不许 import Flask / 不许起子进程」 |
+| **1.0.69** | **2026-11-11** | **流水线补最后一步「推送 ERP」**（业务：「179d3e1f… 的产出为什么没有上传 ERP」→ 四条口径：①流水线最后要推送 ②问清 MCP 为什么写不全 ③未定项可以进 ERP 后改 ④回读核对后续做）。事实：`main.py` 只落盘，旧流程到 `.erp-import.json` 就结束；`erp-tools` 的 14 个 MCP 工具里**没有导入工具**（`/v1/tools` 只有 query/quote/attendance 三组），ERP 导入接口在 ERP 侧。新增 `scripts/erp_push.py`：stdlib 实现的 MCP streamable-HTTP 客户端（initialize → tools/call，兼容裸 JSON 与 SSE；自签证书关校验）→ `erp_quote_create` 建主表 + 产品明细，返回 `BDBH`；载荷只带 ERP 能写的键（客户/联系人/电话/手机/传真/折扣/`Remark`/`CPMX` + 产品名称·规格·数量），`YWY=KM`/`GDY` 不传（生成标记不是真人，ERP 按客户资料自动带：实测 NGV10 → 陈纯/肖也/折扣 10）；门口三道闸（CPMC 占位符 / 数量未知 / 客户代号未知）不许硬推；幂等靠 `customer-files/.erp_push_log.jsonl`（同 `ID` 已 `created` 默认拒推）；结果写 `<产物>.erp-push.json`（含 `not_writable` 的 49 键清单给业务补）。**实测两堵墙**：①`erp_quote_new_form` 只有 15 个表头控件 → 59 键只写得进 10 个；②真写时被 `产品档案里找不到 '冬季找找图画书'` 挡下（MCP 走「档案检索 + 唯一匹配」，而 `CPMC` 是译名/自由文本；同时确认没有留下半张主表 —— `BJXQ261111007` 查无此单）。回归 +11（`tests/test_erp_push.py`，全离线 FakeClient），全量 **799 绿** |
 | **1.0.68** | **2026-11-11** | **`cpms_todo` 并发宽限（mtime grace）**：业务问「为什么会有 subagent 来覆盖，是定时任务的原因吗」—— 查证属实：`97e2e4bb05d0`（`*/5`，agent 模式）在 10:06 那轮看到 agent 10:05 刚抽出来的产物「`CPMS` 空」，`cpms_todo` 报 `CPMS_TODO: 1` → 同一条待办被交给**另一个 agent 会话**，两边 10:10 前后互相覆盖（字段 / `CPMS_来源对照.md` / `.erp-import.json` 各写两遍，现场证据 `cron/output/97e2e4bb05d0/2026-11-11_10-11-25.md`）。根因：`pending/` 有 `flock`，`processed/` 里的产物**没有任何互斥**。修法：① `cpms_todo.py` 新增 `scan(dir, grace_minutes=, now=)` → `(欠账, 跳过)`，`iter_incomplete()` 保持旧签名（返回欠账）；判据 = 任务目录里**任何文件**（含子目录/`.md`/`.erp-import.json`）最新 mtime 在窗口内 → 本轮不报，进 `skipped` 并带 `idle_seconds`；**已完成的任务两边都不进**（跳过清单只解释「欠账却没报」）。② `--grace-minutes` **默认 0 = 不启用**（库层所见即所报，人工查账不被时间窗骗），cron 薄壳 `cqr_scan_and_cpms.sh` 显式传 **15**（3 个周期）。③ 跳过原因只写 **stderr**（`/tmp/cqr_scan.stderr`），stdout 的 `CPMS_TODO: N` + `- task=…` 契约一字不动 —— 否则 shell 壳的 `sed` 解析和 agent 待办清单都会被弄脏；人工排查用 `--show-skipped`。④ 顺手修 `_profile_id`：`*.extracted.json` 若不是 JSON 对象会 `AttributeError`，**整轮 cron 挂掉**（不是漏一单），改成跳过该文件。⑤ 配方写进 `references/cron-concurrency-and-duplicate-tasks.md` §6（含「超 15 分钟仍可能被抢 → 长单先 pause cron」）。回归 +9 项 `tests/test_cpms_todo_grace.py`，全量 **788 绿** |
 | **1.0.67** | **2026-11-11** | **查看器顶部计数只算在用任务**（业务问：「为什么我们的 CQR 上面还显示 58 个任务 · 共 62 条产品记录？」）：根因是 `scan_exports` 用 `rglob("ERP_*.json")` 递归扫整个 `processed/`，把 `_superseded_2026MMDD/` 归档目录里的旧产物也当成任务统计 —— 实测 58 个任务 / 62 条记录里 **30 个任务 / 30 条记录是归档**，真实在用只有 **28 / 32**。修法：新增 `data.task_counts(tasks)`（`superseded=True` 的一律不计入 tasks/records，另给 `archived_*` 让页面补一句「另有 N 个归档」），`/api/exports` 多返回 `summary`；页面状态栏与列表头都改用它（老服务端没有 `summary` 时前端按 `superseded` 过滤兜底，规则一致）。⚠️ 归档**不从列表里砍掉** —— `superseded=True` → 「已被取代」徽章是既有功能，业务靠它看一单换过几版。回归 +2（`test_http_exports_带计数口径_归档不算任务` / `test_task_counts_只数在用任务`），全量 779 绿 |
 | **1.0.66** | **2026-11-11** | **导出口径副本不许被当成产物**（1.0.65 的回归，cron 现场抓到）：`*.erp-import.json` 只有 59 键（无 `CPMC_ZH`/`version`/`ID`）且**比主产物新**，而 `cpms_todo` / `CQR_Web/data.py` / `spec_fields --task` / `backfill_question_answers` / `compare_with_erp` 五处仍用 `glob("ERP_*.json")` —— 后果①`cpms_todo` 把 **31 单已写完**的产物全报成「缺 CPMC_ZH」（每轮 cron 催同一批不存在的欠账）②查看器 58 个任务扫出 115 条、“主产物”变成副本 → 版本/中文品名又变成一片 null。修法：判定收敛到 `scripts/erp_bundle.py`（`IMPORT_SUFFIX` / `is_import_copy()` / `iter_bundles()`，唯一真源），五处消费方全部改用；回归 +3 项（`test_导出口径副本不算欠账` / `test_导出口径副本不掩盖真欠账` / `test_列表不把导出口径副本当成产物`）。实测 `CPMS_TODO: 31 → 0`、查看器 `exports 115 → 58`；`uv run pytest` **779 绿**、`CQR_Web` **78 绿**、存量 33 份产物 `cpms_lint` 全部 0 error |
