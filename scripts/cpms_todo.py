@@ -21,6 +21,20 @@
     uv run ./scripts/cpms_todo.py            # 人看的清单
     uv run ./scripts/cpms_todo.py --json     # 机器读
     uv run ./scripts/cpms_todo.py --dir ...  # 换一个 processed 目录（测试用）
+
+并发宽限（2026-11-11 现场事故后加）
+----------------------------------
+背景：森西让 agent 手工处理一封 `.eml`，agent 10:05 抽完、10:06 起手工写 CPMS；
+同一时刻 cron（`*/5`）看到这份产物「CPMS 空」→ 把同一条待办交给**另一个** agent 会话，
+两边在 10:10 前后互相覆盖产物（字段、`CPMS_来源对照.md`、`.erp-import.json` 全被写了两遍）。
+`pending/` 有 flock，`processed/` 里的产物**没有任何互斥**。
+
+所以给「判断谁是欠账」加一道时间宽限：**任务目录里任何文件在最近 N 分钟内被写过**
+→ 当作「可能有人在手工写」，本轮不进待办（继续下一单），并在 stderr 记一行，方便回查。
+
+- 默认 `--grace-minutes 0` = **不启用**（库层保持「所见即所报」，测试与人工查询不受影响）；
+- cron 的壳 `cqr_scan_and_cpms.sh` 显式传 `--grace-minutes 15`（覆盖 3 个 5 分钟调度周期）；
+- 已完成的任务不进「跳过」清单 —— 跳过清单只解释「为什么这单明明欠账却没报」。
 """
 
 from __future__ import annotations
@@ -28,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -56,6 +71,9 @@ AGENT_FIELDS = ("CPMS", "CPMC", "CPMC_ZH")
 # 业务 2026-10-21 澄清：ECPMC 是**报价的原始产品名**，不限于英文 ——
 #   德文 `Malbücher`、日文、法文一律照抄，不许因为「不是英文」就留空。
 ECPMC_FIELD = "ECPMC"
+
+# 并发宽限（秒）：任务目录里任何文件的 mtime 落在这个窗口内 → 本轮跳过。
+DEFAULT_GRACE_MINUTES = 0
 
 
 def _is_blank(value: Any) -> bool:
@@ -96,6 +114,10 @@ def _profile_id(task_dir: Path) -> str:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        # ★ 2026-11-11：`.extracted.json` 正常是对象；被手工拷贝成数组/字符串时
+        #   `data.get` 会 AttributeError —— 那会让**整轮 cron 挂掉**（不是只漏这一单）。
+        if not isinstance(data, dict):
+            continue
         pid = str(data.get("profile_id") or "").strip()
         if pid:
             return pid
@@ -127,12 +149,43 @@ def _requires_ecpmc(profile_id: str) -> bool:
     return needed
 
 
-def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
-    """扫产物目录，返回还欠 agent 手写字段的任务清单（按修改时间倒序）。"""
+def _newest_mtime(task_dir: Path, erp: Path) -> float:
+    """任务目录里**最新**的文件时间（含子目录），用来判断「有没有人在写」。
+
+    只盯产物 JSON 不够：手工处理时先写 `CPMS_来源对照.md`、再写 JSON、再重生成
+    `.erp-import.json`，任何一步都可能落在两次 cron 之间。
+    """
+    try:
+        newest = erp.stat().st_mtime
+    except OSError:
+        newest = 0.0
+    for p in task_dir.iterdir():
+        try:
+            newest = max(newest, p.stat().st_mtime)
+        except OSError:  # 刚被移走 / 权限问题：不影响判断
+            continue
+    return newest
+
+
+def scan(
+    processed_dir: Path,
+    *,
+    grace_minutes: float = DEFAULT_GRACE_MINUTES,
+    now: Optional[float] = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """扫产物目录 → (欠账清单, 因「刚被写过」跳过的清单)。
+
+    `grace_minutes > 0` 时，任务目录里最新 mtime 落在窗口内的**欠账**任务不进清单，
+    改为进第二份（含 `idle_seconds`，方便回查到底是谁在写）。已完成的任务两边都不进。
+    """
     if not processed_dir.is_dir():
-        return []
+        return [], []
+
+    now = time.time() if now is None else now
+    grace_seconds = max(float(grace_minutes), 0.0) * 60.0
 
     out: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for task_dir in processed_dir.iterdir():
         if not task_dir.is_dir() or task_dir.name.startswith((".", "_")):
             continue
@@ -146,6 +199,10 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
             records = load_bundle(erp)
         except (OSError, ValueError):
             continue
+
+        newest_mtime = _newest_mtime(task_dir, erp)
+        idle_seconds = now - newest_mtime
+        recently_touched = grace_seconds > 0 and idle_seconds < grace_seconds
 
         profile_id = _profile_id(task_dir)
         for ridx, data in enumerate(records, 1):
@@ -165,7 +222,7 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
                 missing.append(f"确认清单({','.join(ids)}{more})")
             if not missing:
                 continue
-            out.append({
+            item = {
                 "task_id": task_dir.name,
                 "erp_file": str(erp),
                 "record": ridx,
@@ -174,11 +231,28 @@ def iter_incomplete(processed_dir: Path) -> list[dict[str, Any]]:
                 "source": _source_label(task_dir),
                 "khdh": data.get("KHDH") or "",
                 "cplb": data.get("CPLB") or "",
-                "mtime": erp.stat().st_mtime,
-            })
+                "mtime": newest_mtime,
+            }
+            if recently_touched:
+                item["idle_seconds"] = round(idle_seconds, 1)
+                item["skipped"] = "recent-write"
+                skipped.append(item)
+                continue
+            out.append(item)
 
     out.sort(key=lambda x: x["mtime"], reverse=True)
-    return out
+    skipped.sort(key=lambda x: x["mtime"], reverse=True)
+    return out, skipped
+
+
+def iter_incomplete(
+    processed_dir: Path,
+    *,
+    grace_minutes: float = DEFAULT_GRACE_MINUTES,
+    now: Optional[float] = None,
+) -> list[dict[str, Any]]:
+    """扫产物目录，返回还欠 agent 手写字段的任务清单（按修改时间倒序）。"""
+    return scan(processed_dir, grace_minutes=grace_minutes, now=now)[0]
 
 
 def format_report(items: Iterable[dict[str, Any]]) -> str:
@@ -204,15 +278,35 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="列出还欠 agent 手写 CPMS/中文品名的产物")
     parser.add_argument("--dir", default=None, help="processed 目录（默认 customer-files/processed）")
     parser.add_argument("--json", action="store_true", help="输出 JSON 而不是人话清单")
+    parser.add_argument("--grace-minutes", type=float, default=DEFAULT_GRACE_MINUTES,
+                        help="并发宽限：任务目录最近 N 分钟内被写过就本轮跳过（默认 0 = 不启用；"
+                             "cron 的壳传 15）")
+    parser.add_argument("--show-skipped", action="store_true",
+                        help="把「因刚被写过而跳过」的条目也打出来（人工排查用，不进 cron 契约）")
     args = parser.parse_args(argv)
 
     processed = Path(args.dir) if args.dir else PROCESSED_DIR
-    items = iter_incomplete(processed)
+    items, skipped = scan(processed, grace_minutes=args.grace_minutes)
+
+    if skipped:
+        # ★ 只进 stderr：stdout 是 cron 的输出契约（`CPMS_TODO: N` + `- task=…`），
+        #   多打一行会让 shell 壳的解析和 agent 的待办清单都变脏。
+        detail = "; ".join(
+            f"{it['task_id']}({int(it.get('idle_seconds', 0))}s前写过)" for it in skipped[:5]
+        )
+        more = "" if len(skipped) <= 5 else f" 等{len(skipped)}条"
+        print(f"# 跳过 {len(skipped)} 条欠账：最近 {args.grace_minutes:g} 分钟内有写入 "
+              f"（可能有人在手工处理）—— {detail}{more}", file=sys.stderr)
 
     if args.json:
         print(json.dumps(items, ensure_ascii=False, indent=2))
     else:
         print(format_report(items))
+        if args.show_skipped and skipped:
+            print(f"· 跳过 {len(skipped)} 条（宽限 {args.grace_minutes:g} 分钟）：")
+            for it in skipped:
+                print(f"  - task={it['task_id']} | 缺={'/'.join(it['missing'])}"
+                      f" | {int(it.get('idle_seconds', 0))} 秒前写过")
     return 0
 
 

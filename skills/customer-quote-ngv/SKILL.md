@@ -123,6 +123,11 @@ uv run ./scripts/ingest_email.py --eml "CU26070802 - price enquiry. Ostermalbloc
 uv run ./scripts/main.py customer-files/pending/CU26070802_price_enquiry._Ostermalblock.txt --customer auto
 ```
 
+> ⚠️ **手工起单别绕开扫描器**（2026-11-11 实测）：`.eml` 已落在 `pending/` 时，用
+> `uv run ./scripts/scan_pending.py --limit 1 --verbose`（认领 → `ingest_email` 展开 → 原邮件归档
+> `inbox/<YYYYMMDD>/` → `main.py` 抽取，一轮做完）。直接 `ingest_email.py --eml pending/xxx.eml`
+> **不会把 `.eml` 移出 `pending/`**，5 分钟后 cron 再抽一遍 → 同一封邮件两个任务目录、两份产物。
+
 本单确认值（`ingest_email` + `main.py` 实跑）：
 
 | 字段 | 值 | 依据 |
@@ -553,6 +558,14 @@ width / height / binding / content / content gsm / content paper / printing of c
    随后更正「CMPS 需要填写」；只改产物会在 skill / docs / references 留下互相矛盾的旧话，
    下一个会话照旧的执行就全错。做法：`grep -rn "<旧口径关键词>" skills/ docs/ references/`，
    在原处标 `⚠️ 口径更正（日期）：<旧话>只适用于 <什么情形>`，并写明「旧产物不回改，只约束新单」。
+3. **两套词表打架时，`docs/华辉内部中英单词表.txt` 优先；`assets/cpms_spec.yaml` 的「同义收敛」是旧写法。**
+   实测（2026-11-11 A00142）：`单粉卡` / `光油` / `普通BB书` / `方背` 在 `cpms_spec` 里合法，但在单词表里
+   全是**词表外** → `glossary.py --check-json` 直接报。能同时喂饱两道门的写法：
+   `300g单粉咭(C1S)` / `4C+印油(光)/4C` / `装订：板纸书(合板)，方脊`（`board book binding → 板纸书(合板)`、
+   `spine → 书脊`）。**`CPLB` 树节点名不进 CPMS 用词**，两者不冲突。收尾两门都要绿：
+   `cpms_lint.py`（结构/顺序）+ `glossary.py --check-json`（用词）。
+   对照表与「拿 `erp_quote_detail` 作应然值 / 审计小数误报」见
+   `references/并发合并与克重换算门禁.md` §6~§8。
 
 ## 2. 怎么认出这是 NGV
 
@@ -1141,6 +1154,19 @@ uv run ./scripts/customer_profile.py --prefs ngv
   → 只在复合词/项目号里出现的数字**宁可不写、写进汇报**，不要改写成 `1000` 去骗审计。
   细节见 `references/lidl-anlage-表与并发补写.md` §3 / §4。
   完整配方 / 本次成品 CPMS / 写法决策表见 `references/cpms-backfill-gotchas.md`；
+  ★ **2026-11-11 实测：并发写者会连字段一起改**（`CPSL1` 被填成数量合计、`CPMC` 被加上「（N款）」、
+  概要行被补上书籍方向、`question_answers` 里出现主会话里口头给过的「业务指示」），
+  而且会连带覆盖 `<同名>.erp-import.json` 与 `CPMS_来源对照.md`。
+  **逐条判，别一刀切回滚**（2026-11-11 实测结论）：
+  · `CPSL1=总量` → **撤**（真实单 `BJXQ260904006` 的 `CPSL1…10` 全空，客户没给阶梯就不填）；
+  · `CPMC（N款）` → **撤**（款数已由 TZS 表达，真实单产品指向里没有这个后缀）；
+  · **概要行的「书籍方向：【长书脊/短书脊】」→ 留**：`Drop_SJFX` 为空只表示 ERP 没落库，
+    `cpms_lint` CPMS013 仍要求写，真实单 `BJXQ260904006` 的 CPMS 概要行就是【长书脊】。
+    判方向只看 CD/KD + portrait（长边装订＝长书脊），不是编；
+  · `question_answers` 里的「业务指示」→ 先 `session_search` 确认是不是主会话真的给过，
+    给过就留（本次「把这份 eml 当新报价」就是森西在会话里说的），查不到才当编造删。合并顺序（留底 → 30 秒后再 stat →
+  逐键 diff → 按「口径/事实/编造」三分 → 重生成导出口径副本 → 四道门）与
+  「克重换算句 / 千分位写法为什么会被 audit 反咬」见 `references/并发合并与克重换算门禁.md`。
   **同一单出现多个任务目录 / 两个实例并发时怎么判「谁是交付件」、为什么已归档的重复件不许补 CPMS**，
   见总纲 `references/cron-concurrency-and-duplicate-tasks.md`。
   顺带一条（2026-10-29 实测）：**仓库常被并行的 subagent 同时改**（`patch` 会提示
@@ -1314,5 +1340,11 @@ uv run ./scripts/customer_profile.py --prefs ngv
       `record_count`、每条「无未完成横幅」。配方见 `references/多记录重跑与逐条补字段.md`。
 - [ ] ★ 被取代的旧任务目录已 `mv processed/_superseded_<日期>/`，并在里面写了
       `_SUPERSEDED.txt`（被谁取代 + 为什么）—— 别让一份报价在交付区躺两份。
+- [ ] ★ **写回前后各 `md5sum` + `stat` 一次，30 秒后再核**：并发写者改的是**字段**
+      （实测 `CPSL1` 0→总量、`CPMC` 加「（N款）」、概要行补方向、`question_answers` 写业务口头指示），
+      不是只改 `CPMS`；逐键 diff 后按「口径 / 客户事实 / 编造」三分（方向留、CPSL 量撤、
+      CPMC 后缀撤、业务指示先 `session_search` 核实），合并完
+      **必须重跑 `erp_import_adapter.py`**（副本里也有 CPMS/CPMC）。配方见
+      `references/并发合并与克重换算门禁.md`
 - [ ] `ID` = 本次任务号（= 产物目录名；排查问题时拿它对日志）
 - [ ] `compare_with_erp.py` 白名单外差异 0 条
