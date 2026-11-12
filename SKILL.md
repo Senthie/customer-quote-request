@@ -14,7 +14,15 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.73（2026-11-12 **对齐服务端 pydantic 入参**：拉 `tools/list` 把
+> **版本：** 1.0.74（2026-11-12 **首次真建单成功 + 建单链固化**：同一份 payload
+> 重试 `erp_quote_create` → `status=created`、`verify.ok=true`、`row_created`/`qty_saved`
+> 均 true，落库 `BJXQ261112008`（NGV10 / 冬季找找图画书 / qty 410000 / 款数 10 / 语言数 10，
+> 走 `product_category` free-text 新产品分支）。→ 1.0.73 判定的「新产品分支写不进数量」
+> 已由服务端修好，**我们这侧只需守住「`qty_1` 绝不显式传」**。新增
+> `references/erp-quote-push-runbook.md`，SKILL §4「最后一步：推进 ERP」重写为
+> **干跑 → 落库 → 列表页回读** 四步（含数量口径、`status`/`verify` 判成败、空单清理、
+> 详情页 null 假阴性、脚本 401 通道说明）。全量 **834 绿**）
+> —— 前序 1.0.73（2026-11-12 **对齐服务端 pydantic 入参**：拉 `tools/list` 把
 > `erp_quote_create.inputSchema` 存成 `assets/erp_quote_create_schema.json` 当唯一事实源。
 > ★ **`products[]` 有 `product_category`**：产品档案搜不到时给类别（`27.01;普通BB书`）
 > 即可当新产品建明细 —— 这道卡了三轮的「产品档案」坎其实协议早就给了出路，我们没传。
@@ -372,42 +380,66 @@ uv run pytest -q                                                    # ④ 全绿
 
 ② 会同时报「客户文件有、CPMS 没写」的漏抄项 —— 逐条判是真漏还是有意不写。
 
-### 最后一步：推进 ERP（`scripts/erp_push.py`，2026-11-11 起；协议见 `docs/erp-quote-create.md`）
+### 最后一步：推进 ERP（MCP 工具 `erp_quote_create`；干跑 → 落库 → 列表页回读）
 
-四道门全绿 = 文件合格，**但不等于进了 ERP**。`main.py` 只落盘，推送要单独跑：
+四道门全绿 = 文件合格，**但不等于进了 ERP**。`main.py` 落盘后就停住了，推送要单独做。
 
-```bash
-uv run ./scripts/erp_push.py <产物>/ERP_xxx.erp-import.json --customer NGV10 --qty 410000          # 干跑
-uv run ./scripts/erp_push.py <产物>/ERP_xxx.erp-import.json --customer NGV10 --qty 410000 --confirm # 真写
+> ★ **配方与全部坑：`references/erp-quote-push-runbook.md`**（2026-11-12 首次真建单
+> `BJXQ261112008` 沉淀）。协议 `docs/erp-quote-create.md`／字段口径 `docs/erp-push-字段口径.md`／
+> 入参真值源 `assets/erp_quote_create_schema.json`（`tools/list` 的 `inputSchema`，pydantic 生成，
+> **不手抄**）。
+
+**四步，缺一不可：**
+
+1. **找产物** `customer-files/processed/<task_id>/ERP_<task_id>_<ts>.erp-import.json`
+   —— 数组，**每个元素 = 一次 `erp_quote_create` 调用**；字段名与 MCP 入参完全一致，
+   原样贴进去，**推送时不再做任何映射**。
+2. **干跑**：`erp_quote_create(confirm=false, …)` → 必须 `ok=true` + `errors=[]` +
+   `warnings=[]` + `status=needs_confirmation`。有 error 就回改产物，**不要硬推**
+   （`create` 会先建主表再被拒 → 留一张空单）。
+3. **落库**：同一 payload 只把 `confirm` 改 `true` → 判 `status=created` **且**
+   `verify.ok=true`（`row_created` / `qty_saved` 都为 `true`）才算成功。
+4. **回读**：`erp_quote_list(key="BJXQ…")` 核 数量/规格/款数/语言数/日期/装订/包装/产品类别。
+
+```python
+# 第 2 步（干跑）；第 3 步把 confirm 改 True，其它一字不改
+erp_quote_create(confirm=False, customer="NGV10", remark="LG26090401 / …",
+    products=[{"name": "冬季找找图画书", "spec": "240*330*0", "qty": 410000,
+               "product_category": "27.01;普通BB书",
+               "fields": {"binding": "快线BB书", "attribute": "三岁以下",
+                          "product_type": "新产品", "parts_desc": "无",
+                          "modify_log": "无", "delivery_date": "2027-03-15", …}}])
 ```
 
-**能写的 24 个**（协议 `erp-quote-create.md` §3/§4 逐字段核对过）：
+**数量口径（最容易翻车）**
+- 顶层 `qty` = **总量**（单款 × 款数）：10 款 × 41000 本 → `qty=410000`。
+  服务端直接写 `txtCPSL` + 首屏 `txtCPSL1`，**不会再乘款数**。
+- ★ **`qty_1` 绝不能显式传**：`create()` 只在「入参没给 `qty_1`」时才补隐藏汇总字段
+  `txtCPSL`；一旦显式给了，就只写展示框 → 汇总为空 → 报「请输入【产品数量】」→
+  明细行存不进去。`qty_2..10`（第 2 档起）可以传，值同样是总量。
 
-| 层 | 入参 ← 59 键 |
-|---|---|
-| 表头 9 | `customer`、`sales`、`contact`←`LXR`、`phone`←`LXDH`、`mobile`←`SJ`、`fax`←`CZ`、`discount`←`ZKL`、`remark`、`product_memo`←`CPMX` |
-| 明细 14 | `binding`←`ZDFS`、`packing`←`BZFS`、`pallet`←`TBLX`、`delivery`←`SHFS`、`delivery_date`←`JHRQ`、`expected_date`←`WCRQ`、`parts_desc`←`Remark1`、`modify_log`←`Remark3`、`inspection`←`Remark4`、`product_desc`←`CPMS`、`attribute`←`CPSX`、`product_type`←`CPLX`、`cases`←`TZS`、`languages`←`YYS` |
-| 明细 3 | `name`←`CPMC`、`spec`←`CD*KD*GD`（**只校验不落库**）、`qty`←`CPSL1-10` 合计（写 `txtCPSL`+`txtCPSL1`） |
+**产品档案搜不到怎么办**：给 `products[].product_category`（值就是 `CPLB`，如
+`27.01;普通BB书`，也接受 `27.01` 或 `普通BB书`）→ 走 free-text 新产品分支，明细照建。
+档案能命中时可省略。**别再为了凑档案去改品名。**
 
-**写不进去的 35 个**：`CPLB`（产品类别=树形下拉）、`CD/KD/GD`（尺寸——`spec` 传了也只校验）、
-`DWMC`（单位）、`CPSL2…10`（只写汇总，阶梯丢）、`FSCMC`、`KHDH`、`KHDDH`、`ECPMC`、`BZ`、
-`KHMBDJ`、`YSLX/SHDQ/KHDQ`、`ZXLB/ZBLX/ZXFS/DKMC`、`SFYPJ` 与各 `chk*`、`Drop_SJFX`、
-`OLD_KHDDH`、`BGMS` —— **`CPLB`/尺寸/单位由 ERP 从【产品档案】反查回填**，
-所以产品档案条目本身必须对。脚本把它们列进 `not_writable`，进 ERP 后由录单同事补
-（业务 2026-11-11：「未定选项可以去 ERP 后修改」）。
+**成败只看 `status` / `verify`，不看页面文案**：
+- `failed` / `partial` 的响应**也带 `bdbh`** → 先判 `bdbh` 会把空单报成 `created`（踩过）。
+- 成功那次 `save_product.message` **仍然**是「请输入【产品数量】…」那句 alert ——
+  它是噪音，行和数量都落了，**不能拿页面文案判失败**。
+- 失败时错误串会点明「主表已建：XXX，是空单，要删」→ `erp_quote_delete(confirm=true)`
+  清掉再重推；**删单后单号会被 ERP 复用** → 认单别认单号，认主表 `Remark` 溯源串。
 
-三条硬约束（都踩过）：
-- ⚠️ **产品名必须在【产品档案】里唯一匹配**（精确同名优先）。2026-11-11 实测
-  `产品档案里找不到 '冬季找找图画书'`；协议示例里的 `name` 是料号（`"512961503"`），
-  说明产品档案的键更像**料号/编码**，而我们的 `CPMC` 是译名/自由文本 → 这条路口对不上时
-  不要改品名去凑，要么先建档，要么走 ERP 侧导入接口。
-- **一次只收 1 条明细**（`len(products)!=1` → `status=unsupported`）→ 一条产品记录一次
-  `create`，N 条调 N 次；脚本已按此循环，并给出 `partial`（有的建了有的没建）。
-- **`YWY`/`GDY` 不要传**：产物里是生成标记 `KM`，不是 ERP 真人；传了被拒。ERP 按客户资料
-  自动带（实测 NGV10 → 陈纯 / 肖也 / 折扣 10 / 美元）。
+**回读用列表页，别用详情页**：`erp_quote_detail` 建完立刻读会看到一大片 null（`CPSL1..10`、
+`DWMC`、`JHRQ`、`WCRQ`、`CPSX`、`CPLX`、`FSCMC`、`ZXLB`、`ZBLX`、`ZXFS`、`DKMC`、`YSLX`、
+`SHDQ`、`ECPMC`、`BZ`）—— 这些控件展示态是禁用/只读，渲染不出值，**不代表没落库**。
+`erp_quote_list(key=…)` 才是权威口径。
 
-其它：幂等靠 `customer-files/.erp_push_log.jsonl`（同 `ID` 已 `created` 默认拒推）；
-结果写 `<产物>.erp-push.json`；成败以 `status` + 写后回读为准，**不看页面 alert 文案**。
+**通道**：推单走 MCP 工具 `erp_quote_create`。`scripts/erp_push.py` 需要 `ERP_MCP_TOKEN`
+（`--token` 或环境变量，仓库和 profile 里**都没落盘**）→ 直跑 `HTTP 401 missing_bearer`，
+须先 `POST /v1/auth/login` 换 key；拿到 token 前别在脚本上浪费轮次。
+
+**`CPMC` 会被 ERP 追加 FSC 后缀**：`冬季找找图画书` → `冬季找找图画书(FSC Mix)`。
+这是 ERP 行为，不是写错，别去"修"。
 
 ### 客户给的是邮件（.eml）时
 
@@ -2469,6 +2501,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
 | **1.0.58** | **2026-10-30** | **查看器能写答案**（业务：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）。① 新增 `CQR_Web/answers.py`（纯逻辑，不 import Flask）+ `POST /api/answer`：只改 `question_answers` 的 `answer/status/answered_at`，顺带重算 `Reminder` 快照；有答案 → `confirmed` 并盖 `answered_at`，清空 → 回 `open`，`waived` → 不卡交付；② 详情页清单块每条待确认项带文本框 +「保存答案 / 作废」，未保存草稿存 `state.drafts`（10 秒自动刷新重建 DOM 不丢字，按「产物#第几条#项 id」键）；③ 写盘原子（同目录临时文件 + `os.replace`）、缩进/中文/键序与产出一致；④ **mtime 乐观锁**：页面打开后文件被别人改过 → 409 + 自动重取，不覆盖 agent 刚写的 CPMS；⑤ 拒绝姿势明确：v2 旧产物 409、未知 id/越界记录 404、乱填 status 400、确认但答案空 400；⑥ 页面仍**不许**写 `CPMS`/品名/59 个 ERP 字段；⑦ 新增 `tests/test_cqr_answers.py`（17 项，含 HTTP 层与路径穿越），边界测试把 `answers.py` 也纳入「不许 import Flask / 不许起子进程」 |
+| **1.0.74** | **2026-11-12** | **首次真建单成功 + 建单链固化为 Skill 一节**：森西「再重试一遍」→ 用**与失败那次完全相同的 payload** 重推 `erp_quote_create`，直接 `status=created`：`bdbh=BJXQ261112008`、`record_id=89d48f0c-1fe3-4786-a768-a078f84e6f21`、`header_saved=true`、`detail_saved=true`、`detail_error=""`、`verify{ok=true,row_created=true,qty_saved=true}`、`product{source=free-text, category=27.01;普通BB书, qty=410000, unit=本}`。列表页回读：数量 410000（最小/中间/最大同值）、规格 `240*330*0`、款数 10、语言数 10、产品类别 普通BB书、产品名称 `冬季找找图画书(FSC Mix)`（ERP 自动追加 FSC 后缀）、预计下单/交货 2027-03-15、装订 快线BB书、包装 纸箱包装、是否有配件 否、产品类型 新产品、修改记录 无、香港单号 `CU26111201`（ERP 生成）、制单人 张爽。→ **1.0.73 的「free-text 分支写不进数量」是当时服务端没接好，现已修；我们这侧唯一硬约束是「`qty_1` 绝不显式传」**。三个新认知落文档：① 成功那次的 `save_product.message` **仍带**「请输入【产品数量】」页面 alert —— 噪音，判成败只看 `status`+`verify`；② 建完立刻 `erp_quote_detail` 有一大片 null（`CPSL1..10`/`DWMC`/`JHRQ`/`WCRQ`/`CPSX`/`CPLX`/`FSCMC`/`ZXLB`…，展示态禁用控件渲染不出值），**核验必须用 `erp_quote_list`**；③ `scripts/erp_push.py` 需 `ERP_MCP_TOKEN`（仓库/profile 均未落盘）→ 直跑 `HTTP 401 missing_bearer`，当下推单走 MCP 工具。**Skill 侧固化**：新增 `references/erp-quote-push-runbook.md`（通道选择 / 三步走 / 数量口径 / 判成败 / 回读口径 / 其它坑 / 成功样本 / 本机工具坑），SKILL §4「最后一步：推进 ERP」整节重写为**干跑 → 落库 → 列表页回读**四步（旧版「59 键只能写 24 个 / `CPLB` 写不进 / 产品名必须命中产品档案」三段已作废）。文档 `docs/erp-push-字段口径.md` §5.2/§5.2.1/§5.2.2 同步改写。全量 **834 绿** |
 | **1.0.73** | **2026-11-12** | **对齐服务端 pydantic 入参（`inputSchema` 当真值源）**：森西「去查看 `erp_quote_create` 的入参数据格式和类型，我们已经做了 pydantic 类型注释」→ 直接拉 MCP `tools/list`，把 `inputSchema` 存成 `assets/erp_quote_create_schema.json`（27KB，含 `$defs.QuoteProductInput` / `QuoteProductFields`），用作唯一事实源。**重大发现**：`products[]` 除 `name/spec/qty` 外还有 **`product_category`** ——「产品档案搜不到时必填，给了就不要求档案存在，明细行照建」，值就是我们的 `CPLB`（`27.01;普通BB书`）。也就是说卡了三轮的「产品档案」坎，协议早就给了出路，只是我们没传这个参数。类型分布：明细 51 字段 = **31 string / 17 number / 4 boolean**；`number` 拒收 `"240"`、`boolean` 拒收 `"否"`（pydantic 直接 422，主表都建不了）→ `erp_mcp_export` 新增 `FIELD_TYPES`（从 schema 读，不手抄）+ `_coerce_fields()` 强转（掰不动的字段丢弃并报错）+ `validate_call()` 离线自检（`erp_push` 发送前必跑）。另修两坑：① **`qty_1` 不能显式传**，协议 §7 说 `create()` 只在没给 `qty_1` 时才补隐藏的 `txtCPSL`，给了就只写展示框 `txtCPSL1` → 「请输入【产品数量】」；② `_classify` 先判 `bdbh` 会把 `failed`/`partial` 报成 `created`（`failed` 也带 `bdbh`）—— `BJXQ261112007` 就这样被误报成功过一次。**实测结论**：`product_category` 成功绕过档案检索（报错文案随之改成"新产品请指定类别"），但**新产品分支写不进「产品数量」**——6 个变体（只 `qty` / +`qty_1` / +`unit` / `category=27.01` / `category=普通BB书` / `languages=1`）报错完全一致 `save_product.ok=true, verify.ok=false, 产品明细行没有落库`；对照组协议 51 字段样例（`name=512961503`，档案能命中）`status=created` → 判定服务端 free-text 分支缺数量写入，待修。实验产生的 5 条空单（`BJXQ261112007~011`）已全部 `erp_quote_delete` 清掉；记一笔：**删除后单号会被复用**，认单请认「主表备注」追溯串。回归 +9，全量 **834 绿** |
 | **1.0.72** | **2026-11-12** | **导出即 MCP 入参（一份文件、一套字段名）**：森西「导出的 ERP 格式改成 MCP input 格式，字段名、格式一致，这样导出只需要一份文件」。新增 `scripts/erp_mcp_export.py`：59 键 → `erp_quote_create` 的 **arguments**（数组，每元素一次调用）`[{customer, remark, products:[{name, spec, qty, fields}]}]`，`fields` 里全是 MCP 字段名（`binding`/`packing`/`has_parts`/`qty_1`…，与 `erp_quote_product_form` 的 `upload.json_schema` 对齐），内部字段（`ID`/`version`/`question_answers`/`CPMC_ZH`）一个不漏出去。**映射表只此一份**：`erp_push.py` 里的副本全删，改成从 `erp_mcp_export` re-export（老测试/老调用不受影响），`push()` 检测到 MCP 格式就**原样发送**，只有旧 59 键文件才现场翻一次。`main.py` 3b 改调 `export_calls()`（客户代号从 `profile.rule("erp_khzl")` 烘进去，推送时 `--customer/--qty/--date` 变成可选覆盖）。文件名**仍是** `*.erp-import.json`：仓库 20+ 处靠这个后缀识别侧档（查看器/cpms_todo/migrate/backfill），改名会静默把副本当主产物。同批修 3 个坑：① `SFYPJ` 产物里是字符串 `"否"` 时按布尔判真 → `has_parts` 写成「是」；② `qty` 业务口径 = **单款本数**，落库 `txtCPSL1` 要 ×款数（`--qty 41000`+TZS 10 → 410000），`CPSL1..10` 各档同样 ×款数；③ 产品档案不命名单列 `archive_missing` + `lost_header` 提示清空单。实测：本单 `status=dry_run`、36 个 fields 全过 ERP 校验、`qty_landed=410000`。回归 +6，全量 **825 绿** |
 | **1.0.71** | **2026-11-12** | **侧档不许当产物（`.erp-push.json`）**：`*/5` cron 把任务 `179d3e1f…` 报成「缺=CPMS/CPMC/CPMC_ZH/ECPMC」，产物路径指着一份 `.erp-push.json` —— 主产物 2026-11-11 就写全了（`cpms_lint` 0 error / 0 warn、`CPMS_来源对照.md` 齐备、`erp_schema` 仅 1 个已知 `ZDFS` 空 warn）。根因与 1.0.66 同源：`erp_push.py` 的推送报告 `<产物>.erp-push.json`（`{task_id, artifact, calls, status}`）也以 `ERP_` 开头、以 `.json` 结尾且 mtime 更新 → `glob("ERP_*.json")` 取最新拿到报告 → 假欠账每 5 分钟被派给一个新 agent 会话。修法：`scripts/erp_bundle.py` 新增 `PUSH_SUFFIX` / `is_push_report()` / `is_sidecar()`，`iter_bundles()` 一并排除；消费方 `cpms_todo`（间接）/ `CQR_Web/data.py` / `backfill_question_answers` / `migrate_erp_to_array` 全部改走 `is_sidecar`。回归 +3（`test_ERP推送报告不算欠账` / `test_ERP推送报告不掩盖真欠账` / `test_列表不把ERP推送报告当成产物`），全量 **808 绿** / `CQR_Web` **81 绿**；实测 `CPMS_TODO: 1 → 0` |
