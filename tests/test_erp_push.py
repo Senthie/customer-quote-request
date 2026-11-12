@@ -80,12 +80,12 @@ def _isolated_log(tmp_path, monkeypatch):
 
 # ── 映射 ────────────────────────────────────────────────────
 def test_51字段映射(tmp_path: Path):
-    payload, problems = erp_push.build_payload([_rec()], customer="NGV10", qty_override=410000)
+    payload, problems = erp_push.build_payload([_rec()], customer="NGV10", qty_override=41000)
     assert problems == []
     p = payload["products"][0]
     assert p["name"] == "冬季找找图画书"
     assert p["spec"] == "240*330*0"
-    assert p["qty"] == 410000
+    assert p["qty"] == 410000   # --qty 是**单款** 41000，× 款数 10 = 落库总量 410000
     f = p["fields"]
     # 明细级（以前被我误判成「写不进」的那些，现在都能写）
     assert f["binding"] == "快线BB书"           # ZDFS
@@ -133,12 +133,44 @@ def test_空值不塞进fields(tmp_path: Path):
 
 
 def test_数量档位拆到qty_n(tmp_path: Path):
+    """`CPSL1..10` 是**每款**档位 → 落库 `qty_n` 是**总量**（× 款数）。"""
     payload, _ = erp_push.build_payload([_rec(CPSL1=3000, CPSL2=5000, CPSL3=7000)],
                                         customer="NGV10")
     f = payload["products"][0]["fields"]
-    assert f["qty_1"] == 3000 and f["qty_2"] == 5000 and f["qty_3"] == 7000
-    # 协议 §4：qty 必须等于第 1 档，不是三档相加
-    assert payload["products"][0]["qty"] == 3000
+    assert f["qty_1"] == 30000 and f["qty_2"] == 50000 and f["qty_3"] == 70000
+    # qty 必须等于第 1 档（总量），不是三档相加
+    assert payload["products"][0]["qty"] == 30000
+
+
+def test_单款数量乘款数(tmp_path: Path):
+    """款数=1 时不放大；款数=10 时落库总量 = 单款 × 10。"""
+    one, _ = erp_push.build_payload([_rec(TZS=1)], customer="NGV10", qty_override=3000)
+    assert one["products"][0]["qty"] == 3000
+    ten, _ = erp_push.build_payload([_rec(TZS=10)], customer="NGV10", qty_override=3000)
+    assert ten["products"][0]["qty"] == 30000
+    assert ten["products"][0]["fields"]["cases"] == 10
+
+
+def test_SFYPJ字符串否不写反(tmp_path: Path):
+    """产物里 `SFYPJ="否"` 是非空字符串，曾被判成 True 写成「是」。"""
+    for raw, want in ((False, "否"), (True, "是"), ("否", "否"), ("是", "是")):
+        payload, _ = erp_push.build_payload([_rec(SFYPJ=raw)], customer="NGV10",
+                                            qty_override=1)
+        assert payload["products"][0]["fields"]["has_parts"] == want, raw
+
+
+# ── 六种 ERP 响应落点 ──────────────────────────────────────
+def test_产品档案不命中单独归类(tmp_path: Path):
+    """档案挡住时主表已建 → 必须标成 archive_missing + 提示清空单，不能混进普通 error。"""
+    res = {"raw": "Error executing tool erp_quote_create: 产品档案里找不到 '冬季找找图画书'"}
+    status, bdbh, err = erp_push._classify(res)
+    assert status == "archive_missing" and bdbh is None
+    assert "冬季找找图画书" in err
+
+
+def test_普通异常仍是error(tmp_path: Path):
+    status, _, _ = erp_push._classify({"raw": "Error executing tool erp_quote_create: 会话过期"})
+    assert status == "error"
 
 
 # ── ERP 必填 ────────────────────────────────────────────────
@@ -275,11 +307,14 @@ def test_干跑状态(tmp_path: Path):
     assert rep["status"] == "dry_run" and client.calls[0][1]["confirm"] is False
 
 
-def test_产品档案找不到_是error(tmp_path: Path):
+def test_产品档案找不到_是archive_missing(tmp_path: Path):
+    """档案不命中 → 单独归类，并且报告要点出「已留下空单」。"""
     art = _artifact(tmp_path)
     client = FakeClient({"raw": "Error executing tool erp_quote_create: 产品档案里找不到 '冬季找找图画书'"})
     rep = erp_push.push(art, client=client, customer="NGV10", qty=410000, confirm=True)
-    assert rep["status"] == "error" and "产品档案里找不到" in rep["error"]
+    assert rep["status"] == "archive_missing"
+    assert "产品档案里找不到" in rep["error"]
+    assert rep["lost_header"] is True and "空单" in rep["hint"]
 
 
 def test_部分成功要点出来(tmp_path: Path):

@@ -273,9 +273,11 @@ def _profile_customer_code(profile_id: str) -> str:
 
 
 def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
-    """本单数量 = **第 1 档**（协议 §4：`qty` 必须等于 `qty_1`，档位不是「加起来」）。
-    `CPSL1..10` 是**报价数量档位**（第1档/第2档…），不是「每款数量」也不是要相加的明细。
-    所以这里只取第 1 档；第 1 档空着才往后找第一个非 0 的档位。
+    """本单数量 = **单款本数**（2026-11-12 森西口径）。
+
+    `CPSL1..10` 是**报价数量档位**，每档存的是**总量**；业务口里说「数量」指单款多少本。
+    所以这里的返回值是**单款**，落库前再乘款数（`TZS`）换成总量，见 `_record_total`。
+    第 1 档空着才往后找第一个非 0 的档位。
     """
     if override:
         return int(override)
@@ -286,11 +288,35 @@ def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int
     return None
 
 
+def _record_titles(record: dict[str, Any]) -> int:
+    """款数（`TZS`）。单款数量 × 款数 = 报价档位的总量，ERP 不替我们乘。"""
+    try:
+        n = int(record.get("TZS") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return n if n > 0 else 1
+
+
+def _record_total(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
+    """单款本数 × 款数 = 落库用的「报价数量（总量）」。"""
+    per = _record_qty(record, override)
+    return per * _record_titles(record) if per else None
+
+
 
 def _norm_value(key: str, val: Any) -> Any:
-    """产物内部表达 → ERP 控件能接受的样子（下拉一律传显示文字）。"""
-    if key == "SFYPJ":  # 内部布尔 → 下拉「是/否」
-        return "是" if val else "否"
+    """产物内部表达 → ERP 控件能接受的样子（下拉一律传显示文字）。
+
+    `SFYPJ`（是否有配件）产物里两种写法都出现过：布尔 `False`，或已经是 `"是"/"否"`。
+    **不能只判真假**——`"否"` 是非空字符串，会被判成 `True` 直接写反。
+    """
+    if key == "SFYPJ":
+        if isinstance(val, bool):
+            return "是" if val else "否"
+        text = str(val).strip()
+        if text in ("是", "否"):
+            return text
+        return "是" if text else "否"
     return val
 
 
@@ -330,9 +356,9 @@ def build_call(
     cd, kd, gd = record.get("CD"), record.get("KD"), record.get("GD")
     spec = f"{cd}*{kd}*{gd or 0}" if cd not in (None, "") and kd not in (None, "") else ""
 
-    qty = _record_qty(record, qty)
+    qty = _record_total(record, qty)  # 落库的是总量 = 单款 × 款数
     if not qty:
-        problems.append("数量未知（CPSL1-10 全空/为 0）→ 用 --qty 指定（ERP 明细的「产品数量」是实体数量）")
+        problems.append("数量未知（CPSL1-10 全空/为 0）→ 用 --qty 指定单款本数（脚本会乘款数）")
 
     product: dict[str, Any] = {"name": name, "spec": spec, "qty": qty or 0}
 
@@ -344,11 +370,12 @@ def build_call(
             continue
         fields[arg] = _norm_value(key, val)
 
-    # 数量档位 CPSL1..10 → qty_1..qty_10（第 1 档必须等于顶层 qty）
+    # 数量档位 CPSL1..10 → qty_1..qty_10（每档都是**总量** = 单款 × 款数）
+    titles = _record_titles(record)
     for key, arg in QTY_SLOT_MAP.items():
         val = record.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
-            fields[arg] = int(val)
+            fields[arg] = int(val) * titles
     if qty:
         fields["qty_1"] = int(qty)
 
@@ -513,7 +540,12 @@ def _classify(result: dict[str, Any]) -> tuple[str, Optional[str], Optional[str]
     """ERP 返回 → (status, bdbh, error)。以 `status` 为准，不靠 alert 文案。"""
     if isinstance(result, dict) and "raw" in result:
         # MCP 把工具异常包成一条 text：「Error executing tool …: 产品档案里找不到 X」
-        return "error", None, str(result.get("raw"))
+        raw = str(result.get("raw"))
+        if "产品档案" in raw:
+            # ★ 最麻烦的一种：主表已经建好、明细被档案挡住 → 留下一条**空单**，
+            #   必须先补档案 / 给料号，再 `erp_quote_delete` 清掉空单才能重推。
+            return "archive_missing", None, raw
+        return "error", None, raw
     status = str(result.get("status") or "")
     bdbh = result.get("bdbh") or result.get("BDBH")
     if status == "created" or bdbh:
@@ -559,6 +591,13 @@ def push(
         "record_count": len(records),
         "calls": calls,
         "problems": problems,
+        "quantity": [
+            {"record": idx,
+             "titles": _record_titles(rec),
+             "per_title": _record_qty(rec, qty),
+             "total_landed": _record_total(rec, qty)}
+            for idx, rec in enumerate(records, 1)
+        ],
         "defaulted": defaulted_fields(records),
         "not_writable": unwritable_fields(records),
         "results": [],
@@ -594,6 +633,12 @@ def push(
     else:
         report["status"] = statuses[0] if statuses else "unknown"
         report["error"] = next((r["error"] for r in report["results"] if r["error"]), None)
+
+    if "archive_missing" in statuses:
+        report["lost_header"] = True
+        report["hint"] = ("产品档案不命中：ERP 已建好主表、明细被挡 → 列表里会多一条空单"
+                          "（产品名称/报价状态均为空）。补档案或给料号后，"
+                          "先用 erp_quote_delete 删掉空单再重推。")
     return report
 
 
