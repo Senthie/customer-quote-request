@@ -70,93 +70,35 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 from erp_bundle import load_bundle  # noqa: E402
 
 DEFAULT_MCP_URL = "https://14.12.0.173:8443/mcp"
-CPMC_PLACEHOLDER = "【中文品名待定】"
-
-# 59 键 → erp_quote_create 明细 `fields` 入参（协议 docs/erp-quote-create.md §3.3，
-# 51 个「DOM 首屏可见且可写」字段；`erp_quote_product_form` 实测可用）。
-PRODUCT_FIELD_MAP: dict[str, str] = {
-    "CPMC": "product_name",
-    "DWMC": "unit",
-    "KHDH": "customer_order_no",      # ★ 客户单号是**明细级**（txtKHCPMC），不在表头
-    "ECPMC": "product_name_en",
-    "CPDL": "product_group",
-    "CD": "length_mm",
-    "KD": "width_mm",
-    "GD": "height_mm",
-    "Drop_SJFX": "spine_direction",
-    "PXH": "sort_no",
-    "ZDFS": "binding",
-    "BZFS": "packing",
-    "TBLX": "pallet",
-    "SHFS": "delivery",
-    "YSLX": "transport_type",
-    "SHDQ": "delivery_area",          # ⚠ 实测不落库（级联下拉，服务端空）
-    "ZXLB": "carton_type",
-    "ZBLX": "board_type",
-    "ZXFS": "packing_orientation",
-    "DKMC": "bottom_card",
-    "chkBSYTB": "no_pallet",
-    "chkBSYJZX": "no_container",
-    "JHRQ": "delivery_date",
-    "WCRQ": "expected_date",
-    "chkZDBJF": "has_schedule",
-    "CPSX": "attribute",
-    "CPLX": "product_type",
-    "FSCMC": "fsc_category",
-    "SFYPJ": "has_parts",
-    "chkXBJF": "no_quote",
-    "CPMS": "product_desc",
-    "BGMS": "extra_desc",
-    "Remark1": "parts_desc",
-    "Remark3": "modify_log",
-    "Remark4": "inspection",
-    "OLD_KHDDH": "old_hk_order_no",
-    "BZ": "target_price_currency",
-    "KHMBDJ": "target_price",
-    "TZS": "cases",
-    "YYS": "languages",
-}
-
-# `CPSL1..10` → `qty_1..qty_10`（报价数量档位，不是每款数量）
-QTY_SLOT_MAP: dict[str, str] = {f"CPSL{i}": f"qty_{i}" for i in range(1, 11)}
-
-# ★ ERP 服务端 14 个必填（协议 §3.4）。缺了 → `prepare` 只给 warning，
-#   但 create 会在「先建主表、再存明细」的第二步被拒，**留下一条空单**。宁可先拦。
-MANDATORY_FIELDS: dict[str, str] = {
-    "binding": "ZDFS", "cases": "TZS", "languages": "YYS", "packing": "BZFS",
-    "pallet": "TBLX", "delivery": "SHFS", "delivery_date": "JHRQ",
-    "parts_desc": "Remark1", "attribute": "CPSX", "product_type": "CPLX",
-    "expected_date": "WCRQ", "product_desc": "CPMS", "modify_log": "Remark3",
-    "inspection": "Remark4",
-}
-
-# ★ 业务默认值（2026-11-12 森西拍板）：ERP 必填、客户没给 → 用这些兜底。
-#   只补**空值**，且每个都记进 push 报告的 `defaulted[]`，业务一眼看得出哪些是兜的。
-FIELD_DEFAULTS: dict[str, tuple[Any, str]] = {
-    "CPSX": ("三岁以下", "客户未指定产品属性 → 业务口径默认三岁以下"),
-    "CPLX": ("新产品", "新询价默认按新产品报"),
-    "Remark1": ("无", "无配件"),
-    "Remark3": ("无", "无修改记录"),
-}
-
-# 装订方式按产品类别推导（产物 CPLB 形如 `27.01;普通BB书`）
-BINDING_BY_CATEGORY: tuple[tuple[str, str], ...] = (("BB", "快线BB书"),)
-
-# 59 键 → erp_quote_create 表头入参
-HEADER_ARG_MAP: dict[str, tuple[str, str]] = {
-    "LXR": ("contact", "str"),
-    "LXDH": ("phone", "str"),
-    "SJ": ("mobile", "str"),
-    "CZ": ("fax", "str"),
-    "ZKL": ("discount", "str"),
-    "CPMX": ("product_memo", "str"),
-}
-
-# 59 键里**确实**写不进的 4 个（2026-11-12 按 51 字段协议核对）
-NOT_WRITABLE = ("BDBH", "CPLB", "KHDDH", "KHDQ")
+# ★ 59 键 → MCP 入参 的映射**只有一处**：`erp_mcp_export.py`（导出那一步就用它）。
+#   这里只做 re-export，方便老代码/测试继续 `erp_push.PRODUCT_FIELD_MAP`，
+#   绝不再落地第二份字段名表 —— 2026-11-12 森西要求「字段名、格式一致，一份文件」。
+from erp_mcp_export import (  # noqa: E402
+    BINDING_BY_CATEGORY,
+    CPMC_PLACEHOLDER,
+    FIELD_DEFAULTS,
+    HEADER_ARG_MAP,
+    MANDATORY_FIELDS,
+    NOT_WRITABLE,
+    PRODUCT_FIELD_MAP,
+    QTY_SLOT_MAP,
+    _norm_value,
+    _record_qty,
+    _record_titles,
+    _record_total,
+    apply_defaults,
+    build_call,
+    build_calls,
+    defaulted_fields,
+    is_mcp_payload,
+    unwritable_fields,
+)
 
 
-# ─────────────────────────── MCP 客户端（stdlib，无新依赖） ───────────────────────────
+# 兼容旧签名（`profile_id` 当年用来从客户档案补 erp_khzl）
+DEFAULT_MCP_URL = "https://14.12.0.173:8443/mcp"
+
+
 class McpError(RuntimeError):
     pass
 
@@ -258,7 +200,6 @@ def _parse_body(raw: str) -> dict[str, Any]:
     return out
 
 
-# ─────────────────────────── 产物 → 推送载荷 ───────────────────────────
 def _profile_customer_code(profile_id: str) -> str:
     """客户档案 `erp_khzl` 的第一个 = ERP 主客户代号（NGV→NGV10、igl→IBL10）。"""
     if not profile_id:
@@ -272,228 +213,15 @@ def _profile_customer_code(profile_id: str) -> str:
         return ""
 
 
-def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
-    """本单数量 = **单款本数**（2026-11-12 森西口径）。
-
-    `CPSL1..10` 是**报价数量档位**，每档存的是**总量**；业务口里说「数量」指单款多少本。
-    所以这里的返回值是**单款**，落库前再乘款数（`TZS`）换成总量，见 `_record_total`。
-    第 1 档空着才往后找第一个非 0 的档位。
-    """
-    if override:
-        return int(override)
-    for i in range(1, 11):
-        val = record.get(f"CPSL{i}")
-        if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
-            return int(val)
-    return None
-
-
-def _record_titles(record: dict[str, Any]) -> int:
-    """款数（`TZS`）。单款数量 × 款数 = 报价档位的总量，ERP 不替我们乘。"""
-    try:
-        n = int(record.get("TZS") or 1)
-    except (TypeError, ValueError):
-        return 1
-    return n if n > 0 else 1
-
-
-def _record_total(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
-    """单款本数 × 款数 = 落库用的「报价数量（总量）」。"""
-    per = _record_qty(record, override)
-    return per * _record_titles(record) if per else None
-
-
-
-def _norm_value(key: str, val: Any) -> Any:
-    """产物内部表达 → ERP 控件能接受的样子（下拉一律传显示文字）。
-
-    `SFYPJ`（是否有配件）产物里两种写法都出现过：布尔 `False`，或已经是 `"是"/"否"`。
-    **不能只判真假**——`"否"` 是非空字符串，会被判成 `True` 直接写反。
-    """
-    if key == "SFYPJ":
-        if isinstance(val, bool):
-            return "是" if val else "否"
-        text = str(val).strip()
-        if text in ("是", "否"):
-            return text
-        return "是" if text else "否"
-    return val
-
-
-def apply_defaults(record: dict[str, Any], fields: dict[str, Any]
-                   ) -> dict[str, tuple[Any, str]]:
-    """客户没给、按业务口径兜底的必填字段 → `{erp_arg: (value, reason)}`。
-
-    只补 `fields` 里**还没有**的键；返回的就是「兜了哪些」，进报告给业务复核。
-    """
-    out: dict[str, tuple[Any, str]] = {}
-    cplb = str(record.get("CPLB") or "")
-    if "binding" not in fields:
-        for token, val in BINDING_BY_CATEGORY:
-            if token in cplb:
-                out["binding"] = (val, f"产品类别含「{token}」→ 装订方式取 {val}")
-                break
-    for key, (val, reason) in FIELD_DEFAULTS.items():
-        arg = PRODUCT_FIELD_MAP.get(key)
-        if arg and arg not in fields:
-            out[arg] = (val, reason)
-    return out
-
-
-def build_call(
-    record: dict[str, Any],
-    *,
-    customer: str,
-    qty: Optional[int],
-    default_date: str = "",
-) -> tuple[dict[str, Any], list[str]]:
-    """单条产品记录 → 一次 `erp_quote_create` 的入参（ERP 一次只收 1 条明细）。"""
-    problems: list[str] = []
-    name = str(record.get("CPMC") or record.get("CPMC_ZH") or "").strip()
-    if not name or name == CPMC_PLACEHOLDER:
-        problems.append("CPMC 还是占位符/空 → 先写中文品名再推")
-
-    cd, kd, gd = record.get("CD"), record.get("KD"), record.get("GD")
-    spec = f"{cd}*{kd}*{gd or 0}" if cd not in (None, "") and kd not in (None, "") else ""
-
-    qty = _record_total(record, qty)  # 落库的是总量 = 单款 × 款数
-    if not qty:
-        problems.append("数量未知（CPSL1-10 全空/为 0）→ 用 --qty 指定单款本数（脚本会乘款数）")
-
-    product: dict[str, Any] = {"name": name, "spec": spec, "qty": qty or 0}
-
-    # 明细 51 字段（协议 §3.3）：产物内部表达 → `fields` 容器
-    fields: dict[str, Any] = {}
-    for key, arg in PRODUCT_FIELD_MAP.items():
-        val = record.get(key)
-        if val in (None, "", []):
-            continue
-        fields[arg] = _norm_value(key, val)
-
-    # 数量档位 CPSL1..10 → qty_1..qty_10（每档都是**总量** = 单款 × 款数）
-    titles = _record_titles(record)
-    for key, arg in QTY_SLOT_MAP.items():
-        val = record.get(key)
-        if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
-            fields[arg] = int(val) * titles
-    if qty:
-        fields["qty_1"] = int(qty)
-
-    # ★ 业务兜底：缺日期用 --date（JHRQ/WCRQ 同值），缺必填用 FIELD_DEFAULTS
-    if default_date:
-        for key in ("JHRQ", "WCRQ"):
-            if not str(record.get(key) or "").strip():
-                fields[PRODUCT_FIELD_MAP[key]] = default_date
-    for arg, (val, _reason) in apply_defaults(record, fields).items():
-        fields[arg] = val
-
-    product["fields"] = fields
-
-    # ★ 14 个 ERP 必填：缺一个 → 主表建了、明细被拒 = 一条空单（协议 §3.4）
-    missing_mandatory = [f"{arg}({src})" for arg, src in MANDATORY_FIELDS.items()
-                         if arg not in fields]
-    if missing_mandatory:
-        problems.append("ERP 必填缺失（create 会留下空主表）：" + "、".join(missing_mandatory))
-
-    khddh = str(record.get("KHDDH") or "").strip()
-    ecpmc = str(record.get("ECPMC") or "").strip()
-    remark = str(record.get("Remark") or "").strip()
-    if not remark:
-        # 「香港单号 / 原始品名」当追溯串：ERP 里一眼认出是哪条询价
-        remark = " / ".join(x for x in (khddh, ecpmc) if x)
-
-    payload: dict[str, Any] = {
-        "customer": customer,
-        "products": [product],
-        "remark": remark[:500],
-    }
-    for key, (arg, _) in HEADER_ARG_MAP.items():
-        val = record.get(key)
-        if val not in (None, ""):
-            payload[arg] = str(val)
-    # ★ YWY/GDY 故意不传：产物里是生成标记 `KM`（不是 ERP 真人），传了被拒；
-    #   ERP 会按客户资料自动带出业务员/跟单员（实测 NGV10 → 陈纯 / 肖也）。
-    return payload, problems
-
-
-def build_calls(
-    records: list[dict[str, Any]],
-    *,
-    customer: str = "",
-    qty: Optional[int] = None,
-    profile_id: str = "",
-    default_date: str = "",
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """整份产物 → N 次 create 的入参（N = 产品记录数；ERP 一次只收 1 条明细）。"""
-    if not records:
-        return [], ["产物里没有记录"]
-    problems: list[str] = []
-    code = (customer or str(records[0].get("KHZL") or "").strip()
-            or _profile_customer_code(profile_id))
-    if not code:
-        problems.append("客户代码未知：产物 KHZL 为空且档案里没有 erp_khzl → 请用 --customer 指定")
-
-    calls: list[dict[str, Any]] = []
-    for idx, rec in enumerate(records, 1):
-        payload, probs = build_call(rec, customer=code, qty=qty,
-                                    default_date=default_date)
-        if len(records) > 1:
-            probs = [f"第{idx}条：{p}" for p in probs]
-        problems.extend(probs)
-        calls.append(payload)
-    return calls, problems
-
-
-# 兼容旧调用（单条）：返回第一条的 payload
 def build_payload(records: list[dict[str, Any]], *, customer: str = "",
                   qty_override: Optional[int] = None,
                   profile_id: str = "",
                   default_date: str = "") -> tuple[dict[str, Any], list[str]]:
-    calls, problems = build_calls(records, customer=customer, qty=qty_override,
-                                  profile_id=profile_id, default_date=default_date)
+    """兼容旧调用（单条）：返回第一次 create 的入参。"""
+    code = customer or _profile_customer_code(profile_id)
+    calls, problems = build_calls(records, customer=code, qty=qty_override,
+                                  default_date=default_date)
     return (calls[0] if calls else {}), problems
-
-
-def defaulted_fields(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """这单有哪些字段是**按业务口径兜的**（不是客户给的）——给业务签字看。"""
-    out: list[dict[str, Any]] = []
-    for idx, rec in enumerate(records, 1):
-        fields: dict[str, Any] = {}
-        for key, arg in PRODUCT_FIELD_MAP.items():
-            val = rec.get(key)
-            if val not in (None, "", []):
-                fields[arg] = _norm_value(key, val)
-        for arg, (val, reason) in apply_defaults(rec, fields).items():
-            out.append({"record": idx, "erp_field": arg, "value": val,
-                        "reason": reason})
-    return out
-
-
-def _is_emptyish(key: str, val: Any) -> bool:
-    """判断「这个字段其实没有值」。
-
-    `GD=0` 对业务是**有意义的 0**（客户没给厚度 = 0，不是没填），必须报出来；
-    而 `CPSL2=0` / `chkXBJF=False` 这种默认值报出来只是噪音。
-    """
-    if val is None or val == "" or val == []:
-        return True
-    if isinstance(val, bool):
-        return not val
-    if isinstance(val, (int, float)) and not val:
-        return key.startswith("CPSL") or key in ("KHMBDJ", "BZ")
-    return False
-
-
-def unwritable_fields(records: list[dict[str, Any]]) -> dict[str, str]:
-    """这单有哪些字段**create 写不进去**（要给业务签字确认的清单）。"""
-    head = records[0] if records else {}
-    out: dict[str, str] = {}
-    for key in NOT_WRITABLE:
-        val = head.get(key)
-        if _is_emptyish(key, val):
-            continue
-        out[key] = str(val)
-    return out
 
 
 # ─────────────────────────── 幂等日志 ───────────────────────────
@@ -558,6 +286,53 @@ def _classify(result: dict[str, Any]) -> tuple[str, Optional[str], Optional[str]
     return status or "unknown", None, None
 
 
+def _sibling_records(artifact: Path) -> Optional[list[dict[str, Any]]]:
+    """同目录那份 59 键主产物（用于补 `defaulted` / `not_writable` 等诊断信息）。
+
+    MCP 入参文件里**只有** ERP 参数，诊断信息放不进去（放进去 ERP 会拒），
+    所以能读到主产物就从主产物算，读不到就算了 —— 不影响推送本身。
+    """
+    for candidate in (artifact.with_name(artifact.name.replace(".erp-import.json", ".json")),
+                      artifact.with_name(artifact.name.replace(".json", ".json"))):
+        if candidate == artifact or not candidate.is_file():
+            continue
+        if candidate.name.endswith(".erp-import.json") or candidate.name.endswith(".erp-push.json"):
+            continue
+        try:
+            return load_bundle(candidate)
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _mcp_calls_with_overrides(calls: list[dict[str, Any]], qty: Optional[int]
+                              ) -> list[dict[str, Any]]:
+    """`--qty`（单款本数）覆盖已导出文件里的数量：qty 与 qty_1 一起改。"""
+    if not qty:
+        return calls
+    out = json.loads(json.dumps(calls, ensure_ascii=False))  # 深拷贝
+    for call in out:
+        for product in call.get("products") or []:
+            fields = product.get("fields") or {}
+            fields["qty_1"] = int(qty)
+            product["qty"] = int(qty)
+            product["fields"] = fields
+    return out
+
+
+def _mcp_quantity(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """MCP 入参文件里的数量（已乘过款数，直接读，不再推算）。"""
+    out: list[dict[str, Any]] = []
+    for idx, call in enumerate(calls, 1):
+        for product in call.get("products") or []:
+            fields = product.get("fields") or {}
+            out.append({"record": idx,
+                        "titles": fields.get("cases"),
+                        "qty_landed": product.get("qty"),
+                        "qty_1": fields.get("qty_1")})
+    return out
+
+
 def push(
     artifact: Path,
     *,
@@ -568,8 +343,18 @@ def push(
     force: bool = False,
     default_date: str = "",
 ) -> dict[str, Any]:
-    records = load_bundle(artifact)
-    task_id = str(records[0].get("ID") or artifact.parent.name) if records else ""
+    """推一份产物。
+
+    两种输入都吃：
+      * **MCP 入参**（`*.erp-import.json`，新格式）→ 原样发出，不再二次映射；
+      * **59 键主产物**（旧格式）→ 现场用 `erp_mcp_export` 翻一次，兼容老文件。
+    """
+    raw = json.loads(artifact.read_text(encoding="utf-8"))
+    is_mcp = is_mcp_payload(raw)
+    # MCP 入参里没有内部字段 → 诊断信息去同目录主产物找；旧格式就直接读自己
+    records = _sibling_records(artifact) if is_mcp else load_bundle(artifact)
+    records = records or []
+    task_id = str((records[0].get("ID") if records else "") or artifact.parent.name)
 
     if not force and task_id:
         prev = already_pushed(task_id)
@@ -582,22 +367,43 @@ def push(
                 "log": str(PUSH_LOG),
             }
 
-    calls, problems = build_calls(records, customer=customer, qty=qty,
-                                  default_date=default_date)
+    if is_mcp:
+        calls = _mcp_calls_with_overrides(raw, qty)
+        problems: list[str] = []
+        for idx, call in enumerate(calls, 1):
+            prefix = f"第{idx}条：" if len(calls) > 1 else ""
+            if not call.get("customer"):
+                problems.append(prefix + "customer 为空（导出时客户代号没解析出来）")
+            for product in call.get("products") or []:
+                name = str(product.get("name") or "").strip()
+                if not name or name == CPMC_PLACEHOLDER:
+                    problems.append(prefix + "产品名是占位符/空")
+                if not product.get("qty"):
+                    problems.append(prefix + "数量未知 → 用 --qty 指定单款本数")
+                fields = product.get("fields") or {}
+                missing = [f"{arg}({src})" for arg, src in MANDATORY_FIELDS.items()
+                           if arg not in fields]
+                if missing:
+                    problems.append(prefix + "ERP 必填缺失（会留下空主表）：" + "、".join(missing))
+    else:
+        calls, problems = build_calls(records, customer=customer, qty=qty,
+                                      default_date=default_date)
+
     report: dict[str, Any] = {
         "task_id": task_id,
         "artifact": str(artifact),
+        "artifact_format": "mcp" if is_mcp else "59键",
         "confirm": confirm,
-        "record_count": len(records),
+        "record_count": len(calls),
         "calls": calls,
         "problems": problems,
-        "quantity": [
+        "quantity": (_mcp_quantity(calls) if is_mcp else [
             {"record": idx,
              "titles": _record_titles(rec),
              "per_title": _record_qty(rec, qty),
              "total_landed": _record_total(rec, qty)}
             for idx, rec in enumerate(records, 1)
-        ],
+        ]),
         "defaulted": defaulted_fields(records),
         "not_writable": unwritable_fields(records),
         "results": [],

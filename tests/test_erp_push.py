@@ -159,6 +159,16 @@ def test_SFYPJ字符串否不写反(tmp_path: Path):
         assert payload["products"][0]["fields"]["has_parts"] == want, raw
 
 
+# ── 模块自检 ────────────────────────────────────────────────
+def test_MCP客户端还在(tmp_path: Path):
+    """整理映射块时曾把 `McpHttpClient` 一起删掉（只在真连 ERP 时才炸）。
+
+    这里钉住：客户端类与默认地址必须存在于 `erp_push` 命名空间。
+    """
+    assert hasattr(erp_push, "McpHttpClient") and hasattr(erp_push, "McpError")
+    assert erp_push.DEFAULT_MCP_URL.startswith("https://") and erp_push.DEFAULT_MCP_URL.endswith("/mcp")
+
+
 # ── 六种 ERP 响应落点 ──────────────────────────────────────
 def test_产品档案不命中单独归类(tmp_path: Path):
     """档案挡住时主表已建 → 必须标成 archive_missing + 提示清空单，不能混进普通 error。"""
@@ -268,7 +278,7 @@ def test_CPMC占位符不许推(tmp_path: Path):
 
 def test_客户代号未知不许猜(tmp_path: Path):
     _, problems = erp_push.build_payload([_rec(KHZL="")], qty_override=1)
-    assert any("--customer" in p for p in problems)
+    assert any("客户代码未知" in p for p in problems)
 
 
 def test_客户档案兜底取erp_khzl(tmp_path: Path, monkeypatch):

@@ -1,7 +1,43 @@
 # 产物推 ERP：字段口径与档案前置条件
 
-> 2026-11-12 定稿（森西拍板）。代码：`scripts/erp_push.py`；协议：`docs/erp-quote-create.md`。
-> 回归：`tests/test_erp_push.py`。
+> 2026-11-12 定稿（森西拍板）。代码：`scripts/erp_mcp_export.py`（导出）+ `scripts/erp_push.py`（发送）；
+> 协议：`docs/erp-quote-create.md`；回归：`tests/test_erp_push.py` / `tests/test_pipeline.py`。
+
+## 0. 导出文件 = MCP 入参（一份文件、一套字段名）
+
+`main.py` 步骤 3b 写的 `<stem>.erp-import.json` **就是** `erp_quote_create` 的 arguments：
+
+```json
+[
+  {
+    "customer": "NGV10",
+    "remark": "LG26090401 / Wimmelbücher (Winter)",
+    "products": [
+      { "name": "冬季找找图画书", "spec": "240*330*0", "qty": 410000,
+        "fields": { "binding": "快线BB书", "cases": 10, "has_parts": "否", "...": "..." } }
+    ]
+  }
+]
+```
+
+* 一个元素 = 一次 `erp_quote_create`（ERP 一次只收 1 条明细 → N 条产品 N 个元素）。
+* `fields` 里的键全是 MCP 字段名（`binding`/`packing`/`qty_1`…），
+  与 `erp_quote_product_form` 的 `upload.json_schema` 一一对应；
+  **不再出现** `ZDFS`/`BZFS` 这类 ERP 控件名，也不再需要第二份映射表。
+* 里面没有任何内部字段（`ID`/`version`/`question_answers`/`CPMC_ZH`），可以直接拿去调工具。
+* 文件名沿用 `.erp-import.json` 是**故意的**：仓库 20+ 处靠这个后缀识别侧档
+  （查看器 / `cpms_todo` / `migrate_erp_to_array` / `backfill_question_answers`），
+  换名字会静默把副本当成主产物。
+
+发送：
+
+```bash
+# 已烘好客户代号与数量 → 什么参数都不用给
+uv run ./scripts/erp_push.py <task>/ERP_xxx.erp-import.json          # 干跑
+uv run ./scripts/erp_push.py <task>/ERP_xxx.erp-import.json --confirm
+# 需要临时改数量/客户时，仍然可以覆盖（--qty 是**单款本数**）
+uv run ./scripts/erp_push.py ... --qty 41000 --customer NGV10 --date 2027-03-15
+```
 
 ## 1. 业务兜底值（客户没给时自动补）
 

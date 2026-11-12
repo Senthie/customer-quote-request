@@ -15,6 +15,8 @@ from conftest import erp_artifacts, import_copies, load_erp, load_one
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import erp_mcp_export  # noqa: E402
 TEMPLATE = REPO_ROOT / "assets" / "add_customer_quote_request.json"
 
 # 重构前（1.0.12）对这份样本的确定输出 —— 由旧代码逻辑 + SKILL.md 5.1 实测记录得出
@@ -505,22 +507,40 @@ def test_样本闸_真跑一次要拦住且原文件不动(tmp_path):
     assert hashlib.md5(sample.read_bytes()).hexdigest() == before, "样本内容变了"
 
 def test_导入口径副本同时产出(pipeline_run):
-    """每次跑完要多一份 `<原文件名>.erp-import.json` —— 给 ERP 导入端的那份。
+    """每次跑完要多一份 `<原文件名>.erp-import.json` —— **MCP 入参格式**。
 
-    业务口径（2026-11-11 森西）：「三处类型偏差做翻译，对接 ERP 的接口」。
-    该副本必须：① 只有 59 键（内部字段全剥）② 键序与模板逐位一致
-    ③ SFYPJ 是「是/否」文本、PXH 是整数、YYS 空值落 null。
+    业务口径（2026-11-12 森西）：「导出的 ERP 格式就改成 MCP input 格式，
+    字段名、格式一致，导出只要一份文件」。该副本必须：
+    ① 是 `erp_quote_create` 的入参数组（每元素 = 一次调用，带 products）
+    ② 明细字段名是 MCP 名（`binding`/`has_parts`…），不出现 ERP 控件名或 59 键名
+    ③ 内部字段（ID/version/question_answers）一个都不能漏出去
     """
     task_dir = pipeline_run["task_dir"]
     copies = import_copies(task_dir)
     assert len(copies) == 1, f"应有一份导入口径副本，实际 {[p.name for p in task_dir.iterdir()]}"
-    records = json.loads(copies[0].read_text(encoding="utf-8"))
-    assert isinstance(records, list) and len(records) == 1
-    rec = records[0]
-    assert list(rec) == list(json.loads(TEMPLATE.read_text(encoding="utf-8"))), \
-        "导入口径副本的键序必须与 ERP 模板一致"
-    assert "ID" not in rec and "question_answers" not in rec, "内部字段必须剥掉"
-    assert rec["SFYPJ"] in ("是", "否", ""), f"SFYPJ 应是文本枚举，实际 {rec['SFYPJ']!r}"
-    assert isinstance(rec["PXH"], int) and not isinstance(rec["PXH"], bool), \
-        f"PXH 应是整数，实际 {rec['PXH']!r}"
-    assert rec["YYS"] is None or isinstance(rec["YYS"], int), f"YYS 实际 {rec['YYS']!r}"
+    calls = json.loads(copies[0].read_text(encoding="utf-8"))
+    assert isinstance(calls, list) and len(calls) == 1
+
+    call = calls[0]
+    assert set(call) <= {"customer", "remark", "contact", "phone", "mobile",
+                         "fax", "discount", "product_memo", "products"}, \
+        f"MCP 入参只允许这些键，实际多出 {set(call) - {'customer','products','remark'}}"
+    assert call["products"] and len(call["products"]) == 1  # ERP 一次只收 1 条明细
+
+    product = call["products"][0]
+    assert set(product) == {"name", "spec", "qty", "fields"}
+    assert product["qty"] > 0
+    fields = product["fields"]
+
+    # ★ 字段名必须是 MCP 名：混进 59 键名或 ERP 控件名就是两份口径又回来了
+    bad = [k for k in fields if k.startswith("txt") or k in erp_mcp_export.PRODUCT_FIELD_MAP]
+    assert not bad, f"fields 里混进了非 MCP 字段名：{bad}"
+    known = set(erp_mcp_export.PRODUCT_FIELD_MAP.values()) | set(
+        erp_mcp_export.QTY_SLOT_MAP.values())
+    assert set(fields) <= known, f"未知 MCP 字段：{set(fields) - known}"
+
+    flat = json.dumps(calls, ensure_ascii=False)
+    for internal in ("question_answers", "\"version\"", "\"ID\"", "CPMC_ZH", "Reminder"):
+        assert internal not in flat, f"内部字段泄漏到 ERP 导出里：{internal}"
+    assert isinstance(fields["sort_no"], int) and fields["sort_no"] > 0
+    assert isinstance(fields["languages"], int)

@@ -1166,8 +1166,15 @@ uv run ./scripts/customer_profile.py --prefs ngv
   以及「书籍方向必写/`CPSL` 不填总量/`CPMC` 不带（N款）/`ZDFS` 不猜/印色 4C-4C vs 4/0c 交业务」
   这几条已用真实单 `BJXQ260904006` 核实的口径，见 **`customer-quote-request` 技能的
   `references/cpms-wording-authority-glossary-vs-spec.md`**；
-  ★ **产物要推进 ERP** 用 `scripts/erp_push.py`（MCP 只能写 59 键里的 10 个、产品名须在产品档案
-  唯一匹配、`YWY=KM` 不能传），配方见同技能的 `references/erp-push-and-write-limits.md`。
+  ★ **产物要推进 ERP** 用 `scripts/erp_push.py`。★ **2026-11-12 起按 51 明细字段协议**：
+  59 键**能写 55 个**，只剩 `BDBH` / `CPLB` / `KHDDH` / `KHDQ` 写不进（旧说法「MCP 只能写 10 个」**已作废**）；
+  `qty` = **单款本数**，落库 `txtCPSL1` 要 ×款数；`YWY=KM` 不能传。
+  ⚠️ **`prepare` 不查产品档案**（垃圾名字也 `ok=true`），只有 `create(confirm=true)` 才炸，
+  且那时**主表已建好 → 留一条空单**；档案里的品名是
+  `{客户方负责人}/{产品类别}/{客户原品名}({FSC类别})`，我们的 `CPMC` 中文译名永远匹配不上，
+  别靠猜名字重试 —— 直接要业务给档案名/料号。
+  落地口径（5 条业务兜底值）+ 数量换算 + 空单清理配方见同技能
+  `references/erp-push-落地与清空单.md`；`references/erp-push-and-write-limits.md` 只留历史。
   ★ **2026-11-11 实测：并发写者会连字段一起改**（`CPSL1` 被填成数量合计、`CPMC` 被加上「（N款）」、
   概要行被补上书籍方向、`question_answers` 里出现主会话里口头给过的「业务指示」），
   而且会连带覆盖 `<同名>.erp-import.json` 与 `CPMS_来源对照.md`。
