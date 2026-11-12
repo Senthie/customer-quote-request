@@ -50,10 +50,12 @@ error: Error executing tool erp_quote_create: 产品档案里找不到 '冬季�
 `erp_quote_delete(confirm=true)` 清掉。
 
 清空单的完整步骤（下次照做）：
-1. `erp_quote_list(customer=…, from_date=今天, to_date=今天)` 找「产品名称空 + 报价状态空」的新单
+1. `erp_quote_list(key="BJXQ2611", …)` 找「产品名称空 + 报价状态空」的新单
+   ⚠ **别只按日期查**：删过单之后列表页会返回 `count=0 / total=1` 的空网格，
+   必须带 `key`（服务端关键字）强制重新查一次
 2. `erp_quote_detail(bdbh=...)` 拿 `record_id`
 3. `erp_quote_details(record_id)` 确认 `count=0`（不是 0 就别删，先看为什么）
-4. `erp_quote_delete(confirm=true)`
+4. `erp_quote_delete(confirm=true)`，再用 `erp_quote_detail(bdbh=...)` 确认「查不到」
 
 **档案里的「品名」长什么样**（`erp_quote_list` 真实数据，NGV 客户）：
 
