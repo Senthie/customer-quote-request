@@ -124,3 +124,58 @@ error: Error executing tool erp_quote_create: 产品档案里找不到 '冬季�
 `qty` 永远等于第 1 档（总量），三档之间**不相加**。
 
 `CPMS` 正文里写的合计数**不会**自动进 `CPSL1` —— 产物档位是 0 时必须显式 `--qty`。
+
+## 5. 服务端 pydantic 入参（2026-11-12 拉 `tools/list` 核对）
+
+`assets/erp_quote_create_schema.json` = 服务端 `erp_quote_create.inputSchema` 快照
+（pydantic 自动生成，**唯一事实源**；协议改了就重抓，不要手抄第二份）。
+
+**`products[]` 多了一个 `product_category`**（这是解档案问题的钥匙）：
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | string **必填** | 先按名称在产品档案模糊检索，唯一命中就用档案；搜不到 → 当新产品，**必须给 `product_category`** |
+| `spec` | string **必填** | 只校验非空 |
+| `qty` | number **必填** > 0 | 写 `txtCPSL` + `txtCPSL1` |
+| `product_category` | string 可选 | `27.01` / `27.01;普通BB书` / `普通BB书` 都收；**给了就不要求档案存在** |
+| `fields` | object | 51 个明细字段，键可用 MCP 名或页面控件名 |
+
+明细 51 字段类型分布：31 个 string / 17 个 number / 4 个 boolean。
+**number 不收 `"240"`、boolean 不收 `"否"`**（pydantic 直接 422，整单连主表都进不去）
+→ `erp_mcp_export._coerce_fields()` 统一掰，掰不动的字段**丢掉并报错**，绝不送错类型。
+离线自检用 `validate_call()`，`erp_push` 在发出去之前就跑一遍。
+
+### 5.1 `qty_1` 绝不能显式传
+
+`create()` 只在**没给** `qty_1` 时才补隐藏的 `txtCPSL`；显式给了就只写展示框 `txtCPSL1`，
+ERP 报「请输入【产品数量】」。所以导出只传顶层 `qty`（第 1 档）与 `qty_2..10`。
+
+### 5.2 已知未解：free-text（新产品）分支写不进产品数量
+
+2026-11-12 实测（6 个变体，全部同一句报错）：
+
+```
+status=failed  save_product.ok=true  verify.ok=false
+message: 请输入【产品数量】或者点击【产品数量】旁的按钮，输入【产品数量】资料！
+detail_error: 产品明细行没有落库
+```
+
+| 变体 | 结果 |
+| --- | --- |
+| 只给 `qty` | ✗ 同错 |
+| + `qty_1` 显式 | ✗ 同错 |
+| + `unit=本` | ✗ 同错 |
+| `product_category=27.01` | ✗ 同错 |
+| `product_category=普通BB书` | ✗ 同错 |
+| `languages=1`（排除多语言档位） | ✗ 同错 |
+
+对照组：协议里 51 字段样例（`name=512961503`，档案能命中的老产品）跑通 `status=created`。
+→ **档案命中路径正常，`product_category` 的新产品路径没接上数量写入**。属于服务端待修。
+
+所有实验空单已用 `erp_quote_delete` 清掉。注意：**删除后单号会被 ERP 复用**
+（`BJXQ261112007` 反复出现），所以别靠单号认人，认 `主表备注` 那条追溯串。
+
+### 5.3 成败只能看 `status`，不能看 `bdbh`
+
+`failed` / `partial` 的响应里**也带 `bdbh`**（主表已建、明细没落）。之前 `_classify`
+先判 `bdbh` → 把空单报成 `created`。现在 `status` 优先，并且在错误串里点明「主表已建：XXX，是空单」。
