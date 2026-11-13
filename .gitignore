@@ -23,6 +23,9 @@ customer-files/inbox/
 # 定时扫描器的运行状态（flock 锁 + 重试计数）—— 机器本地的东西，不进仓库
 customer-files/.scan.lock
 customer-files/.scan_state.json
+# 收信台账/锁（scripts/mail_fetch.py；每台机器各自一份，不进仓库）
+customer-files/.mail_fetch.lock
+customer-files/.mail_fetch_state.json
 
 # 校准草稿（calibrate_customer.py 生成，仅供对照，不入库）
 customers/_draft_*.yaml
