@@ -53,3 +53,12 @@ preferences:
 #   ZXFS                                  语料 0 填充（报价阶段不填）
 #   DKMC                                  语料 0 填充（报价阶段不填）
 #   chkXBJF                               语料 0 填充（报价阶段不填）
+
+# ── 解析规则（2026-11-13 第一份真实询价到手后开始补）─────────────
+rules:
+  # 报价阶段客户还没给单号，留空是预期结果、不是缺陷。
+  # 依据：2026-11-13 收到 PSN22 第一份询价（Magic Cat Publishing / `Sleuth and Clue`），
+  #   客户 docx 只有规格，没有任何单号；与 ngv 同一口径（`customers/ngv.yaml` 同段）。
+  #   `KHDDH`（香港单号）成品后由 ERP 生成，报价阶段也不该有值。
+  required_empty: [KHDH, KHDDH, Drop_SJFX]
+

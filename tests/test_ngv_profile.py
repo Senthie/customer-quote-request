@@ -411,6 +411,42 @@ def test_数量写法_带总数时以总数为准():
     assert parse_single_quantity("ca. 3 Stück, Lieferung 2027") is None
 
 
+def test_数量写法_多个等号取最后一个总数():
+    """`New Soundbooks`（2026-11-13 实测）：一行里两个 `=`。
+
+    ```
+    8x 16.250 ex. = 100.000 ex. DE + 20.000 ex. AT + 10.000 ex. CH = 130.000 ex.
+    ```
+
+    第一个 `=` 后面是**德国小计**，最后一个才是总合计。旧实现用 `re.search`
+    只拿第一个 → CPSL1 落成 100000（真值 130000），且**一声不响**。
+    """
+    text = ("8x 16.250 ex. = 100.000 ex. DE + 20.000 ex. AT + 10.000 ex. CH "
+            "= 130.000 ex.")
+    assert parse_single_quantity(text) == 130000
+
+    # 只有一个 `=` 的老写法不许被改坏
+    assert parse_single_quantity("3 x 7000 cps. = 21.000 cps") == 21000
+
+    # 乘法算出来的 130000 与最后一个总数一致 → 值不变；但「有两个 =」这件事
+    # 必须留一条 WARN（业务要知道我们选的是最后一个），所以这里断言 **恰好一条**。
+    logs = []
+
+    class _L:
+        def warn(self, m):
+            logs.append(m)
+
+        def info(self, m):
+            pass
+
+    assert parse_single_quantity(text, logger=_L()) == 130000
+    assert len(logs) == 1 and "100000" in logs[0] and "130000" in logs[0], logs
+    # 只有一个 `=` 的老写法不该产生这条告警
+    logs.clear()
+    assert parse_single_quantity("3 x 7000 cps. = 21.000 cps", logger=_L()) == 21000
+    assert logs == []
+
+
 def test_数量写法_乘法与总数不一致要告警并取总数():
     """客户自己写了总数就以总数为准，但差异必须打出来（不静默选一个）。"""
     warnings: list = []
@@ -435,6 +471,22 @@ def test_决策_YYS提取不到就落0():
     assert _map({"versions": "4 titles, 1 language"})["YYS"] == ""
     assert _map({"versions": "8 titles"})["YYS"] == 0, "提取不到 → 0"
     assert _map({})["YYS"] == 0, "客户文件里根本没有语言数 → 0"
+
+
+def test_款数_versions写法也要认():
+    """`New Soundbooks`（2026-11-13）：NGV 表把款数写成 `8 versions`，不写 titles。
+
+    原表值：`8 versions: 6x version A, 2x version B`
+    旧 `title_pattern` 只认 `titles?` → TZS 落到默认 1（真值 8 款）。
+
+    同时必须**不**被 `6x version A` 带偏：数字后面跟 `x` 再空格，不算 `\\s*`。
+    """
+    v = "8 versions: 6x version A, 2x version B"
+    assert _map({"versions": v})["TZS"] == 8
+    # 老写法照旧
+    assert _map({"versions": "12 titles, 5 languages"})["TZS"] == 12
+    # 只有「6x version A」这种，没有 `N versions` → 不许抽出 6
+    assert _map({"versions": "6x version A, 2x version B"})["TZS"] == 1
 
 
 def test_extras与纯标签分开_CPMS素材不再被标题污染():

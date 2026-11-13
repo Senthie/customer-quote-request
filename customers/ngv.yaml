@@ -471,7 +471,11 @@ rules:
       - 拉链
       - 丝带
   versions:
-    title_pattern: "(\\d+)\\s*titles?"
+    # ★ 2026-11-13 补 `versions?`：新单 `New Soundbooks` 的 NGV 表把款数写成
+    #   `8 versions: 6x version A, 2x version B`（不写 titles），旧正则只认 titles
+    #   → TZS 落成默认 1（真值 8 款）。
+    #   注意「6x version A」不会误命中：数字后面跟 `x` 再空格，不算 \s*。
+    title_pattern: "(\\d+)\\s*(?:titles?|versions?)"
     language_pattern: "(\\d+)\\s*languages?"
     # 单语言不落库 —— 业务决定（2026-09-24）。
     # 依据：附件写 `4 titles, 1 language` 的两单（CU26072301 / CU26072302），
@@ -566,6 +570,14 @@ rules:
       #   必须排在 case bound / 精装 之前：`case-in book block` 含 case 但不含 `case bound`，
       #   所以不会互抢，但 flexocover 与精装类同现时以「假精装」为准。
       - { match: "flex\\s*o?\\s*cover|flexibond|假精装|半精装", node: "22.03" }
+      # 音乐/发声书（线路）：精装 + 内藏线路 → 22.06 方脊精装音乐书(线路)。
+      #   ★ 2026-11-13 实测 `New Soundbooks`：specials 写 `With sound bar with 5
+      #   different sounds … the sound modul has to be fixed onto the last page`，
+      #   封面 2mm 灰板 + 锁线 + 方脊 → 树里 22.06 的判据「有灰板 + 内藏线路」。
+      #   旧 map 没这条 → 落 22.02;方脊精装书（**漏了音乐书这一层**，类别直接影响
+      #   计价与生产，不能将就）。必须排在通用 精装 之前。
+      #   只认 sound / 音乐 字样；`BB书 + 外露发声器`（27.16）另判，别在这里抢。
+      - { match: "sound\\s*(bar|module|modul|chip|book)|soundleiste|音乐|发声", node: "22.06" }
       - { match: "case\\s*bound|hardcover|精装", node: "22.02" }          # 精装书
       # BB书（纸板书）：封面无灰板 → 27.01 普通BB书。放在精装之后，硬封优先。
       #   实测（LG26090401，2026-10-21）：附件写 `binding: board book` /

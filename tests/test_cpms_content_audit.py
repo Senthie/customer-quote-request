@@ -220,3 +220,24 @@ def test_cm换算是双向核对_编的毫米数仍然报():
 def test_原文没有cm时_毫米换算不生效():
     r = A.audit("产品规格：【200*200*0】", "20 x 20 x 2 mm")
     assert any(t["num"] == "200" for t in r["untraced"]), r["untraced"]
+
+
+def test_换行不许把上一段末位数字与下一段首位数字粘起来():
+    """`Sleuth and Clue`（2026-11-13 实测）：docx 里数量阶梯是独立一段
+
+        … / 20000 / 25000 / 30000
+        1c plate change to text
+
+    `normalize()` 旧实现把「换行」当普通空白一起删掉 → 粘成 `…/25000/300001c…`，
+    于是 `30000` 的后边界成了数字 `1`，被 `_has_number` 的 `(?!\\d)` 判成
+    「客户原文里没有 30000」→ 客户白纸黑字写的数量被报成无出处（逼人删事实）。
+    换行必须先换成 `|` 再删空白。
+    """
+    text = ("270 x 210mmm (P)\n2000/3000/5000/7000/10000/12000/15000/18000/20000/"
+            "25000/30000\n1c plate change to text\n")
+    r = A.audit("备注：数量阶梯末档 30000", text)
+    assert r["summary"]["untraced"] == 0, r["untraced"]
+
+    # 反例：原文真没有的两位数仍要报（修复不能把边界检查一起废掉）
+    r2 = A.audit("备注：数量阶梯末档 31000", text)
+    assert any(t["num"] == "31000" for t in r2["untraced"]), r2["untraced"]

@@ -535,12 +535,23 @@ def parse_single_quantity(text: str, logger: Optional[Logger] = None) -> Optiona
         return None
 
     # ① 显式总数：`= 21.000 cps` / `total: 21.000`
+    # ★ 多个 `=` 时取**最后一个**（2026-11-13 实测 CU/新单 `New Soundbooks`）：
+    #   `8x 16.250 ex. = 100.000 ex. DE + 20.000 ex. AT + 10.000 ex. CH = 130.000 ex.`
+    #   第一个 `=` 后面是**德国小计**，最后一个才是客户算好的总数。旧实现用
+    #   `re.search` 只取第一个 → CPSL1 落成 100000（真值 130000），静默算错。
+    #   多个取值不一致时打 WARN 点名，不让它悄悄过去。
     total = None
-    m_total = re.search(
+    totals = re.findall(
         r"(?:=|gesamt|total\s*[:=]?)\s*(\d[\d.,]*)\s*(?:cps|pcs|copies|ex\.?)?",
         s, re.IGNORECASE)
-    if m_total:
-        total = _de_number(m_total.group(1))
+    if totals:
+        total = _de_number(totals[-1])
+        if len(totals) > 1 and total is not None and logger is not None:
+            prev = [int(v) for v in (_de_number(t) for t in totals[:-1]) if v]
+            if any(p != int(total) for p in prev):
+                logger.warn(f"  数量写法 {text!r}：出现 {len(totals)} 个「= 总数」"
+                            f"（{prev} → {int(total)}）→ 取**最后一个** {int(total)}"
+                            f"（通常是总合计），请人工核对")
 
     # ①b 显式总数（数字在前）：`QTY: 60.000 St. in total (20.000 cps/title)`
     # 客户常把「总数」写在数字**后面**，前面那个才是真正的总数 —— 后面括号里的
