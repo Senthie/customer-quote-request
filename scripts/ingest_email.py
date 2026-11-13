@@ -37,10 +37,12 @@ from __future__ import annotations
 import argparse
 import base64
 import email
+import io
 import json
 import re
 import shutil
 import sys
+import zipfile
 from datetime import datetime
 from email import policy
 from html import unescape
@@ -54,6 +56,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PENDING_DIR = REPO_ROOT / "customer-files" / "pending"
 META_SUFFIX = ".meta.json"
 SUPPORTED_ATTACHMENTS = (".xlsx", ".xlsm", ".xls", ".csv", ".pdf", ".docx", ".txt")
+
+# 压缩包：业务 2026-11-13 口径「解压落 pending，**不自动分组**」。
+# NGV 常发转发封皮 + 一个 zip（里面 5~10 个独立询价），按「≥2 附件 = 一份报价」并
+# 会把这些并成一份，所以 zip 单独隔离到 pending/.zip_quarantine/ 下（点开头 =
+# 扫描器不认，见 scan_pending.pending_items），等人工/agent 决定拆几份。
+ARCHIVE_SUFFIXES = (".zip",)
+UNHANDLED_ARCHIVE_SUFFIXES = (".rar", ".7z")      # 本机没解压器 → 只报警，不静默吞
+ZIP_QUARANTINE_DIRNAME = ".zip_quarantine"
+ZIP_MAX_FILES = 500
+ZIP_MAX_BYTES = 200 * 1024 * 1024
 
 
 # ── 邮件解析 ─────────────────────────────────────────────────────────────
@@ -323,6 +335,126 @@ def _refine_by_attachment(profile, saved_paths: list, subject: str, logger=None)
     return profile
 
 
+def _zip_member_name(info: zipfile.ZipInfo) -> str:
+    """还原成员名。
+
+    Windows 下打的 zip 常常不置 UTF-8 标志位（0x800），成员名是 GBK 字节；
+    zipfile 一律按 cp437 解 → 中文变成 `▒¿╝█╕°┐═╗º` 这种乱码
+    （2026-11-13 实测 NGV 的 `Demo - 报价搜集 - 5个.zip` 全中）。
+    """
+    name = info.filename
+    if info.flag_bits & 0x800:       # 明确标了 UTF-8
+        return name
+    try:
+        return name.encode("cp437").decode("gbk")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return name
+
+
+def _zip_member_ok(name: str) -> bool:
+    """能不能解这一个成员（防目录穿越、防系统垃圾文件）。"""
+    if not name or name.endswith("/"):
+        return False
+    parts = Path(name).parts
+    if not parts:
+        return False
+    if parts[0] in ("/", "\\") or any(p in ("..", "") for p in parts):
+        return False
+    if parts[0] == "__MACOSX":
+        return False
+    return parts[-1] not in (".DS_Store", "Thumbs.db", "desktop.ini")
+
+
+def _group_hint(members: list[str]) -> dict[str, list[str]]:
+    """按单号前缀给个**参考**分组（LG26070701-01 / CU26082501 / WQ26100601 …）。
+
+    只是提示，不是结论 —— 拆几份仍然要人定（业务 2026-11-13「不自动分组」）。
+    """
+    hint: dict[str, list[str]] = {}
+    for name in members:
+        base = Path(name).name
+        m = re.match(r"^([A-Z]{2}\d{6,8}(?:-\d{1,3})?)", base)
+        key = m.group(1) if m else "（无单号前缀）"
+        hint.setdefault(key, []).append(base)
+    return hint
+
+
+def extract_zip(payload: bytes, dest: Path, max_files: int = ZIP_MAX_FILES,
+                max_bytes: int = ZIP_MAX_BYTES, logger=None) -> tuple[list[str], str]:
+    """把 zip 解到 `dest`（**保留原目录结构**），返回 (写出的成员, 说明)。
+
+    说明非空 = 有情况（截断/加密/不是 zip），调用方要把这行带给业务看。
+    """
+    written: list[str] = []
+    total = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+            for info in zf.infolist():
+                if len(written) >= max_files:
+                    return written, f"成员超过 {max_files} 个上限，已截断"
+                name = _zip_member_name(info)
+                if not _zip_member_ok(name):
+                    continue
+                if info.flag_bits & 0x1:
+                    return written, "压缩包带密码，解不开"
+                total += info.file_size
+                if total > max_bytes:
+                    return written, f"解压后超过 {max_bytes // (1024 * 1024)}MB 上限，已截断"
+                target = dest / Path(name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+                written.append(name)
+    except zipfile.BadZipFile:
+        return written, "不是合法的 zip（后缀可能是假的）"
+    except OSError as exc:
+        return written, f"解压写盘失败: {exc}"
+    return written, ""
+
+
+def quarantine_archives(archives: list, pending_dir: Path, subject: str,
+                        eml_name: str = "", logger=None) -> dict:
+    """把压缩包解到 `pending/.zip_quarantine/<zip名>_<时间戳>/`，**不分组、不进队列**。
+
+    业务 2026-11-13：「解压落 pending，不自动分组」—— 一个 zip 里可能是 5 个独立询价，
+    也可能是同一份报价的 5 个参考文件，脚本猜不出来，所以只负责解开 + 留清单，
+    拆几份由人（或 agent 看清单后）决定。
+    """
+    root = Path(pending_dir) / ZIP_QUARANTINE_DIRNAME
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    entries: list[dict] = []
+    for name, payload in archives:
+        slug = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", Path(name).stem)[:60].strip("_") or "zip"
+        dest = _unique_dir(root, f"{slug}_{stamp}")
+        dest.mkdir(parents=True, exist_ok=True)
+        members, note = extract_zip(payload, dest, logger=logger)
+        manifest = {
+            "source": "email",
+            "kind": "zip_quarantine",
+            "extracted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "archive": name,
+            "eml_name": eml_name,
+            "subject": subject,
+            # ★ 明确写「未分组」，别让下游以为已经拆好了
+            "grouping": "未分组（待人工确认拆几份报价）",
+            "member_count": len(members),
+            "members": members,
+            # 按单号前缀给的**参考**分组，仅供人决策，不等于已分组
+            "prefix_hint": _group_hint(members),
+            "note": note,
+            "how_to_use": "确认拆几份后，把要处理的文件（或子目录）移到 pending/ 根下即可入队",
+            "dir": str(dest),
+        }
+        with open(dest / "_unzip_manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        entries.append({"archive": name, "dir": str(dest),
+                        "members": len(members), "note": note})
+        if logger:
+            logger.warn(f"📦 zip 已隔离解开（未分组）: {name} → "
+                        f"{dest.relative_to(Path(pending_dir))}/（{len(members)} 个文件）")
+    return {"root": str(root), "entries": entries}
+
+
 def ingest(
     attachments: list,
     subject: str,
@@ -351,8 +483,19 @@ def ingest(
     # 先落盘，再用附件内容把客户身份判准（认不出时才有意义）
     usable = []
     skipped = []
+    archives = []                                     # .zip → 隔离解开，不参与分组
+    unhandled_archives = []                           # .rar/.7z → 解压器缺席，只报警
     for name, payload in attachments:
         suffix = Path(name).suffix.lower()
+        if suffix in ARCHIVE_SUFFIXES:
+            archives.append((name, payload))
+            continue
+        if suffix in UNHANDLED_ARCHIVE_SUFFIXES:
+            unhandled_archives.append(name)
+            skipped.append(name)
+            if logger:
+                logger.warn(f"压缩包类型本机解不开（没装解压器）: {name} —— 需要人工处理")
+            continue
         if suffix not in SUPPORTED_ATTACHMENTS:
             if logger:
                 logger.warn(f"跳过不支持的附件类型: {name}")
@@ -373,6 +516,12 @@ def ingest(
                         f"投递到单元目录: {unit_dir.name}/")
     else:
         delivery_dir = pending_dir
+
+    # 压缩包：解开但不分组、不进队列（业务 2026-11-13 口径）。
+    quarantined: dict = {"root": "", "entries": []}
+    if archives:
+        quarantined = quarantine_archives(archives, pending_dir, subject,
+                                          eml_name=eml_name, logger=logger)
 
     saved_paths = []
     for name, payload in usable:
@@ -409,8 +558,10 @@ def ingest(
     }
 
     # 正文即任务：客户没附文件、规格全写在邮件里（NGV/KiK 这种 enquiry 邮件）
+    # ★ 有 zip 时**不**落正文任务：封皮正文只有「附件是…」，落成任务只会产出空单
+    #   （踩过：2026-11-13 三封 NGV 转发封皮全被抽成 CPMC=【中文品名待定】的空单）。
     body_task_path = None
-    if not saved_paths and body.strip() and body_as_task:
+    if not saved_paths and body.strip() and body_as_task and not quarantined["entries"]:
         body_task_path, _ = write_body_task(pending_dir, body, common_meta)
         saved_paths.append(body_task_path)
         if logger:
@@ -483,6 +634,8 @@ def ingest(
             "khdh_source": subject_src,
             "attachments": [s["original_name"] for s in saved],
             "skipped_attachments": skipped,
+            "quarantined_zips": quarantined["entries"],
+            "unhandled_archives": unhandled_archives,
             "body_task": body_task_path.name if body_task_path else "",
             "body_is_task": bool(body_task_path),
         }, f, ensure_ascii=False, indent=2)
@@ -496,6 +649,9 @@ def ingest(
         "khdh_source": subject_src,
         "attachments": saved,
         "skipped_attachments": skipped,
+        # zip 解开但**未分组**：不进队列，等人决定拆几份（2026-11-13 业务口径）
+        "quarantined_zips": quarantined["entries"],
+        "unhandled_archives": unhandled_archives,
         "body_task": body_task_path.name if body_task_path else "",
         "body_is_task": bool(body_task_path),
         "email_record": str(email_record),
@@ -647,8 +803,23 @@ def main() -> int:
         print(f"投递附件: {len(result['attachments'])} 个")
         for item in result["attachments"]:
             print(f"  - {item['original_name']}  →  {item['file']}")
+        zips = result.get("quarantined_zips") or []
+        if zips:
+            print(f"📦 压缩包: {len(zips)} 个已解开（**未分组**，不进队列）")
+            for z in zips:
+                print(f"  - {z['archive']} → {z['members']} 个文件  {z['dir']}")
+                if z.get("note"):
+                    print(f"    ⚠️ {z['note']}")
+            print("    分组建议见目录里的 _unzip_manifest.json（prefix_hint 按单号前缀）")
+            print("    确认拆几份后，把要处理的文件/子目录移到 pending/ 根下即可入队")
+        for name in result.get("unhandled_archives") or []:
+            print(f"⚠️ 解不开的压缩包（本机没解压器）: {name} —— 需要人工处理")
         print(f"邮件记录: {result['email_record']}")
         print()
+        if zips and not result["attachments"]:
+            print("下一步: 人工确认压缩包怎么拆（上面那行目录），"
+                  "拆好移到 pending/ 根下后由定时扫描器接手")
+            return 0
         if result.get("is_unit"):
             print(f"这封邮件的 {len(result['attachments'])} 个附件 = 同一份报价的参考文件")
             print(f"→ 已放进单元目录: {result['unit_dir']}")

@@ -14,7 +14,17 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.75（2026-11-13 **收信接入流水线**：业务「① 收信接入流水线 ② 不回信 ③
+> **版本：** 1.0.76（2026-11-13 **`.zip` 附件：解开但不分组**：森西选「解压落 pending，
+> 不自动分组」。旧白名单没有 `.zip` → NGV 转发封皮的附件被静默跳过 → 封皮正文落成任务
+> → 抽出空单（`CPMC=【中文品名待定】`）。现在解到 `pending/.zip_quarantine/<zip名>_<ts>/`
+> （点开头 = 扫描器不认），写 `_unzip_manifest.json` 记 `grouping=未分组` + `prefix_hint`
+> （按单号前缀给参考分组，如 `CU26082501 → 3 个文件`），**有 zip 时不落正文空单**。
+> 安全：防目录穿越、跳 `__MACOSX`/`.DS_Store`、≤500 文件 / ≤200MB、密码包/假 zip 只回说明不抛。
+> ★ **GBK 文件名**：不置 UTF-8 标志的 zip 成员名是 GBK，`zipfile` 按 cp437 解成全乱码
+> （`▒¿╝█`）→ 用 `encode("cp437").decode("gbk")` 还原，实测 15 个中文文件名全部正常。
+> `.rar`/`.7z` 无解压器 → 报警不静默。回归 +15（`tests/test_zip_attachments.py`），
+> 全量 **868 绿**）
+> —— 前序 1.0.75（2026-11-13 **收信接入流水线**：业务「① 收信接入流水线 ② 不回信 ③
 > 先不分类」。新增 `scripts/mail_fetch.py`：`himalaya` 拉 IMAP → 落 `pending/*.eml`，
 > 展开/抽取全交给现成链路（`scan_pending.py` 见到 `.eml` 就调 `ingest_email.py`）。
 > 挂进 `scan_pending.sh` 的**第 0 步**（先收信再扫描，失败只进 stderr，不阻断扫描）。
@@ -899,6 +909,48 @@ Message-ID 兜底、单轮上限、dry-run 不写盘、单封失败不影响其�
 文件名清洗、`--account` 位置、以及「cron 入口必须先收信再扫描」这条接线。
 
 邮箱本身怎么配（himalaya / 腾讯企业邮 / pass 加密存口令）见 hermes skill **`himalaya`**。
+
+### 3.0.1 压缩包 `.zip`：解开但**不分组**（1.0.76，2026-11-13）
+
+业务口径（森西选的：「解压落 pending，不自动分组」）。
+
+**为什么必须单独处理**：NGV 发的是**转发封皮 + 一个 zip**，封皮正文只有
+「附件是客户NGV的5个报价」，内容全在 zip 里。而 `SUPPORTED_ATTACHMENTS` 原来没有 `.zip`
+→ 附件被 WARN 跳过 → `usable` 为空 → 走 `body_as_task` → **抽出空单**
+（`CPMC=【中文品名待定】`、`CPLB=32.00;其他`、`CPSL1..10=0`）。
+2026-11-13 上线当天就这么废掉 3 个任务。
+
+**也不能沿用「≥2 附件 = 一份报价」**：一个 zip 里可能是 5 个**互相独立**的询价
+（`CU26082501` / `CU26082801` / `CU26092401` / `CU26100601` / `WQ26100601` …），
+并成一份是错的；反过来全摊平，又会把一份报价的 3 个参考文件拆成 3 份。脚本猜不出来。
+
+所以：
+
+* 解到 `pending/.zip_quarantine/<zip名>_<时间戳>/`，**保留原目录结构**
+* 目录名**点开头** → `scan_pending.pending_items` 不认 → 里面的文件不会自动变成任务
+* 写 `_unzip_manifest.json`：`grouping="未分组（待人工确认拆几份报价）"`、`members`、
+  **`prefix_hint`**（按单号前缀给的参考分组，如 `CU26082501 → 3 个文件`，仅供决策）
+* **有 zip 时不落正文空单**（`body_as_task` 被短路）
+* 扫描器摘要会带一行：`📦 zip 已隔离解开 N 个（M 个文件），未分组待确认`
+
+**安全与健壮**（都有回归）：目录穿越 / 绝对路径成员丢弃；`__MACOSX`、`.DS_Store`、
+`Thumbs.db` 跳过；≤500 个文件、解压后 ≤200MB，超了截断并在 `note` 里说明；
+带密码的包、假 zip、写盘失败都只回一个说明，不抛异常。
+
+**★ GBK 文件名**：Windows 打的 zip 不置 UTF-8 标志位（0x800），成员名是 **GBK 字节**，
+`zipfile` 一律按 cp437 解 → 中文全变 `▒¿╝█╕°┐═╗º`。
+处理：`name.encode("cp437").decode("gbk")`，解码失败才原样保留。
+实测 NGV 那个包 15 个文件全中文，还原出 `客户询价邮件 … .eml` / `系统客户报价需求单.pdf`。
+
+**`.rar` / `.7z`**：本机没解压器 → 不静默吞，进 `unhandled_archives`，摘要里报警，
+需要人工处理。
+
+**人/agent 怎么接手**：看 `_unzip_manifest.json` 的 `prefix_hint` → 定拆几份 →
+把要处理的文件（或整个子目录）移到 `pending/` 根下 → 定时扫描器照常接手。
+`.eml` 移出来也能被展开（`pending_items` 认 `.eml`），所以「zip 里的询价邮件」
+可以直接再走一遍解包解析。
+
+回归：`tests/test_zip_attachments.py`（15 项）。
 
 ### 3.1 `.eml` 怎么读（1.0.33 实单 `CU26070802`）
 
@@ -2562,6 +2614,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
 | **1.0.58** | **2026-10-30** | **查看器能写答案**（业务：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）。① 新增 `CQR_Web/answers.py`（纯逻辑，不 import Flask）+ `POST /api/answer`：只改 `question_answers` 的 `answer/status/answered_at`，顺带重算 `Reminder` 快照；有答案 → `confirmed` 并盖 `answered_at`，清空 → 回 `open`，`waived` → 不卡交付；② 详情页清单块每条待确认项带文本框 +「保存答案 / 作废」，未保存草稿存 `state.drafts`（10 秒自动刷新重建 DOM 不丢字，按「产物#第几条#项 id」键）；③ 写盘原子（同目录临时文件 + `os.replace`）、缩进/中文/键序与产出一致；④ **mtime 乐观锁**：页面打开后文件被别人改过 → 409 + 自动重取，不覆盖 agent 刚写的 CPMS；⑤ 拒绝姿势明确：v2 旧产物 409、未知 id/越界记录 404、乱填 status 400、确认但答案空 400；⑥ 页面仍**不许**写 `CPMS`/品名/59 个 ERP 字段；⑦ 新增 `tests/test_cqr_answers.py`（17 项，含 HTTP 层与路径穿越），边界测试把 `answers.py` 也纳入「不许 import Flask / 不许起子进程」 |
+| **1.0.76** | **2026-11-13** | **`.zip` 附件：解开但不分组**（森西选「解压落 pending，不自动分组」）。根因：`SUPPORTED_ATTACHMENTS` 没有 `.zip` → NGV「转发封皮 + 一个 zip」的附件被静默跳过 → `usable` 为空 → 走 `body_as_task` → 抽出空单（`values={}`、`CPMC=【中文品名待定】`、`CPLB=32.00;其他`、`CPSL1..10=0`），上线当天废掉 3 个任务。也不能沿用「≥2 附件 = 一份报价」：实测那个包里是 **5 个独立单号 × 3 个文件**（`CU26082501`/`CU26082801`/`CU26092401`/`CU26100601`/`WQ26100601`，每单一份询价邮件 + 一份报价邮件 + 一份系统报价需求单 pdf），并成一份错、全摊平成 15 份也错。实现：`.zip` 走 `quarantine_archives()` 解到 `pending/.zip_quarantine/<zip名>_<时间戳>/`（**点开头**→`pending_items` 不认→不会自动抽），保留原目录结构，写 `_unzip_manifest.json`：`grouping="未分组（待人工确认拆几份报价）"` + `members` + **`prefix_hint`**（按单号前缀的参考分组，仅供决策）+ `how_to_use`；**有 zip 时短路 `body_as_task`**（不再产空单）；扫描器摘要加一行 `📦 zip 已隔离解开 N 个（M 个文件），未分组待确认`（`ingest_one` 改回 4 元组，用 `_parse_quarantined()` 从 ingest_email 的 stdout JSON 取）。安全：目录穿越/绝对路径成员丢弃、跳 `__MACOSX`/`.DS_Store`/`Thumbs.db`、≤500 文件 / 解压后 ≤200MB 截断并写 `note`、带密码包/假 zip/写盘失败只回说明不抛。★ **GBK 文件名修复**：Windows 打的 zip 不置 UTF-8 标志位（0x800），成员名是 GBK 字节，`zipfile` 一律按 cp437 解 → 中文全乱码 `▒¿╝█╕°┐═╗º`；`_zip_member_name()` 用 `encode("cp437").decode("gbk")` 还原，实测那个包 15 个中文名全部正确（含 `Aufstellbücher` 的 ü）。`.rar`/`.7z` 本机无解压器 → 进 `unhandled_archives` 报警，不静默。回归 +15（`tests/test_zip_attachments.py`：解压结构/穿越/垃圾文件/假 zip/数量上限/GBK 名/点目录不进队列/只有 zip 时不产空单/zip 与普通附件并存/zip 不算多附件单元/rar 报警/隔离清单解析），全量 **868 绿** |
 | **1.0.75** | **2026-11-13** | **收信接入流水线（himalaya → pending）**：业务三条「① 收信接入流水线 ② 不需要回信 ③ 先不分类」。新增 `scripts/mail_fetch.py`（stdlib subprocess 封 himalaya，无新依赖）：`envelope list --output json` 扫 INBOX → `message export --full --destination pending/xxx.eml`。**刻意只做落 `.eml` 一件事** —— 展开附件/sidecar/抽取全交给现成链路（`scan_pending.py` 本来就对 `.eml` 调 `ingest_email.py`），以后换收信方式下游不动。接线：`scan_pending.sh` 加**第 0 步**（`timeout 150 uv run ./scripts/mail_fetch.py 2>>/tmp/cqr_scan.stderr`），先收信再扫描、失败不阻断扫描、无新信时 stdout 为空（cron 保持安静）。去重**不改邮箱状态**（不标已读、不移动）：`customer-files/.mail_fetch_state.json` 用 `from\|date\|subject` 指纹前置过滤（省下载）+ `Message-ID` 兜底（换标题/日期再投递也不重复，重复件删掉不留 pending）。配置 `assets/mail.yaml`：`account=sora` / `folder=INBOX` / `page_size=50` / `max_per_run=5` / `skip_senders`（企业微信登录提醒 `10000@exmail.weixin.qq.com`、`mailer-daemon@`、`postmaster@`、`noreply@`）/ `skip_subjects`（自动回复类）；被跳过的也记指纹。互斥用 `.mail_fetch.lock` 非阻塞 flock（同 `scan_pending.py` 规矩）。新增 `--mark-baseline`（现有信件记为已处理、不入队）与 `--dry-run` / `--json`。**踩坑两条**：① `himalaya` 1.2 的 `--account` 是**子命令级**选项，写成全局位置直接 `unexpected argument '--account'`；② **上线顺序**——改完 `scan_pending.sh` 下一轮 cron（≤5 分钟）就开始收信，必须**先** baseline，我这次反着来，5 分钟内把邮箱里 3 封 11-02/11-04 历史 NGV 邮件灌成了 3 个任务（`31aa8f2a…` / `79770a46…` / `f2a65a00…`）。回归 +17（`tests/test_mail_fetch.py`，全离线 `FakeClient`：过滤/指纹去重/Message-ID 兜底/单轮上限/dry-run 不写盘/单封失败不影响其余/基线语义/文件名清洗/`--account` 位置/「先收信再扫描」接线），全量 **853 绿**。邮箱侧配置（腾讯企业邮 + pass 加密口令 + gpg 手工解包）见 hermes skill `himalaya` |
 | **1.0.74** | **2026-11-12** | **首次真建单成功 + 建单链固化为 Skill 一节**：森西「再重试一遍」→ 用**与失败那次完全相同的 payload** 重推 `erp_quote_create`，直接 `status=created`：`bdbh=BJXQ261112008`、`record_id=89d48f0c-1fe3-4786-a768-a078f84e6f21`、`header_saved=true`、`detail_saved=true`、`detail_error=""`、`verify{ok=true,row_created=true,qty_saved=true}`、`product{source=free-text, category=27.01;普通BB书, qty=410000, unit=本}`。列表页回读：数量 410000（最小/中间/最大同值）、规格 `240*330*0`、款数 10、语言数 10、产品类别 普通BB书、产品名称 `冬季找找图画书(FSC Mix)`（ERP 自动追加 FSC 后缀）、预计下单/交货 2027-03-15、装订 快线BB书、包装 纸箱包装、是否有配件 否、产品类型 新产品、修改记录 无、香港单号 `CU26111201`（ERP 生成）、制单人 张爽。→ **1.0.73 的「free-text 分支写不进数量」是当时服务端没接好，现已修；我们这侧唯一硬约束是「`qty_1` 绝不显式传」**。三个新认知落文档：① 成功那次的 `save_product.message` **仍带**「请输入【产品数量】」页面 alert —— 噪音，判成败只看 `status`+`verify`；② 建完立刻 `erp_quote_detail` 有一大片 null（`CPSL1..10`/`DWMC`/`JHRQ`/`WCRQ`/`CPSX`/`CPLX`/`FSCMC`/`ZXLB`…，展示态禁用控件渲染不出值），**核验必须用 `erp_quote_list`**；③ `scripts/erp_push.py` 需 `ERP_MCP_TOKEN`（仓库/profile 均未落盘）→ 直跑 `HTTP 401 missing_bearer`，当下推单走 MCP 工具。**Skill 侧固化**：新增 `references/erp-quote-push-runbook.md`（通道选择 / 三步走 / 数量口径 / 判成败 / 回读口径 / 其它坑 / 成功样本 / 本机工具坑），SKILL §4「最后一步：推进 ERP」整节重写为**干跑 → 落库 → 列表页回读**四步（旧版「59 键只能写 24 个 / `CPLB` 写不进 / 产品名必须命中产品档案」三段已作废）。文档 `docs/erp-push-字段口径.md` §5.2/§5.2.1/§5.2.2 同步改写。全量 **834 绿** |
 | **1.0.73** | **2026-11-12** | **对齐服务端 pydantic 入参（`inputSchema` 当真值源）**：森西「去查看 `erp_quote_create` 的入参数据格式和类型，我们已经做了 pydantic 类型注释」→ 直接拉 MCP `tools/list`，把 `inputSchema` 存成 `assets/erp_quote_create_schema.json`（27KB，含 `$defs.QuoteProductInput` / `QuoteProductFields`），用作唯一事实源。**重大发现**：`products[]` 除 `name/spec/qty` 外还有 **`product_category`** ——「产品档案搜不到时必填，给了就不要求档案存在，明细行照建」，值就是我们的 `CPLB`（`27.01;普通BB书`）。也就是说卡了三轮的「产品档案」坎，协议早就给了出路，只是我们没传这个参数。类型分布：明细 51 字段 = **31 string / 17 number / 4 boolean**；`number` 拒收 `"240"`、`boolean` 拒收 `"否"`（pydantic 直接 422，主表都建不了）→ `erp_mcp_export` 新增 `FIELD_TYPES`（从 schema 读，不手抄）+ `_coerce_fields()` 强转（掰不动的字段丢弃并报错）+ `validate_call()` 离线自检（`erp_push` 发送前必跑）。另修两坑：① **`qty_1` 不能显式传**，协议 §7 说 `create()` 只在没给 `qty_1` 时才补隐藏的 `txtCPSL`，给了就只写展示框 `txtCPSL1` → 「请输入【产品数量】」；② `_classify` 先判 `bdbh` 会把 `failed`/`partial` 报成 `created`（`failed` 也带 `bdbh`）—— `BJXQ261112007` 就这样被误报成功过一次。**实测结论**：`product_category` 成功绕过档案检索（报错文案随之改成"新产品请指定类别"），但**新产品分支写不进「产品数量」**——6 个变体（只 `qty` / +`qty_1` / +`unit` / `category=27.01` / `category=普通BB书` / `languages=1`）报错完全一致 `save_product.ok=true, verify.ok=false, 产品明细行没有落库`；对照组协议 51 字段样例（`name=512961503`，档案能命中）`status=created` → 判定服务端 free-text 分支缺数量写入，待修。实验产生的 5 条空单（`BJXQ261112007~011`）已全部 `erp_quote_delete` 清掉；记一笔：**删除后单号会被复用**，认单请认「主表备注」追溯串。回归 +9，全量 **834 绿** |

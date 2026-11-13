@@ -204,9 +204,33 @@ def _archive_eml(eml: Path, inbox: Path) -> Path:
     return target
 
 
+def _parse_quarantined(stdout: str) -> list[dict]:
+    """`ingest_email.py` 的 stdout 是一份 JSON 汇总 —— 取出被隔离的 zip 清单。
+
+    取不到就当没有（摘要里少一行，不影响抽任务）。
+    """
+    text = (stdout or "").strip()
+    if not text:
+        return []
+    data = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.rfind("\n{")
+        if start >= 0:
+            try:
+                data = json.loads(text[start + 1:])
+            except json.JSONDecodeError:
+                return []
+    if not isinstance(data, dict):
+        return []
+    return [e for e in (data.get("quarantined_zips") or []) if isinstance(e, dict)]
+
+
 def ingest_one(claimed: Path, pending: Path, inbox: Optional[Path] = None,
                ingest_py: Optional[Path] = None,
-               timeout: int = INGEST_TIMEOUT_SECONDS) -> tuple[bool, str, list[Path]]:
+               timeout: int = INGEST_TIMEOUT_SECONDS
+               ) -> tuple[bool, str, list[Path], list[dict]]:
     """把 `.eml` 展开成 pending 里的任务（正文 .txt / 附件 / 单元目录）。
 
     业务（1.0.46 森西）：「上传也得能传 .eml」——邮件导出的 .eml 里正文和附件都在，
@@ -226,13 +250,16 @@ def ingest_one(claimed: Path, pending: Path, inbox: Optional[Path] = None,
          "--pending-dir", str(pending), "--customer", "auto"],
         timeout, "邮件展开")
     if code == -1:
-        return False, reason, []
+        return False, reason, [], []
     if code != 0:
-        return False, reason, []
+        return False, reason, [], []
 
     delivered = [p for p in pending_items(pending) if p.name not in before]
+    # zip 会被解到 pending/.zip_quarantine/（点开头，pending_items 不认）——
+    # 单独带回摘要，否则这封信在 cron 眼里等于「什么都没发生」。
+    quarantined = _parse_quarantined(reason)
     _archive_eml(claimed, inbox_dir)
-    return True, "", delivered
+    return True, "", delivered, quarantined
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────
@@ -290,10 +317,19 @@ def scan(limit: Optional[int] = None, dry_run: bool = False, verbose: bool = Fal
         claimed = _claim(item, claim)
         note = ""
         if item.suffix.lower() == EML_SUFFIX:
-            ok, reason, delivered = ingest_one(claimed, pending, inbox, ingest_script)
+            ok, reason, delivered, quarantined = ingest_one(
+                claimed, pending, inbox, ingest_script)
             if ok:
-                note = (f"📧 邮件已展开 → {len(delivered)} 项" if delivered
-                        else "📧 邮件已展开（没有可抽的内容）")
+                if quarantined:
+                    n_files = sum(int(e.get("members") or 0) for e in quarantined)
+                    note = (f"📦 zip 已隔离解开 {len(quarantined)} 个"
+                            f"（{n_files} 个文件），未分组待确认")
+                    if delivered:
+                        note += f" + {len(delivered)} 项已入队"
+                elif delivered:
+                    note = f"📧 邮件已展开 → {len(delivered)} 项"
+                else:
+                    note = "📧 邮件已展开（没有可抽的内容）"
                 for new_item in delivered:
                     if new_item.name in seen:
                         continue
