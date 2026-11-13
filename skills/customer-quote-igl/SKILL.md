@@ -42,6 +42,10 @@ metadata:
 > 并**问**是否把旧目录移 `processed/_superseded_<日期>/`（别自己删）。
 > 审计源要同时给 `--source <xlsx> <邮件正文.txt>` 才能覆盖只在邮件里的事实
 > （`.eml` 不能直接当源，先用 `email` 模块转 txt —— 片段见该 reference）。
+>
+> ★ **推 ERP 前读 `customer-quote-request/references/erp-mcp-push.md`**：入参真值 = 服务端
+> `inputSchema`（别抄文档）、`products[].product_category` 喂 `CPLB` 可免建档、
+> `qty_1` 不许显式传、判成败只看 `status`（`failed` 也带 `bdbh`）、失败可能留空单要删。
 
 - 客户：IGL（香港书商；许可证 `LICENSE` 同仓库）
 - 状态：`calibrated`（用真实报价表 `PUZZLE COLOUR DISNEY.xlsx` 校准）

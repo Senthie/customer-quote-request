@@ -967,6 +967,12 @@ NGV 每单固定的第三方检测清单（378 字符，3 份导出逐字相同�
 > （命令会直接报 `cd: … No such file or directory`，连 `pwd` 都跑不了）。
 > 每条命令都显式带 `workdir=/home/claw/customer-quote-request`（或命令里先绝对路径 `cd`），
 > 不要依赖会话默认目录。
+>
+> ⚠️ **总纲 `customer-quote-request/SKILL.md` 已 18 万字符，超过 `skill_manage` 的 10 万上限**
+> → 对它的 `patch` 会直接失败（`SKILL.md content is 181,306 characters (limit: 100,000)`）。
+> 新增知识写成 `customer-quote-request/references/<topic>.md`（`write_file` 不受限），
+> 再在本子技能（体积小、可 patch）里挂一行指针。技能目录是软链，
+> 写到 `~/.hermes/profiles/igl_agent/skills/<skill>/` 等于写进仓库。
 
 ```bash
 cd /home/claw/customer-quote-request
@@ -1230,6 +1236,21 @@ uv run ./scripts/customer_profile.py --prefs ngv
    `--source a --source b` 只读了 b → 4 条「无出处」是假警报）。要多个文件就一个 flag 带全部路径。
   仍不支持 `.eml`：**邮件正文里的数字**（`PO#13826` / `2019` / `July 31st`）不能进 CPMS，
   邮件上下文进 `CPMS_来源对照.md` + 汇报，单据号归 `KHDH` 字段。
+- ★ **`.zip` 附件同样被白名单静默跳过 → 「转发封皮」单独成单（2026-11-13，一轮 3 份空产物）**：
+  `ingest_email.SUPPORTED_ATTACHMENTS` 里没有 `.zip` → 打一句 WARN「跳过不支持的附件类型」→
+  「附件是客户 N 个报价/询价资料」的**封皮正文**被落成 `.txt` 任务 → `values={}`、`CPLB=32.00;其他`、
+  `CPSL1..10=0`、`CPMC=【中文品名待定】`，`cpms_todo` 于是每 5 分钟催一次根本不存在的欠账。
+  **这类单一律不写 CPMS**（没有可溯源的事实，写什么都是编）：整目录
+  `mv customer-files/processed/<task>/ customer-files/failed/_not_quote_<YYYYMMDD>/`，
+  写一份 `README.md` 记原文身份（哪封是封皮、哪封是内部报告）+ zip 内项目清单 + 根因行号 + 恢复方式，
+  顺手把 `pending/<同名>.txt.meta.json` 归进对应目录，再 `cpms_todo.py` 确认 `CPMS_TODO: 0`
+  —— 隔离是**为了止住重复派单**，不是静默丢弃。
+  ⚠️ **补 `.zip` 白名单不是正解**：一个 zip 装 N 个独立项目（5 项目 × 3 件：客户询价 eml + 我方报价 eml +
+  系统单 pdf）时，「1 个 zip = 1 份报价」的单元语义会把 N 个项目合并成 1 份 → 优先按项目拆包，
+  或给 `input_unit` 加「同目录按香港单号前缀拆多项目」策略（要设计 + 回归）。
+  判别三连：`values=={}` · 正文只有「附件是…/请查收」无任何规格词 · `.eml` 附件后缀不在白名单。
+  全案（10 个项目清单、三例判据、审计/恢复方式）：总纲
+  `customer-quote-request/references/eml-zip-envelope-and-empty-products.md`。
 - ★ **`.xlsm` 附件会被静默跳过，正文单独成单 → 全字段落默认值**（2026-10-29 实单 IAN 574237/574239）：
   `ingest_email` 的后缀白名单不含 `.xlsm`（宏工作簿），Lidl/VEMAG 的「Overview of Countries, Quantities,
   and Titles」附表正好是 `.xlsm` → 记进 `skipped_attachments`、只把邮件正文当任务 → 抽到 **0 个规范键**，
@@ -1276,6 +1297,9 @@ uv run ./scripts/customer_profile.py --prefs ngv
 ## 10. 交付检查清单（NGV 专用）
 
 - [ ] 客户识别是 `ngv`（不是 igl；注意文件名含 `Colour`/`Puzzle` 的陷阱）
+- [ ] ★ **`extracted.json` 的 `values=={}` = 不是报价单**（封皮 / 内部报告 / 附件被白名单跳过）：
+      不写 CPMS、不写品名三件套，整目录移 `customer-files/failed/_not_quote_<YYYYMMDD>/` + `README.md`
+      留证，收尾 `cpms_todo.py` 必须 `CPMS_TODO: 0`（见 §9 的 `.zip` 封皮条）
 - [ ] ★ 若输入是**文件夹 / 压缩包 / 多附件邮件**：`validation.json` 的 `unit.members`
       与预期文件清单一致、`unit.skipped` 只有垃圾文件、**`conflicts` 为空或已人工核对**
       （参考文件合并成**一个** ERP JSON，不是一个文件一份 —— 见 1.6）
@@ -1381,6 +1405,11 @@ uv run ./scripts/customer_profile.py --prefs ngv
 > 才炸，且会留下**空主表**（清理 4 步、`erp_quote_list` 必须带 `key`）；
 > ② 档案品名是 `{客户方负责人}/{产品类别}/{客户原品名}({FSC类别})`，译名永远匹配不上，
 > **不许改品名去凑**；③ `qty` = **单款本数**，落库 `txtCPSL1` 要 ×款数（TZS）。
+> ④ **档案搜不到不必先去建档**：`products[0].product_category` 传 `CPLB`
+> （`27.01;普通BB书`）即可当新产品建明细；⑤ **`qty_1` 不许显式传**（会盖掉
+> create() 对隐藏 `txtCPSL` 的补写 → 「请输入【产品数量】」）；⑥ 判成败只看
+> `status` —— `failed`/`partial` 也带 `bdbh`，别把空单报成功。
+> 详见 `customer-quote-request` 的 `references/erp-mcp-push.md`。
 
       **必须重新生成导出副本**（副本里也有 CPMS/CPMC；1.0.72 起由 `main.py` 3b /
 `erp_mcp_export.export_calls()` 生成 —— **别再跑 `erp_import_adapter.py`**，
