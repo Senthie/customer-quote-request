@@ -281,6 +281,20 @@ def _record_total(record: dict[str, Any], override: Optional[int]) -> Optional[i
     return per * _record_titles(record) if per else None
 
 
+def _date_fallback(default_date: Any, key: str) -> str:
+    """兜底日期解析：给字符串 → JHRQ/WCRQ 同值；给 dict → 按字段各取各的。
+
+    为什么要支持 dict：NGV 这类客户**交货日期和预计下单日期不是同一天**
+    （客户只给 `Lieferung Q4 27`，预计下单根本没给），同值兜底会把一个日期
+    硬塞进另一个字段。产物里这两个字段按客户档案「报价阶段不落库」保持空，
+    只在**推送那一刻**补 ERP 强制必填的值 —— 所以兜底值只能从外部传进来，
+    不能写回产物。
+    """
+    if isinstance(default_date, dict):
+        return str(default_date.get(key) or "").strip()
+    return str(default_date or "").strip()
+
+
 def apply_defaults(record: dict[str, Any], fields: dict[str, Any]
                    ) -> dict[str, tuple[Any, str]]:
     """客户没给、按业务口径兜底的必填字段 → `{mcp_arg: (value, reason)}`。"""
@@ -304,7 +318,7 @@ def build_call(
     *,
     customer: str,
     qty: Optional[int],
-    default_date: str = "",
+    default_date: Any = "",
 ) -> tuple[dict[str, Any], list[str]]:
     """一条产品记录 → 一次 `erp_quote_create` 的入参。"""
     problems: list[str] = []
@@ -340,11 +354,14 @@ def build_call(
         if isinstance(val, (int, float)) and not isinstance(val, bool) and val:
             fields[arg] = int(val) * titles
 
-    # ★ 兜底：缺日期用 default_date（JHRQ/WCRQ 同值），缺必填用 FIELD_DEFAULTS
-    if default_date:
-        for key in ("JHRQ", "WCRQ"):
-            if not str(record.get(key) or "").strip():
-                fields[PRODUCT_FIELD_MAP[key]] = default_date
+    # ★ 兜底：缺日期用 default_date（字符串 → JHRQ/WCRQ 同值；dict → 各取各的），
+    #   缺必填用 FIELD_DEFAULTS
+    for key in ("JHRQ", "WCRQ"):
+        if str(record.get(key) or "").strip():
+            continue
+        fallback = _date_fallback(default_date, key)
+        if fallback:
+            fields[PRODUCT_FIELD_MAP[key]] = fallback
     for arg, (val, _reason) in apply_defaults(record, fields).items():
         fields[arg] = val
 
@@ -392,7 +409,7 @@ def build_calls(
     *,
     customer: str = "",
     qty: Optional[int] = None,
-    default_date: str = "",
+    default_date: Any = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """整份产物 → N 次 create 的入参（N = 产品记录数）。"""
     if not records:
@@ -463,7 +480,7 @@ def export_calls(
     *,
     customer: str,
     qty: Optional[int] = None,
-    default_date: str = "",
+    default_date: Any = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """导出用入口：59 键产物 → MCP 入参数组（= 一份 `<stem>.erp-import.json`）。"""
     return build_calls(records, customer=customer, qty=qty, default_date=default_date)

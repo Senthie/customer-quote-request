@@ -428,3 +428,36 @@ def test_rejected带ERP原文(tmp_path: Path):
 def test_sidecar命名(tmp_path: Path):
     assert erp_push.sidecar_path(_artifact(tmp_path)).name == \
         "ERP_task-1_20261111_100506.erp-push.json"
+
+
+# ── 推送时补日期：交货日期与预计下单日期可以**不是同一天** ──────────
+#    背景（2026-11-13 NGV 发声故事书）：客户只给了 `Lieferung Q4 27`，
+#    预计下单日期根本没给。客户档案的口径是「报价阶段这两个字段不落库」，
+#    但 ERP 明细强制必填 → 只能在推送那一刻补，且不能把同一天塞进两个字段。
+def test_日期兜底可按字段分别给():
+    rec = _rec(JHRQ="", WCRQ="")
+    calls, _ = erp_mcp_export.export_calls(
+        [rec], customer="NGV10", qty=100,
+        default_date={"JHRQ": "2027-12-31", "WCRQ": "2026-11-23"})
+    fields = calls[0]["products"][0]["fields"]
+    assert fields["delivery_date"] == "2027-12-31"
+    assert fields["expected_date"] == "2026-11-23"
+
+
+def test_日期兜底字符串仍然同值():
+    rec = _rec(JHRQ="", WCRQ="")
+    calls, _ = erp_mcp_export.export_calls([rec], customer="NGV10", qty=100,
+                                           default_date="2027-03-15")
+    fields = calls[0]["products"][0]["fields"]
+    assert fields["delivery_date"] == "2027-03-15"
+    assert fields["expected_date"] == "2027-03-15"
+
+
+def test_产物已有的日期不被兜底覆盖():
+    rec = _rec(JHRQ="2027/12/01", WCRQ="")
+    calls, _ = erp_mcp_export.export_calls(
+        [rec], customer="NGV10", qty=100,
+        default_date={"JHRQ": "2027-12-31", "WCRQ": "2026-11-23"})
+    fields = calls[0]["products"][0]["fields"]
+    assert fields["delivery_date"] == "2027/12/01"
+    assert fields["expected_date"] == "2026-11-23"
