@@ -1226,6 +1226,41 @@ def read_text_document(file_path: str) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+_TIER_LIST_TOKEN = re.compile(r"^\d+$")
+_TIER_LIST_THOUSANDS = re.compile(r"^\d{1,3}(?:[.,]\d{3})+$")
+
+
+def split_tier_list(text: Any, max_tiers: int = 10) -> list:
+    """`2000/3000/5000/7000` → `[2000, 3000, 5000, 7000]`；不是这种写法返回 `[]`。
+
+    为什么要专门认这种写法（2026-11-13 PSN22 第一份询价）：
+    客户的 docx 没有标签，数量就是**一行斜杠串**
+    `2000/3000/5000/7000/10000/12000/15000/18000/20000/25000/30000`。
+    引擎原来把它当「单一数量」交给 `parse_single_quantity()`，而那一串里有 11 个数字
+    → 按「多个数字不敢猜」的口径只能落 0，结果十档全丢（还得 agent 手工补）。
+
+    护栏（比宽松解析更重要）：
+      * 至少 **3 档**才认（`1/2` 更可能是别的东西，交回单值解析）；
+      * 每段必须是纯数字，或 `1.500` / `1,500` 这种千分位写法；有别的字符就不认；
+      * 超过 `max_tiers` 截断并保留顺序 —— ERP 只有 `CPSL1..10` 十个位置。
+    """
+    s = str(text or "").strip()
+    if s.count("/") < 2:
+        return []
+    parts = [p.strip() for p in s.split("/")]
+    if len(parts) < 3 or any(not p for p in parts):
+        return []
+    tiers: list = []
+    for p in parts:
+        if _TIER_LIST_TOKEN.match(p):
+            tiers.append(int(p))
+        elif _TIER_LIST_THOUSANDS.match(p):
+            tiers.append(int(re.sub(r"[.,]", "", p)))
+        else:
+            return []
+    return tiers[:max_tiers] if max_tiers > 0 else tiers
+
+
 def extract_from_text(file_path: str, profile: CustomerProfile, logger=None,
                       filename: str = "") -> CustomerData:
     """自由文本（PDF/DOCX/TXT）→ CustomerData。
@@ -1290,12 +1325,35 @@ def extract_from_text(file_path: str, profile: CustomerProfile, logger=None,
     scan_notes = []
     scanned = scan_values(blocks + ([filename] if filename else []), profile, logger,
                           notes=scan_notes)
+
+    # ★ 斜杠串档位：`2000/3000/5000/…` 是**多档**，不是单一数量。
+    #   不拆的话它会落到 `parse_single_quantity()`（一串里多个数字 → 不敢猜 → 落 0，
+    #   整排档位全丢）。标签匹配和 `rules.scan` 两条路都要认 —— 客户的 docx 没标签，
+    #   档位那一行只能靠 scan 抓，所以这一步必须放在 scan_values 之后。
+    tiers: list = []
+    tier_text = ""
+    for source in (values, scanned):
+        tier_text = str(source.get("quantity_tiers") or source.get("quantity") or "")
+        tiers = split_tier_list(
+            tier_text, max_tiers=int(profile.rule("quantity_tiers.max_tiers", 10) or 10))
+        if tiers:
+            source.pop("quantity", None)
+            source.pop("quantity_tiers", None)
+            break
+    if tiers:
+        total_tiers = tier_text.count("/") + 1
+        log(f"  数量档位：{tier_text.strip()!r} 拆成 {len(tiers)} 档 → {tiers}")
+        if total_tiers > len(tiers):
+            log(f"  客户写了 {total_tiers} 档，超出 ERP 档位上限 "
+                f"（rules.quantity_tiers.max_tiers={len(tiers)}）→ 只落前 {len(tiers)} 档，"
+                f"末 {total_tiers - len(tiers)} 档舍弃", "warn")
+
     unmatched = [lab for lab in raw_labels
                  if not profile.match_label(lab) and not profile.is_ignored_label(lab)]
     return CustomerData(
         values=values,
         raw_labels=raw_labels,
-        quantity_tiers=[],
+        quantity_tiers=tiers,
         text_blocks=blocks,
         unmatched=unmatched,
         extras_found=sorted({b for b in blocks

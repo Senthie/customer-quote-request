@@ -1,64 +1,155 @@
 # ═══════════════════════════════════════════════════════════════
-# 客户档案：PSN22（自动生成草稿 —— 尚未收到询价文件）
+# 客户档案：PSN22（Magic Cat Publishing —— 童书 / 纸板书为主）
 #
 # 来源：真实 ERP 语料 /home/claw/train/custom_cpms_requie
-#       客户代码 PSN22，435 份单据（2023+），年份 [2023, 2024, 2025, 2026]
-# 生成：uv run ./scripts/derive_customer_defaults.py --bootstrap
+#       客户代码 PSN22，454 份单据（2022-2026）
+# 生成：uv run ./scripts/derive_customer_defaults.py --bootstrap（语料默认值层）
+# 校准：2026-11-13 收到第一份真实询价后按「新增客户 SOP」补齐 detect / fields / rules
+#       （样本：`Sleuth and Clue`，docx 自由文本 + 两份刀模 PDF；
+#        产物 = customer-files/processed/942338fedbfe426db80321fda92f07dd，
+#        ERP 单号 BJXQ261113003）
 #
-# 这份档案只含**语料能证明的部分**：erp_defaults 的门槛是覆盖率 ≥90%
-# 且一致率 ≥90%。fields / detect / rules **必须等第一份真实询价
-# 文件来了再校准** —— 现在写等于凭空猜列名（用 scripts/calibrate_customer.py）。
-# status 保持 draft：没被真实询价文件验证过，不进自动识别。
+# ⚠️ 这个客户的询价**没有标签**（不是「标签: 值」的表格），所以：
+#   * `fields` 只能覆盖那几行**以英文关键词开头**的（Text / Case / Case bound）；
+#   * 尺寸、数量档位这类「裸值行」走 `rules.scan` 正则（见下）；
+#   * 其余（中文品名、装箱、选配/换版的商务措辞）仍由 agent 手写 CPMS。
 # ═══════════════════════════════════════════════════════════════
 id: psn22
 name: PSN22
 priority: 10
-status: draft
+status: calibrated
 erp_khzl: [PSN22]
 notes: >
-  语料画像：全部 454 份单据（2022-2026），常见产品类别「普通BB书」(12%)，送货方式「FOB 盐田」(87%)，包装方式「纸箱包装」(100%)。
-  默认值只用其中 435 份（2023+）统计 —— 更早的取值是 ERP 下拉规范化前的废弃写法。
-  尚未收到询价文件；解析规则（fields / detect / rules）待校准。
+  英国 Magic Cat Publishing（童书出版商）的报价需求，多由 ghouseproducts（Alex / Rex）
+  转来。附件形态是「一份 docx 规格 + 若干刀模 / 上胶图 PDF」，docx 里**只有值没有标签**：
+  第一行产品名、第二行尺寸（`270 x 210mmm (P)`）、`N spreads + case + M tip-on flaps`、
+  `Text / Case` 两行分别写内文与封面的纸张+印色+表面处理、`Case bound, …` 写装订、
+  一行斜杠串写数量档位、结尾若干行写换版与选配。
+  语料画像：454 份单据，产品以 BB 书（纸板书）为主 —— 普通BB书 56 / 精装BB书 45 /
+  其它套装 40 / 精装音乐BB书(线路) 33；包装方式「纸箱包装」100%，送货「FOB 盐田」87%。
 
-# ── 1. 身份识别：还不知道他们的文件名/标签长什么样，先留空 ──────────
+# ── 1. 身份识别 ────────────────────────────────────────────────
+# 域名不可用：邮件几乎都是 ghouseproducts.com 转发的，那个域名同时服务多个客户。
+# 改用 docx 的**写法特征**（这批特征是本客户规格书独有的组合）。
 detect:
   filename_keywords: []
-  label_signatures: []
+  label_signatures:
+    - "tip-on"
+    - "press varnish"
+    - "case bound"
+    - "spreads + case"
+  min_signature_hits: 2
+  sender_domains: []
+  subject_keywords: []
 
-# ── 2. 列名别名表：等真实询价文件──────────────────────────────
-fields: {}
+# ── 2. 字段别名表（只写这个格式里真正以标签开头的行）───────────────
+# 匹配规则是「行首**精确等于**标签」+ 取最长命中，所以 `Case bound` 不会被 `Case` 截胡：
+#   `Case 4/0 on 157gsm matt art paper fsc + matt lamination`     → cover_printing_spec
+#   `Case bound, accordian binding, text folded and glued …`      → binding
+fields:
+  text_printing_spec: ["Text"]
+  cover_printing_spec: ["Case"]
+  # ⚠️ 不给 `binding` 配 `Case bound` 标签：标签一旦被吃掉，值里就只剩
+  #    「accordian binding, …」——`case bound` 这几个字反而丢了，装订映射和
+  #    类别映射都判不出来（2026-11-13 实测）。改为 rules.scan 整行抓。
 
-# ── 3. 默认值层：语料统计出来的常用值（只补空，客户写明了听客户的）──
+# ── 3. 默认值层（语料统计：覆盖率 ≥90% 且 一致率 ≥90% 才进）────────
 erp_defaults:
-  BZFS: "纸箱包装"    # 包装方式：覆盖 100%（435/435），一致 100%
-  chkBSYTB: false    # 不使用台板：覆盖 100%（435/435），一致 100%
-  chkZDBJF: false    # 自动报价：覆盖 100%（435/435），一致 100%
-  chkBSYJZX: false    # 不使用纸张：覆盖 100%（435/435），一致 100%
+  BZFS: "纸箱包装"    # 包装方式：454/454，一致 100%
+  chkBSYTB: false    # 不使用台板：454/454 false
+  chkZDBJF: false    # 自动报价：454/454 false
+  chkBSYJZX: false   # 不使用纸张：454/454 false
 
 # ── 人看的偏好表（必须与上面落库值一致，校验器会拦）───────────
 preferences:
-  - { field: BZFS, value: "纸箱包装", reason: "语料 435/435 份一致 100%（覆盖 100%）" }
-  - { field: chkBSYTB, value: false, reason: "语料 435/435 份一致 100%（覆盖 100%）" }
-  - { field: chkZDBJF, value: false, reason: "语料 435/435 份一致 100%（覆盖 100%）" }
-  - { field: chkBSYJZX, value: false, reason: "语料 435/435 份一致 100%（覆盖 100%）" }
+  - { field: BZFS, value: "纸箱包装", reason: "语料 454/454 份一致 100%" }
+  - { field: PXH, value: 1, reason: "语料 454/454 份都是 1 —— 与公共默认值一致，无需单独覆盖（NGV 才要显式清空）" }
+  - { field: chkBSYTB, value: false, reason: "语料 454/454 份 false" }
+  - { field: chkZDBJF, value: false, reason: "语料 454/454 份 false" }
+  - { field: chkBSYJZX, value: false, reason: "语料 454/454 份 false" }
 
-# ── 没给默认值的字段（不是漏了，是数据不支持）──────────────
-#   TBLX       不打卡板                       只 30% 一致，每单在变
-#   SHFS       FOB 盐田                     只 87% 一致，每单在变
-#   BZ                                    语料 0 填充（报价阶段不填）
-#   YSLX                                  语料 0 填充（报价阶段不填）
-#   SHDQ                                  语料 0 填充（报价阶段不填）
-#   ZXLB                                  语料 0 填充（报价阶段不填）
-#   ZBLX                                  语料 0 填充（报价阶段不填）
-#   ZXFS                                  语料 0 填充（报价阶段不填）
-#   DKMC                                  语料 0 填充（报价阶段不填）
-#   chkXBJF                               语料 0 填充（报价阶段不填）
+# ── 没给默认值的字段（不是漏了，是数据不支持）──────────────────
+#   SHFS       FOB 盐田            87% 一致（另有 送国内 26 / 工厂自提 18 / FOB(美加线)-盐田 12）
+#   TBLX       不打卡板            只有 29%（不打卡板 132 / 三种实木卡板合计 298）
+#   SFYPJ      否                  58%（是 190 份）—— 必须按询价内容判，不能默认
+#   ZDFS       快线BB书            21%（快线 97 / 慢线 93 / 中线 81 / 胶装 56）
+#                                  快/中/慢线是产能与工艺判断，客户文件里看不出来 → 不猜
+#   CPLB       普通BB书            **不设默认**：类别按 cplb.map + 树判，见 rules
+#   Remark1    否                  58%（自厂商购 168 / 客供配件 19）—— 随配件情况定
+#   Remark3    新款报价            40%（原单更新 32 / 更改数量和款数 51）—— 每单不同
+#   Remark4    EN71 检测清单       56%（三种检测组合各占一部分）—— 每单按市场定
+#   CPDL / DWMC / FSCMC / CPSX / CPLX / BZ / YSLX / SHDQ / ZXLB / ZBLX / ZXFS / DKMC
+#                                  语料 454/454 **全空**（报价阶段不填）。
+#                                  ⚠️ CPDL / DWMC 现在由公共默认层填「书版 / 本」，
+#                                  与语料不符但无害（不是 ERP 必填，不影响建单）；
+#                                  要不要清空待业务拍板，别自己改。
 
-# ── 解析规则（2026-11-13 第一份真实询价到手后开始补）─────────────
+# ── 解析规则 ──────────────────────────────────────────────────
 rules:
-  # 报价阶段客户还没给单号，留空是预期结果、不是缺陷。
-  # 依据：2026-11-13 收到 PSN22 第一份询价（Magic Cat Publishing / `Sleuth and Clue`），
-  #   客户 docx 只有规格，没有任何单号；与 ngv 同一口径（`customers/ngv.yaml` 同段）。
-  #   `KHDDH`（香港单号）成品后由 ERP 生成，报价阶段也不该有值。
+  # 报价阶段客户不给单号：货物出厂后 ERP 才生成香港单号（语料里 KHDDH 453/454 有值、
+  # KHDH 454/454 为空，说明 KHDH 本来就该空）。
   required_empty: [KHDH, KHDDH, Drop_SJFX]
 
+  # 交货 / 预计下单日期：语料 454/454 **全空** → 报价阶段不落库（与 ngv 同一口径）。
+  # ⚠️ ERP 明细里这两个字段是**强制必填**，推送时要兜底：
+  #    export_calls(..., default_date={"JHRQ": "...", "WCRQ": "..."})
+  #    兜底值只进 `.erp-import.json`，不写回 59 键产物（见 Skill 的推送 runbook §5）。
+  dates:
+    JHRQ: { mode: empty }
+    WCRQ: { mode: empty }
+
+  # 装订方式 ZDFS：只映射**能从客户原文直接读出来**的写法。
+  # 「board book」故意不映射到 快线/中线/慢线BB书 —— 那是产线判断，语料里三种各占 1/3，
+  # 猜一个就是 2/3 的错误率。命中不了就留空 + WARN（业务 2026-10-21 口径）。
+  binding:
+    enabled: true
+    default: ""
+    map:
+      case bound: 精装书
+      casebound: 精装书
+      hardcover: 精装书
+      hard back: 精装书
+      hardback: 精装书
+
+  # 裸值行靠正则抓（这个客户的 docx 没有标签）。
+  #   size：`270 x 210mmm (P)` → `270 x 210`（parse_size 按书写顺序落 CD/KD）
+  #   quantity：`2000/3000/5000/…` → 交给 split_tier_list 拆成档位（≥3 档才认）
+  scan:
+    - { key: size,     pattern: '(\d{2,4}\s*[x×]\s*\d{2,4})\s*m{1,3}m?' }
+    - { key: quantity, pattern: '(\d[\d.,]*(?:\s*/\s*\d[\d.,]*){2,})' }
+    #   binding：整行抓，**保留 `Case bound` 这几个字**（映射表要按它判精装）
+    - { key: binding,  pattern: '((?:case\s*bound|hardcover|hard\s*back|board\s*book)[^\n]*)' }
+
+  # 产品类别：按客户原文里的关键词落树节点（树见 assets/cplb_tree.yaml）
+  cplb:
+    match_keys: [binding, specials, text_material, cover_material, project_description]
+    map:
+      # 风琴折 → 27.21 风琴揭页BB书（必须排在通用精装之前）。
+      # 依据：① 树里只有 27.21 的 features 含「风琴折」；
+      #      ② PSN22 语料 3 单「精装封面 + 内文风琴折」业务就落 风琴揭页BB书
+      #         （LR25032502 系列，ERP 备注原文「装订方式：精装风琴折页BB书」）；
+      #      ③ 2026-11-13 业务对第一份真实询价（Sleuth and Clue）拍板「按树里的节点为主」。
+      # ⚠️ 客户把 accordion 拼成 `accordian`（原文件里就是这样），两种都要认，
+      #    否则会漏到下面的 `case bound` → 落 22.02（2026-11-13 实测踩过）。
+      - { match: "accordi[ao]n|accordeon|风琴|leporello", node: "27.21" }
+      # 硬封面（有灰板包皮壳）
+      - { match: "case\\s*bound|hardcover|hard\\s*back", node: "22.02" }
+      # 纸板书
+      - { match: "board\\s*book", node: "27.01" }
+
+  # 数量档位：ERP 只有 CPSL1..10；客户给到 11 档时按业务口径（2026-11-13）
+  # 「删除最后一档」→ 只落前 10 档，超出的打 WARN 让人看见。
+  quantity_tiers:
+    max_tiers: 10
+
+  # 中文品名：客户的 docx 第一行是**英文书名**（Sleuth and Clue），没有中文。
+  # 引擎只给 `类别-英文名` 的底稿（如 `27.21;风琴揭页BB书-Sleuth and Clue`），
+  # 交稿前必须 agent 拟中文译名（业务口径：CPMC = 产品中文译名）。
+  cpmc:
+    template: "{cplb}-{series_name}"
+    needs_agent: true
+
+# ── 尺寸方向（2026-10-21 业务拍板）─────────────────────────────
+#   CD/KD 按**书写顺序**，不交换：`270 x 210` → CD=270 / KD=210。
+#   本客户语料验证：CD<KD 176 份、相等 212 份（方书）、CD>KD 只有 43 份
+#   —— 没有「长边进 CD」的规律，进一步确认按书写顺序是对的。

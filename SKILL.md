@@ -14,7 +14,22 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.76（2026-11-13 **`.zip` 附件：解开但不分组**：森西选「解压落 pending，
+> **版本：** 1.0.77（2026-11-13 **第四个客户 PSN22 校准 + 两单真落库**：
+> ① PSN22（Magic Cat，454 份语料）从 `draft` 升 `calibrated`，新增子技能
+> `customer-quote-psn22`。该客户的 docx **只有值没有标签** → `fields` 只覆盖
+> `Text`/`Case` 两行，尺寸与数量档位走 `rules.scan` 正则。
+> ② 新增 `extract_fields.split_tier_list()`：`2000/3000/…/30000` 这种**斜杠串档位**
+> 原来被当单一数量 → 「多个数字不敢猜」→ 落 0、十档全丢；现在 ≥3 档就拆成
+> `quantity_tiers`，超 `max_tiers`（10）按顺序截断并 WARN。
+> ③ `erp_mcp_export.default_date` 从 `str` 扩成 `str|dict`：交货日期与预计下单日期
+> 常常**不是同一天**（客户只给 `Lieferung Q4 27`），同值兜底会把日期塞错字段。
+> 兜底值只进 `.erp-import.json`，**不写回 59 键产物**（档案口径是「报价阶段不落库」）。
+> ④ 真落库两单：`BJXQ261113003`（PSN22 / 探案与线索 / 27.21 风琴揭页BB书 / 10 档 2000–25000）
+> 与 `BJXQ261113004`（NGV10 / 发声故事书 / 22.06 / 8 款 / 130,000 本）。
+> ★ 教训：产物 `CPSL1..10` 是**单款**，引擎在「多段数量 + 总合计」写法下会把总合计
+> 写进 `CPSL1` → 推前必须手算 `CPSL1 × TZS == CPMS 里的总本数`（这单差 8 倍）。
+> 回归 +9（`tests/test_psn22_profile.py`），全量 **885 绿**）
+> —— 前序 1.0.76（2026-11-13 **`.zip` 附件：解开但不分组**：森西选「解压落 pending，
 > 不自动分组」。旧白名单没有 `.zip` → NGV 转发封皮的附件被静默跳过 → 封皮正文落成任务
 > → 抽出空单（`CPMC=【中文品名待定】`）。现在解到 `pending/.zip_quarantine/<zip名>_<ts>/`
 > （点开头 = 扫描器不认），写 `_unzip_manifest.json` 记 `grouping=未分组` + `prefix_hint`
@@ -351,7 +366,8 @@ uv run ./scripts/main.py customer-files/pending/两张单/ --customer auto
 | **取值权威** | `assets/erp_form_schema.yaml` | **ERP 只认哪些值**（下拉枚举/类型/必填） | 不用（ERP 全局恒定） |
 
 > **客户专属知识在独立子技能里**：处理 IGL 前加载 `customer-quote-igl`、
-> 处理 NGV 前加载 `customer-quote-ngv`（附件形态 / 抽取范式 / 口径 / 坑 / 检查清单）。
+> 处理 NGV 前加载 `customer-quote-ngv`、处理 PSN22 前加载 `customer-quote-psn22`
+> （附件形态 / 抽取范式 / 口径 / 坑 / 检查清单）。
 > 本文件是**总纲**：架构、引擎、邮件入口、字段总览、`CPMS` 规则、校验方法、新增客户 SOP。
 >
 > **铁律：`main.py` 里不允许出现任何客户的列名。**
@@ -572,6 +588,7 @@ uv run ./scripts/main.py "customer-files/pending/QUOTE.xlsx" --customer auto
 |------|------|------------------------|------|----------|
 | `customers/igl.yaml` | IGL | **`customer-quote-igl`** | ✅ calibrated（真实样本校准） | 平铺 + 横向键值对表 |
 | `customers/ngv.yaml` | NGV | **`customer-quote-ngv`** | ✅ calibrated（4 份真实附件 + ERP 导出） | **德英双语 enquiry 分区表单** |
+| `customers/psn22.yaml` | PSN22（Magic Cat） | **`customer-quote-psn22`** | ✅ calibrated（第一份真实询价 + 454 份语料） | **无标签 docx 规格书 + 刀模 PDF** |
 | `customers/_defaults.yaml` | 兜底 + 公共默认值 | 所有档案都叠加在它之上；认不出客户时用它（会打 WARN） | — |
 | `customers/_template.yaml` | 新客户骨架 | 复制它开始 | — |
 
@@ -790,6 +807,7 @@ email:
 |------|--------|----------|----------|
 | IGL | **`customer-quote-igl`** | 平铺 + 横向键值对报价表 | `auto_pairs`（+ `column_pairs` / `shifted_pairs`） |
 | NGV | **`customer-quote-ngv`** | 德英双语 `enquiry` 分区表单（`A1:K32`：A 列分区 / B 列标签 / C 列起值） | `section_pairs` + 档案 `sections:` |
+| PSN22 | **`customer-quote-psn22`** | 无标签 docx（值成行，只有 `Text` / `Case` 两行有前缀）+ 刀模 PDF | `text_lines` + `fields` 别名 + `rules.scan` 正则 |
 
 **处理一份文件的顺序**：读本总纲 → 看识别结果 → **加载对应子技能** → 按子技能里的
 口径 / 坑 / 交付检查清单干活。新增客户见 2.2，校准完同样给它写一份子技能（模板照现成的两份）。
