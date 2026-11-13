@@ -1,0 +1,30 @@
+# 收信入口配置（scripts/mail_fetch.py → customer-files/pending/*.eml）
+#
+# 业务口径 2026-11-13：收信接入流水线、不回信、暂不按客户分类。
+# 邮箱：sora@handscript.net（腾讯企业邮）—— 账户细节见 hermes skill `himalaya`。
+#
+# 这里只决定「哪些信进流水线」，不做任何字段映射（那是客户档案的事）。
+
+account: sora            # himalaya 账户名；留空 = 用配置里的默认账户
+folder: INBOX
+
+page_size: 50            # 每轮看多少封信封（只是列表，不是下载）
+max_per_run: 5           # 每轮最多落盘几封：积压时不会一次把队列灌爆
+
+himalaya: himalaya       # 二进制名或绝对路径（PATH 里有 /home/claw/.local/bin）
+timeout: 90              # 单次 himalaya 调用超时（秒）
+
+# 不送进流水线的信：系统通知、退信、自动回复之类。
+# 匹配方式是**子串**（对发件人地址、对标题各扫一遍）。
+skip_senders:
+  - 10000@exmail.weixin.qq.com    # 企业微信「登录提醒」
+  - mailer-daemon@                # 退信
+  - postmaster@
+  - no-reply@
+  - noreply@
+
+skip_subjects:
+  - 企业微信邮箱登录提醒
+  - 自动回复
+  - Auto-Reply
+  - Out of Office

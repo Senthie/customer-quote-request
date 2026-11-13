@@ -14,7 +14,16 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.74（2026-11-12 **首次真建单成功 + 建单链固化**：同一份 payload
+> **版本：** 1.0.75（2026-11-13 **收信接入流水线**：业务「① 收信接入流水线 ② 不回信 ③
+> 先不分类」。新增 `scripts/mail_fetch.py`：`himalaya` 拉 IMAP → 落 `pending/*.eml`，
+> 展开/抽取全交给现成链路（`scan_pending.py` 见到 `.eml` 就调 `ingest_email.py`）。
+> 挂进 `scan_pending.sh` 的**第 0 步**（先收信再扫描，失败只进 stderr，不阻断扫描）。
+> 去重不靠改邮箱状态（不标已读/不移动）：`customer-files/.mail_fetch_state.json` 用
+> `from|date|subject` 指纹前置过滤 + `Message-ID` 兜底。配置 `assets/mail.yaml`
+> （跳过名单 / 每轮上限 / 文件夹）。上线坑：`--mark-baseline` 必须**先于**改脚本跑，
+> 否则 cron 下一轮就把历史邮件全灌一遍（这次 3 封 11-02/11-04 的 NGV 历史信 5 分钟内被
+> 抽成 3 个任务）。回归 +17（`tests/test_mail_fetch.py`，全离线），全量 **853 绿**）
+> —— 前序 1.0.74（2026-11-12 **首次真建单成功 + 建单链固化**：同一份 payload
 > 重试 `erp_quote_create` → `status=created`、`verify.ok=true`、`row_created`/`qty_saved`
 > 均 true，落库 `BJXQ261112008`（NGV10 / 冬季找找图画书 / qty 410000 / 款数 10 / 语言数 10，
 > 走 `product_category` free-text 新产品分支）。→ 1.0.73 判定的「新产品分支写不进数量」
@@ -838,6 +847,58 @@ uv run ./scripts/customer_profile.py --validate     # 一致性校验
 ## 3. 邮件入口 `ingest_email.py`
 
 **传输无关**：谁都可以调，不依赖具体收信方式。
+
+### 3.0 从邮箱拉信 `mail_fetch.py`（1.0.75，2026-11-13）
+
+业务拍板（2026-11-13）：「收信接入流水线 / **不回信** / 暂不按客户分类」。
+
+链路只有一条：
+
+```
+IMAP ──himalaya──▶ pending/<日期>_<主题>.eml ──scan_pending.sh──▶ ingest_email.py ──▶ main.py
+```
+
+**它只做一件事**：把新信落成 `pending/*.eml`。展开附件、写 sidecar、抽字段全部交给
+现成链路（`scan_pending.py` 见到 `.eml` 本来就调 `ingest_email.py`）。这样以后收信方式换成
+IMAP API / 转发 / 共享邮箱，下游一行都不用改。
+
+```bash
+uv run ./scripts/mail_fetch.py --dry-run --verbose   # 只看会拉什么（不写文件、不动台账）
+uv run ./scripts/mail_fetch.py                       # 真拉；没有新信时**一个字都不打印**
+uv run ./scripts/mail_fetch.py --mark-baseline       # 上线用：现有信件记为已处理，不入队
+uv run ./scripts/mail_fetch.py --json                # 结构化汇总（调试/上层程序读）
+```
+
+**六条设计口径（都是踩过才写的）**
+
+1. **不改邮箱状态**：不标已读、不移动 —— 人还要在手机上读信。去重靠本地台账
+   `customer-files/.mail_fetch_state.json`：`from|date|subject` 指纹做前置过滤（省一次下载），
+   `Message-ID` 做兜底（同一封信换了标题/日期再投递也不会重复）。重复的那封**要删掉**，
+   不能留在 pending 里等着被抽两次。
+2. **安静是硬要求**：没有新信 → stdout 空（cron 每 5 分钟跑，骚扰一次就是 bug）。
+   拉起信来才打印一行 `📥 收到 N 封新询价邮件 → pending/（…）`。
+3. **它挂在 `scan_pending.sh` 的第 0 步**，在 `scan_pending.py` **之前**
+   （否则新邮件要等下一个 5 分钟周期）。失败只写 `/tmp/cqr_scan.stderr`，
+   `timeout 150` 兜底，**绝不阻断扫描**。
+4. **配置在 `assets/mail.yaml`**：`account` / `folder` / `page_size` / `max_per_run`（每轮最多落几封，
+   积压时不灌爆队列）/ `skip_senders` / `skip_subjects`。匹配方式是**子串**。
+   系统通知（企业微信登录提醒）、退信（`mailer-daemon@`）、自动回复默认都在跳过名单里；
+   被跳过的也记指纹，免得每轮白扫。
+5. **互斥**：`customer-files/.mail_fetch.lock` 非阻塞 flock，拿不到锁安静退出
+   （和 `scan_pending.py` 一样的规矩，避免两个 cron 重叠时重复落盘）。
+6. **`himalaya` 1.2 的 `--account` 是子命令级选项**，必须写成
+   `himalaya envelope list --account sora …`；放全局位置直接 `unexpected argument '--account'`。
+
+**★ 上线顺序（这次踩了）**：`scan_pending.sh` 改完，**下一轮 cron（≤5 分钟）就会立刻开始收信**。
+所以必须先跑 `--mark-baseline` 再改脚本，或者改完立刻 baseline —— 我第一次是反过来的，
+结果 5 分钟内把邮箱里 3 封历史 NGV 邮件（11-02/11-04 的）灌成了 3 个任务
+（`31aa8f2a…` / `79770a46…` / `f2a65a00…`）。历史邮件人工早就报过价了。
+
+**回归**：`tests/test_mail_fetch.py`（17 项，全离线 `FakeClient`）—— 过滤、指纹去重、
+Message-ID 兜底、单轮上限、dry-run 不写盘、单封失败不影响其余、基线之后历史不入队新信照进、
+文件名清洗、`--account` 位置、以及「cron 入口必须先收信再扫描」这条接线。
+
+邮箱本身怎么配（himalaya / 腾讯企业邮 / pass 加密存口令）见 hermes skill **`himalaya`**。
 
 ### 3.1 `.eml` 怎么读（1.0.33 实单 `CU26070802`）
 
@@ -2501,6 +2562,7 @@ uv run pytest tests/test_pipeline.py -v
 | **1.0.39** | **2026-10-20** | **业务真单复核（`BJXQ260708007` vs 我们的产物）**：`CD`=长/`KD`=宽（NGV 落 `210/148`）、`CPLB` 命中冲形状 → `23.03`（旧规则把 `perfect binding` 一律当 `23.06` PAD头书）、书脊方向改由「装订边 + 版式」推出、`YWY` 确认必须填 `KM`（生成方标记）、CPMS 装订段不许照抄 `ZDFS`（见下） |
 | **1.0.40** | **2026-10-20** | **`erp_view/` → `CQR_Web/` 独立项目**：展示层从技能里抽出来（自带 pyproject / README / tests），技能侧只留 `scripts/erp_viewer.py` 转发壳 + `tests/test_cqr_web_boundary.py` 边界；当前只读、无上传（上传是下一步） |
 | **1.0.58** | **2026-10-30** | **查看器能写答案**（业务：「新增一个回答的文本框，这样我们可以在页面上直接编写答案」）。① 新增 `CQR_Web/answers.py`（纯逻辑，不 import Flask）+ `POST /api/answer`：只改 `question_answers` 的 `answer/status/answered_at`，顺带重算 `Reminder` 快照；有答案 → `confirmed` 并盖 `answered_at`，清空 → 回 `open`，`waived` → 不卡交付；② 详情页清单块每条待确认项带文本框 +「保存答案 / 作废」，未保存草稿存 `state.drafts`（10 秒自动刷新重建 DOM 不丢字，按「产物#第几条#项 id」键）；③ 写盘原子（同目录临时文件 + `os.replace`）、缩进/中文/键序与产出一致；④ **mtime 乐观锁**：页面打开后文件被别人改过 → 409 + 自动重取，不覆盖 agent 刚写的 CPMS；⑤ 拒绝姿势明确：v2 旧产物 409、未知 id/越界记录 404、乱填 status 400、确认但答案空 400；⑥ 页面仍**不许**写 `CPMS`/品名/59 个 ERP 字段；⑦ 新增 `tests/test_cqr_answers.py`（17 项，含 HTTP 层与路径穿越），边界测试把 `answers.py` 也纳入「不许 import Flask / 不许起子进程」 |
+| **1.0.75** | **2026-11-13** | **收信接入流水线（himalaya → pending）**：业务三条「① 收信接入流水线 ② 不需要回信 ③ 先不分类」。新增 `scripts/mail_fetch.py`（stdlib subprocess 封 himalaya，无新依赖）：`envelope list --output json` 扫 INBOX → `message export --full --destination pending/xxx.eml`。**刻意只做落 `.eml` 一件事** —— 展开附件/sidecar/抽取全交给现成链路（`scan_pending.py` 本来就对 `.eml` 调 `ingest_email.py`），以后换收信方式下游不动。接线：`scan_pending.sh` 加**第 0 步**（`timeout 150 uv run ./scripts/mail_fetch.py 2>>/tmp/cqr_scan.stderr`），先收信再扫描、失败不阻断扫描、无新信时 stdout 为空（cron 保持安静）。去重**不改邮箱状态**（不标已读、不移动）：`customer-files/.mail_fetch_state.json` 用 `from\|date\|subject` 指纹前置过滤（省下载）+ `Message-ID` 兜底（换标题/日期再投递也不重复，重复件删掉不留 pending）。配置 `assets/mail.yaml`：`account=sora` / `folder=INBOX` / `page_size=50` / `max_per_run=5` / `skip_senders`（企业微信登录提醒 `10000@exmail.weixin.qq.com`、`mailer-daemon@`、`postmaster@`、`noreply@`）/ `skip_subjects`（自动回复类）；被跳过的也记指纹。互斥用 `.mail_fetch.lock` 非阻塞 flock（同 `scan_pending.py` 规矩）。新增 `--mark-baseline`（现有信件记为已处理、不入队）与 `--dry-run` / `--json`。**踩坑两条**：① `himalaya` 1.2 的 `--account` 是**子命令级**选项，写成全局位置直接 `unexpected argument '--account'`；② **上线顺序**——改完 `scan_pending.sh` 下一轮 cron（≤5 分钟）就开始收信，必须**先** baseline，我这次反着来，5 分钟内把邮箱里 3 封 11-02/11-04 历史 NGV 邮件灌成了 3 个任务（`31aa8f2a…` / `79770a46…` / `f2a65a00…`）。回归 +17（`tests/test_mail_fetch.py`，全离线 `FakeClient`：过滤/指纹去重/Message-ID 兜底/单轮上限/dry-run 不写盘/单封失败不影响其余/基线语义/文件名清洗/`--account` 位置/「先收信再扫描」接线），全量 **853 绿**。邮箱侧配置（腾讯企业邮 + pass 加密口令 + gpg 手工解包）见 hermes skill `himalaya` |
 | **1.0.74** | **2026-11-12** | **首次真建单成功 + 建单链固化为 Skill 一节**：森西「再重试一遍」→ 用**与失败那次完全相同的 payload** 重推 `erp_quote_create`，直接 `status=created`：`bdbh=BJXQ261112008`、`record_id=89d48f0c-1fe3-4786-a768-a078f84e6f21`、`header_saved=true`、`detail_saved=true`、`detail_error=""`、`verify{ok=true,row_created=true,qty_saved=true}`、`product{source=free-text, category=27.01;普通BB书, qty=410000, unit=本}`。列表页回读：数量 410000（最小/中间/最大同值）、规格 `240*330*0`、款数 10、语言数 10、产品类别 普通BB书、产品名称 `冬季找找图画书(FSC Mix)`（ERP 自动追加 FSC 后缀）、预计下单/交货 2027-03-15、装订 快线BB书、包装 纸箱包装、是否有配件 否、产品类型 新产品、修改记录 无、香港单号 `CU26111201`（ERP 生成）、制单人 张爽。→ **1.0.73 的「free-text 分支写不进数量」是当时服务端没接好，现已修；我们这侧唯一硬约束是「`qty_1` 绝不显式传」**。三个新认知落文档：① 成功那次的 `save_product.message` **仍带**「请输入【产品数量】」页面 alert —— 噪音，判成败只看 `status`+`verify`；② 建完立刻 `erp_quote_detail` 有一大片 null（`CPSL1..10`/`DWMC`/`JHRQ`/`WCRQ`/`CPSX`/`CPLX`/`FSCMC`/`ZXLB`…，展示态禁用控件渲染不出值），**核验必须用 `erp_quote_list`**；③ `scripts/erp_push.py` 需 `ERP_MCP_TOKEN`（仓库/profile 均未落盘）→ 直跑 `HTTP 401 missing_bearer`，当下推单走 MCP 工具。**Skill 侧固化**：新增 `references/erp-quote-push-runbook.md`（通道选择 / 三步走 / 数量口径 / 判成败 / 回读口径 / 其它坑 / 成功样本 / 本机工具坑），SKILL §4「最后一步：推进 ERP」整节重写为**干跑 → 落库 → 列表页回读**四步（旧版「59 键只能写 24 个 / `CPLB` 写不进 / 产品名必须命中产品档案」三段已作废）。文档 `docs/erp-push-字段口径.md` §5.2/§5.2.1/§5.2.2 同步改写。全量 **834 绿** |
 | **1.0.73** | **2026-11-12** | **对齐服务端 pydantic 入参（`inputSchema` 当真值源）**：森西「去查看 `erp_quote_create` 的入参数据格式和类型，我们已经做了 pydantic 类型注释」→ 直接拉 MCP `tools/list`，把 `inputSchema` 存成 `assets/erp_quote_create_schema.json`（27KB，含 `$defs.QuoteProductInput` / `QuoteProductFields`），用作唯一事实源。**重大发现**：`products[]` 除 `name/spec/qty` 外还有 **`product_category`** ——「产品档案搜不到时必填，给了就不要求档案存在，明细行照建」，值就是我们的 `CPLB`（`27.01;普通BB书`）。也就是说卡了三轮的「产品档案」坎，协议早就给了出路，只是我们没传这个参数。类型分布：明细 51 字段 = **31 string / 17 number / 4 boolean**；`number` 拒收 `"240"`、`boolean` 拒收 `"否"`（pydantic 直接 422，主表都建不了）→ `erp_mcp_export` 新增 `FIELD_TYPES`（从 schema 读，不手抄）+ `_coerce_fields()` 强转（掰不动的字段丢弃并报错）+ `validate_call()` 离线自检（`erp_push` 发送前必跑）。另修两坑：① **`qty_1` 不能显式传**，协议 §7 说 `create()` 只在没给 `qty_1` 时才补隐藏的 `txtCPSL`，给了就只写展示框 `txtCPSL1` → 「请输入【产品数量】」；② `_classify` 先判 `bdbh` 会把 `failed`/`partial` 报成 `created`（`failed` 也带 `bdbh`）—— `BJXQ261112007` 就这样被误报成功过一次。**实测结论**：`product_category` 成功绕过档案检索（报错文案随之改成"新产品请指定类别"），但**新产品分支写不进「产品数量」**——6 个变体（只 `qty` / +`qty_1` / +`unit` / `category=27.01` / `category=普通BB书` / `languages=1`）报错完全一致 `save_product.ok=true, verify.ok=false, 产品明细行没有落库`；对照组协议 51 字段样例（`name=512961503`，档案能命中）`status=created` → 判定服务端 free-text 分支缺数量写入，待修。实验产生的 5 条空单（`BJXQ261112007~011`）已全部 `erp_quote_delete` 清掉；记一笔：**删除后单号会被复用**，认单请认「主表备注」追溯串。回归 +9，全量 **834 绿** |
 | **1.0.72** | **2026-11-12** | **导出即 MCP 入参（一份文件、一套字段名）**：森西「导出的 ERP 格式改成 MCP input 格式，字段名、格式一致，这样导出只需要一份文件」。新增 `scripts/erp_mcp_export.py`：59 键 → `erp_quote_create` 的 **arguments**（数组，每元素一次调用）`[{customer, remark, products:[{name, spec, qty, fields}]}]`，`fields` 里全是 MCP 字段名（`binding`/`packing`/`has_parts`/`qty_1`…，与 `erp_quote_product_form` 的 `upload.json_schema` 对齐），内部字段（`ID`/`version`/`question_answers`/`CPMC_ZH`）一个不漏出去。**映射表只此一份**：`erp_push.py` 里的副本全删，改成从 `erp_mcp_export` re-export（老测试/老调用不受影响），`push()` 检测到 MCP 格式就**原样发送**，只有旧 59 键文件才现场翻一次。`main.py` 3b 改调 `export_calls()`（客户代号从 `profile.rule("erp_khzl")` 烘进去，推送时 `--customer/--qty/--date` 变成可选覆盖）。文件名**仍是** `*.erp-import.json`：仓库 20+ 处靠这个后缀识别侧档（查看器/cpms_todo/migrate/backfill），改名会静默把副本当主产物。同批修 3 个坑：① `SFYPJ` 产物里是字符串 `"否"` 时按布尔判真 → `has_parts` 写成「是」；② `qty` 业务口径 = **单款本数**，落库 `txtCPSL1` 要 ×款数（`--qty 41000`+TZS 10 → 410000），`CPSL1..10` 各档同样 ×款数；③ 产品档案不命名单列 `archive_missing` + `lost_header` 提示清空单。实测：本单 `status=dry_run`、36 个 fields 全过 ERP 校验、`qty_landed=410000`。回归 +6，全量 **825 绿** |
