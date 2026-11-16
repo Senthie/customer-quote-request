@@ -22,9 +22,13 @@ skip_senders:
   - postmaster@
   - no-reply@
   - noreply@
+  - relay@relay.firefox.com       # Mozilla Firefox Relay 营销信（2026-11-13 落成空单）
+  - "@relay.firefox.com"          # 同上，域名兜底（今后可能换发件地址）
 
 skip_subjects:
   - 企业微信邮箱登录提醒
   - 自动回复
   - Auto-Reply
   - Out of Office
+  - Firefox Relay                  # 营销/产品通知，不是询价
+  - "欢迎来到 ⁨Firefox"            # 中文本地化标题带 U+2068/U+2069 方向控制符
