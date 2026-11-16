@@ -125,6 +125,19 @@ error: Error executing tool erp_quote_create: 产品档案里找不到 '冬季�
 
 `CPMS` 正文里写的合计数**不会**自动进 `CPSL1` —— 产物档位是 0 时必须显式 `--qty`。
 
+### 4.1 `CPMS` → `product_desc` 要剥概要行（2026-11-16 实测）
+
+| 环节 | 概要行 |
+| --- | --- |
+| 59 键产物 `CPMS` | **保留**（`cpms_lint` 的 CPMS010 要求它、业务要看） |
+| 发给 ERP 的 `product_desc` | **剥掉**（`strip_cpms_header()` 自动处理） |
+| ERP 里最终存的 `CPMS` | 只有 ERP 自己渲染的那一行 |
+
+原因：ERP 需求录入页会按 `Drop_SJFX / CD / KD / GD / TZS` 自主生成概要行，我们再传一份
+就变成两行。证据：实测 `BJXQ261113003` / `BJXQ261113004` 发出时 1 次、ERP 里 2 次；
+语料 18395 份 ERP 快照中 18348 份（**99.74%**）只有 1 次。回归测试
+`tests/test_cpms_header_dedup.py`。
+
 ## 5. 服务端 pydantic 入参（2026-11-12 拉 `tools/list` 核对）
 
 `assets/erp_quote_create_schema.json` = 服务端 `erp_quote_create.inputSchema` 快照

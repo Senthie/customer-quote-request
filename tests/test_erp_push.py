@@ -107,7 +107,7 @@ def test_51字段映射(tmp_path: Path):
     assert f["product_type"] == "新产品"        # CPLX
     assert f["cases"] == 10                     # TZS
     assert f["languages"] == 10                 # YYS
-    assert f["product_desc"].startswith("书籍方向")  # CPMS
+    assert "product_desc" in f                  # CPMS —— 概要行见 test_cpms_header_dedup
     assert f["unit"] == "本"                    # DWMC
     assert f["product_group"] == "书版"         # CPDL
     assert f["customer_order_no"] == "CU001"    # KHDH（明细级 txtKHCPMC）

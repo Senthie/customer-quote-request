@@ -39,6 +39,9 @@ from typing import Any, Optional
 
 CPMC_PLACEHOLDER = "【中文品名待定】"
 
+# CPMS 概要行：ERP 页面自己会用「书籍方向 / 产品规格 / 款数」生成这一行。
+CPMS_HEADER_PREFIXES = ("书籍方向：", "产品规格：")
+
 # ★ 入参类型以服务端 pydantic 模型为准（`erp_quote_create.inputSchema` 就是它生成的）。
 #   存一份在 assets 里当"单一事实源"，改协议时重抓一次即可，
 #   **不要把类型手抄成第二份会漂移的常量**。
@@ -184,6 +187,41 @@ def _norm_value(key: str, val: Any) -> Any:
             return text
         return "是" if text else "否"
     return val
+
+
+def strip_cpms_header(text: Any) -> Any:
+    """把 CPMS 开头的**概要行**剥掉 —— 这行 ERP 会自己生成，我们不能再写。
+
+    2026-11-16 实测（BJXQ261113003 / BJXQ261113004）：我们只发了一份概要行，
+    ERP 的需求录入页却按 `书籍方向 / 产品规格 / 款数` 再生成一行，存下来是两份。
+    历史语料 18395 份单里 **18348 份（99.74%）概要行只出现一次** —— 说明这行
+    本来就不该由录入方提供文本，靠字段渲染即可。
+
+    只剥**开头连续**的概要行（含紧跟的空行）；正文中间出现同样的字不复原不动。
+    剥完若什么都不剩（整段 CPMS 只有概要行），原样返回 —— `product_desc` 是
+    ERP 必填，宁可重复一行也不要把字段清空。
+    """
+    if not isinstance(text, str) or not text.strip():
+        return text
+    lines = text.split("\n")
+    idx = 0
+    removed = False
+    while idx < len(lines):
+        current = lines[idx].strip()
+        if not current:
+            break
+        is_header = (current.startswith("书籍方向：")
+                     or (current.startswith("产品规格：") and "【" in current))
+        if not is_header:
+            break
+        removed = True
+        idx += 1
+        while idx < len(lines) and not lines[idx].strip():   # 吃掉概要行下面的空行
+            idx += 1
+    if not removed:
+        return text
+    stripped = "\n".join(lines[idx:])
+    return stripped if stripped.strip() else text
 
 
 def _coerce_fields(fields: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -341,6 +379,10 @@ def build_call(
         if val in (None, "", []):
             continue
         fields[arg] = _norm_value(key, val)
+
+    # ★ 概要行剥掉：ERP 会按 书籍方向/产品规格/款数 自己生成一行，我们写了就重复
+    if "product_desc" in fields:
+        fields["product_desc"] = strip_cpms_header(fields["product_desc"])
 
     # 数量档位：**只有第 2 档起**才显式传 qty_n（每档都是总量 = 单款 × 款数）。
     # ★ `qty_1` 绝不能显式传：`create()` 只在没给 qty_1 时才补隐藏的 `txtCPSL`，
