@@ -34,11 +34,18 @@ UNIT_ALIASES = {
     "行": "行", "列": "列", "个": "个", "套": "套", "袋": "袋", "箱": "箱",
 }
 TOKEN_RE = re.compile(
-    r"(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>gsm|kpa|kn/m|mm|cm|pp|p|g|丝|色|颗|张|本|款|行|列|个|套|袋|箱)?(?![a-z])",
+    r"(?<!\d)(?P<num>\d+(?:\.\d+)?)(?!\d)\s*"
+    r"(?P<unit>gsm|kpa|kn/m|mm|cm|pp|p|g|丝|色|颗|张|本|款|行|列|个|套|袋|箱)?(?![a-z])",
     re.IGNORECASE,
 )
 # 料号/编号：字母开头 + ≥2 位数字；排除 `UV/0C` 这类印色写法
 CODE_RE = re.compile(r"[A-Z]{2,}[-/]?\d{2,}[A-Z0-9/-]*|\d{3,}#", re.IGNORECASE)
+# 数字开头 + 大写字母的料号（`37SI` / `38BA`，2026-11-17 实测漏认）。
+# ★ 刻意**大小写敏感**：`16sheets` / `140gsm` / `300mm` 是「数字 + 单位/单词」，
+#   不是料号 —— 带 IGNORECASE 会把它们全收进来，每份 CPMS 多报一堆假料号。
+CODE_DIGIT_RE = re.compile(r"\d{2,}[A-Z]{2,}(?:[-/]\d+)*")
+# 「数字 + 这些后缀」是单位/量词，不是料号
+_FAKE_CODE_SUFFIX = {"mm", "cm", "gsm", "pp", "kpa", "kn", "g", "sheets", "sheet", "pages"}
 
 # 需要「同数字 + 兼容单位」才认账的物理单位（其余计数词按数字溯源即可）
 PHYSICAL_UNITS = {"g", "mm", "cm", "pp", "kpa", "kn/m", "丝"}
@@ -73,7 +80,21 @@ def tokens(text: str) -> list[tuple[str, str, str]]:
 
 
 def codes(text: str) -> list[str]:
-    return [c.strip() for c in CODE_RE.findall(text) if re.search(r"\d", c)]
+    """料号清单（两种形态：`PR-00091345` / `37SI`）。
+
+    ★ 2026-11-17 实测缺陷：CPMS 写客户原码 `37SI`，`TOKEN_RE` 把它回溯成 `3`
+    （`\\d+` 匹配 `37` 后 `(?![a-z])` 因 `S` 失败 → 退成 `3`，`7` 是数字不算字母边界），
+    而 `_has_number('3')` 要求独立数字 → 判「无出处」，客户原码被报成硬伤。
+    """
+    out = [c.strip() for c in CODE_RE.findall(text) if re.search(r"\d", c)]
+    for raw in CODE_DIGIT_RE.findall(text):
+        token = raw.strip()
+        m = re.match(r"\d+", token)
+        suffix = token[m.end():].lower() if m else ""
+        if suffix in _FAKE_CODE_SUFFIX:
+            continue
+        out.append(token)
+    return out
 
 
 # 灰板 thickness↔克重换算（业务 2026-10-19 拍的规范：灰板一律写 g）。

@@ -55,7 +55,10 @@ EXPECTED_VALUES = {
 #    同类字段（TBLX/SHDQ/ZXLB/ZBLX/ZXFS/DKMC/YSLX/BZ/chkBSYTB）仍在名单里：
 #    这个样本里**没有**它们的证据，所以必须保持模板默认值 —— 正好守住「不许瞎猜」。
 UNTOUCHED = [
-    "BDBH", "YWY", "KHZL", "GDY", "Remark", "CPMX",
+    "BDBH", "KHZL", "GDY", "Remark", "CPMX",
+    # YWY 2026-11-17 移出：它是**客户无关的生成方标记**（业务 2026-10-20：我们生成的
+    # 单据必须填 `KM`），已落进公共层 `customers/_defaults.yaml` 的 erp_fixed —— 脚本
+    # 写它有值是对的。此前只在 ngv.yaml 声明，未建档客户/igl 的产物 YWY 全空。
     "TBLX", "FSCMC", "OLD_KHDDH", "SFYPJ", "Remark1",
     "CPLX", "KHDDH", "ZXLB", "ZBLX", "ZXFS", "DKMC",          # ECPMC 2026-10-21 移出：igl 已开
     "YSLX", "SHDQ", "KHDQ", "BGMS", "Remark4", "Remark3",

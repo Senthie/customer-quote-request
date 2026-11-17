@@ -519,9 +519,20 @@ class CustomerProfile:
                 reasons.append(f"文件名含 '{kw}'")
 
         for dom in self.detect.get("sender_domains") or []:
-            if norm_label(dom) and norm_label(dom) in sender_n:
+            if not norm_label(dom):
+                continue
+            if norm_label(dom) in sender_n:
                 score += 30
                 reasons.append(f"发件人域名 '{dom}'")
+            elif norm_label(dom) in haystack:
+                # ★ 2026-11-17：同事转发的询价（`Fw: WG: Anfrage …`）里，
+                #   `.txt` 抬头没有 `From:`（发件人是我们自己），原文真正的客户地址
+                #   只在正文引文里（`Von: S.Smolinski@ullmannmedien.com`）。
+                #   旧实现只比对 sender → 转发件一律掉进 generic（当日 5 份全中）。
+                #   正文里出现该客户域名给 20 分（低于发件人的 30 分），
+                #   仍打不过别家 100 分的特征标签命中，不会抢错客户。
+                score += 20
+                reasons.append(f"正文含客户域名 '{dom}'（转发件）")
 
         for kw in self.detect.get("subject_keywords") or []:
             if norm_label(kw) and norm_label(kw) in subject_n:

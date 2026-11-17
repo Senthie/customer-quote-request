@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from email import policy
 from email.parser import BytesParser
+from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -65,7 +66,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ],
     "skip_subjects": [
         "企业微信邮箱登录提醒",
+        "已设置将邮件转发",          # 腾讯企业邮「转发设置」系统通知（无产品字段）
+        "已设置自动转发",
     ],
+    # 自家域名：发件人在这些域名、而 To/Cc 里有外部收件人 = 我们外发的回信，不是询价。
+    # 留空 = 不启用方向判断（保持旧行为）。
+    "self_domains": [],
 }
 
 
@@ -250,6 +256,55 @@ def message_id_of(eml_path: Path) -> str:
         return ""
 
 
+# ── 外发邮件识别（收信侧的「方向」判断）────────────────────────────────
+
+def _domain_of(addr: str) -> str:
+    return (addr or "").rsplit("@", 1)[-1].strip().strip(">").strip().lower()
+
+
+def _is_self_domain(domain: str, self_domains: list[str]) -> bool:
+    return any(domain == d or domain.endswith("." + d) for d in self_domains if d)
+
+
+def outbound_reason(eml_path: Path, cfg: dict[str, Any]) -> str:
+    """判断这封是不是**我们自己外发的回信**（不是客户询价）。
+
+    ★ 2026-11-17 实测：邮箱把本公司发出的回信也收进来了 —— `Re: PO16528 …`、
+      `Re: AW: Lidl 10-2026 …`、`Re: KHDD26100021 …`、`Ndeues Möbel …` 四封
+      被当成询价抽成空单（正文全是进度往来 / ozalid 通知，没有任何询价字段）。
+
+    **不能简单按「发件人是我方域名」全砍**：同事把客户询价转发给业务
+    （`Fw: WG: Anfrage …` → `marklin@ghouseproducts.com`）发件人也是我方域名，
+    那是**真询价**，必须保留。
+
+    判据（方向）：From 全在自家域名 + `To`/`Cc` 里**存在外部收件人** → 外发。
+    转发件的收件人全在自家域内，因此不会误砍。
+    """
+    self_domains = [str(d).lower().strip().lstrip("@")
+                    for d in (cfg.get("self_domains") or []) if str(d).strip()]
+    if not self_domains:
+        return ""
+    try:
+        with open(eml_path, "rb") as fh:
+            msg = BytesParser(policy=policy.default).parse(fh)
+    except Exception:
+        return ""
+
+    senders = [a for _n, a in getaddresses(msg.get_all("From") or []) if a]
+    if not senders:
+        return ""
+    if not all(_is_self_domain(_domain_of(a), self_domains) for a in senders):
+        return ""          # 发件人在外部 → 正常收信，放行
+
+    rcpts = []
+    for header in ("To", "Cc"):
+        rcpts += [a for _n, a in getaddresses(msg.get_all(header) or []) if a]
+    external = [r for r in rcpts if not _is_self_domain(_domain_of(r), self_domains)]
+    if not external:
+        return ""          # 收件人全在自家域内 = 内部转发，保留
+    return f"外发邮件（我方 → {external[0]}），不是客户询价"
+
+
 # ── 主流程 ────────────────────────────────────────────────────────────
 
 def fetch(client: Any, pending_dir: Path, state_path: Path, cfg: dict[str, Any],
@@ -311,6 +366,28 @@ def fetch(client: Any, pending_dir: Path, state_path: Path, cfg: dict[str, Any],
 
         msgid = message_id_of(target)
         dedupe_key = msgid or fp
+
+        # ★ 2026-11-17：方向判断 —— 我们自己外发的回信不进流水线。
+        #   必须放在**下载之后**（信封里没有 To/Cc），也放在 Message-ID 去重之前，
+        #   这样外发邮件同样记进台账，不会每轮重复下载。
+        out_reason = outbound_reason(target, cfg)
+        if out_reason:
+            target.unlink(missing_ok=True)
+            prints[fp] = msgid
+            if dedupe_key:
+                seen[dedupe_key] = {
+                    "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "eml": "",
+                    "from": env.sender,
+                    "subject": env.subject,
+                    "date": env.date,
+                    "outbound": True,
+                }
+            result["skipped"].append({"id": env.id, "subject": env.subject,
+                                      "reason": out_reason})
+            logger(f"  · 跳过 [{env.id}] {env.subject[:40]} — {out_reason}")
+            continue
+
         if msgid and msgid in seen:
             target.unlink(missing_ok=True)
             prints[fp] = msgid

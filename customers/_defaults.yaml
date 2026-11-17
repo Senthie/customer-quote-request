@@ -43,7 +43,10 @@ fields:
   group_series_number:  ["Group/Series Number"]
   isbn:                 ["ISBNs of All Titles", "ISBNs", "ISBN"]
   project_description:  ["Project description"]
-  size:                 ["Size (tps) H x W x D mm", "Size"]
+  # ★ 2026-11-17 补 `TPS` / `Trim size` / `Finished size`：Priddy、Nosy Crow、Ullmann
+  #   这类英文询价把尺寸写成 `TPS: 215(w) x 280(h) - portrait`，旧别名表认不出
+  #   → 尺寸整条丢掉（`size` 空 → CD/KD 落 0）。中文写法一并补。
+  size:                 ["Size (tps) H x W x D mm", "Size", "TPS", "Trim size", "Trimmed size", "Finished size", "Finished Size (w x h)", "尺寸", "成品尺寸"]
   format:               ["Format"]
   extent:               ["Extent (pp + cover)", "Extent"]
   text_printing_spec:   ["Text Printing Spec"]
@@ -64,6 +67,11 @@ erp_fixed:
   YYS: 1
   PXH: 1
   KHMBDJ: 0
+  # 业务员（YWY）：业务 2026-10-20 定 —— 我们生成的单据**必须**填 `KM`。
+  # 这是「生成方标记」不是 ERP 真人（`erp_mcp_export` 故意不把它传给 ERP，见该文件 445 行）。
+  # ★ 2026-11-17 修：此前只在 `customers/ngv.yaml` 里声明 → 未建档客户（generic）与 igl
+  #   的产物 YWY 全是空的（当日 5 份 generic 产物实测），而它是**客户无关**的恒定标记。
+  YWY: KM
 
 erp_defaults:
   # 客户目标价币种：公共默认美元。业务 2026-10-30 定口径 —— 这是**默认值**不是固定值，

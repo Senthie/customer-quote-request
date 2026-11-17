@@ -54,6 +54,14 @@ SAMPLES_DIR = REPO_ROOT / "customer-files" / "samples"
 
 # 布局/取值兜底常量
 DEFAULT_UNIT = "mm"
+# 尺寸对「A x B」的兜底识别（`Format:` / `TPS:` 自由文本里捞尺寸用，见 size_from_text）。
+#   `140x198mm` / `300mm x 220mm` / `215(w) x 280(h)` 都能命中；
+#   单数字（`4 x 17.500` 这类数量写法）因为要求两边数字 ≥2 位而不会误命中。
+SIZE_PAIR_RE = re.compile(
+    r"(\d{2,4}(?:[.,]\d+)?)\s*(?:mm|cm)?\s*(?:\([A-Za-z]{1,3}\))?\s*[x×*]\s*"
+    r"(\d{2,4}(?:[.,]\d+)?)\s*(mm|cm)?\s*(?:\([A-Za-z]{1,3}\))?",
+    re.IGNORECASE,
+)
 # 单文件通道支持的格式（文件夹/压缩包里的成员由 input_unit 逐个筛，规则一致）
 # `.xlsm` = xlsx + VBA 宏（2026-10-29 Lidl/NGV 附件实测，读数据不需要宏）
 SUPPORTED_INPUT_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls", ".docx", ".txt", ".pdf")
@@ -613,6 +621,44 @@ def parse_single_quantity(text: str, logger: Optional[Logger] = None) -> Optiona
         logger.warn(f"  数量 {text!r} 解析不出（{len(numbers)} 个数字、无可识别写法）"
                     f"—— CPSL1 保持默认值 0，需人工确认")
     return None
+
+
+def _size_number(chunk: str) -> Optional[float]:
+    """尺寸里的数字：`25,3`（欧式小数逗号）→ 25.3，`140` → 140。
+
+    与 `_de_number` 的区别：尺寸不会上千，**不猜千分位** —— 一个逗号 + 1~2 位小数
+    就是小数（`25,3 cm` 是 Lidl 的写法），其余按整数取。
+    """
+    text = str(chunk or "").replace(" ", "")
+    if re.fullmatch(r"\d+,\d{1,2}", text):
+        return float(text.replace(",", "."))
+    return _to_number(text)
+
+
+def size_from_text(text: Any) -> str:
+    """从 `Format:` / `TPS:` 这类自由文本里捞出**第一组** `A x B` 尺寸。
+
+    ★ 2026-11-17 实测（4 份未建档客户）：尺寸明明写在 `Format:` 行
+      （`140x198mm` / `300mm x 220mm - trimmed.` / `215(w) x 280(h) - portrait`），
+      但 `size` 规范键只认 `Size` / `尺寸` 标签 → `CD/KD` 全落 0。
+      这里只在 `size` 缺失时兜底，且**必须真的出现 A x B** 才认
+      （`PB` / `Hardback` / `Portrait` 这类不含尺寸的写法不会触发）。
+    """
+    if not text:
+        return ""
+    m = SIZE_PAIR_RE.search(str(text))
+    if not m:
+        return ""
+    unit = (m.group(3) or "").strip().lower()
+    try:
+        first = _size_number(m.group(1))
+        second = _size_number(m.group(2))
+    except (TypeError, ValueError):
+        return ""
+    if first is None or second is None:
+        return ""
+    factor = 10 if unit == "cm" else 1
+    return f"{_num(first * factor)} x {_num(second * factor)} mm"
 
 
 def parse_size(size_str: str, profile: CustomerProfile, logger: Logger) -> dict:
@@ -1187,6 +1233,14 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     # ── 6. 规格 CD / KD / GD ───────────────────────────────
     logger.field_mapping("CD/KD", 27, total_fields)
     size_str = customer_data.get("size")
+    # ★ 2026-11-17：`size` 只认 `Size` / `尺寸` 标签，而很多客户把尺寸写在
+    #   `Format:` / `TPS:` 行里 → CD/KD 全 0（当日 4 份未建档客户全中）。
+    #   只在 size 缺失时回落，且要求 format 里真的出现 A x B（不是所有 format 都是尺寸）。
+    if not size_str:
+        size_str = size_from_text(customer_data.get("format"))
+        if size_str:
+            logger.warn(f"  size 规范键为空 → 从 format 取尺寸 {size_str!r}"
+                        f"（按书写顺序落 CD/KD，需人工核一眼）")
     # 档案 rules.size.zero_tops：该类别录系统时尺寸一律写 0/0/0。
     # 业务依据（2026-09-24）：NGV 的套装（盒子 —— 卡盒、卡片+底座组合）不按单件尺寸录入。
     # 附件的 TPS 是盒内卡片的尺寸（160x104 / 100x155），但 ERP 记录里 CD/KD/GD 全是 0。
@@ -2400,7 +2454,11 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
 
         if source == "兜底" and probe_texts:
             try:
-                candidates = auto_detect(probe_texts, filename=unit.stem)
+                candidates = auto_detect(
+                    probe_texts, filename=unit.stem,
+                    sender=email_meta.get("sender", ""),
+                    subject=email_meta.get("subject", ""),
+                )
                 if candidates:
                     profile = candidates[0][0]
                     source = "自动识别（文件内容）"
