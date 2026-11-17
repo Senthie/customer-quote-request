@@ -166,6 +166,9 @@ FIELD_DEFAULTS: dict[str, tuple[Any, str]] = {
 }
 
 # 装订方式按产品类别推导（产物 CPLB 形如 `27.01;普通BB书`）
+"""【已停用 2026-11-17】按类别推装订：历史单里 `普通BB书` 快线/慢线各占一半，
+# 猜错率高。现在统一走「判断不出 → ERP 第一个合法值占位 + CPMS 标明」的口径
+# （见 docs/erp-push-字段口径.md §4.0）。常量保留只为说明这段历史，不要再用。"""
 BINDING_BY_CATEGORY: tuple[tuple[str, str], ...] = (("BB", "快线BB书"),)
 
 # 59 键里**确实**写不进的 4 个（2026-11-12 按 51 字段协议核对）
@@ -342,7 +345,10 @@ def apply_defaults(record: dict[str, Any], fields: dict[str, Any]
         if "套装" in cplb:
             out["binding"] = ("套装", "客户没提装订 + 类别是套装 → 套装（2026-11-16 口径的例外）")
         else:
-            out["binding"] = ("快线BB书", "客户没提装订方式 → 业务缺省 快线BB书（2026-11-16 森西）")
+            # 2026-11-17 森西：判断不出就落 ERP **第一个合法值**（不是快线BB书），
+            # 产物侧已在 CPMS/确认清单里标明「需业务自行判断」。
+            out["binding"] = ("胶装/PAD书",
+                              "判断不出装订方式 → ERP 第一个合法值占位（2026-11-17 森西）")
 
     for key, (val, reason) in FIELD_DEFAULTS.items():
         arg = PRODUCT_FIELD_MAP.get(key)

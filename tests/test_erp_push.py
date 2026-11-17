@@ -290,7 +290,7 @@ def test_可兜底的必填缺了不拦但记进defaulted(key: str, tmp_path: Pa
 
 
 def test_兜底值本身符合业务口径(tmp_path: Path):
-    """CPSX→三岁以下、CPLX→新产品、Remark1/3→无、BB 类目→快线BB书。"""
+    """CPSX→三岁以下、CPLX→新产品、Remark1/3→无、装订缺省→ERP 第一个合法值。"""
     rec = _rec(ZDFS="", Remark1="", CPSX=None, CPLX="", Remark3="")
     payload, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
     assert problems == []
@@ -299,14 +299,18 @@ def test_兜底值本身符合业务口径(tmp_path: Path):
     assert fields["product_type"] == "新产品"
     assert fields["parts_desc"] == "无"
     assert fields["modify_log"] == "无"
-    assert fields["binding"] == "快线BB书"
+    assert fields["binding"] == "胶装/PAD书"
 
 
-def test_没提装订就默认快线BB书_套装例外(tmp_path: Path):
-    """2026-11-16 森西：「没有提到就默认快线BB书」；套装类仍落「套装」。"""
+def test_没提装订就落ERP第一个合法值_套装例外(tmp_path: Path):
+    """2026-11-17 森西：「没办法判断装订方式时默认选择第一个值」；套装类仍落「套装」。
+
+    ★ 旧口径（2026-11-16「没提到就默认快线BB书」）已作废 —— 把 224pp 锁线胶装书
+    标成 BB 书是错标。产物侧会同时留一条 `Q_ZDFS` 确认项供业务判断。
+    """
     rec = _rec(ZDFS="", CPLB="01.02;精装书")
     payload, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
-    assert payload["products"][0]["fields"]["binding"] == "快线BB书"
+    assert payload["products"][0]["fields"]["binding"] == "胶装/PAD书"
     assert not any("binding" in p for p in problems), problems
 
     rec2 = _rec(ZDFS="", CPLB="32.00;其它套装")

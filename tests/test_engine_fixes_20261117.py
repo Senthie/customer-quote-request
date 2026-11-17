@@ -180,3 +180,48 @@ def test_客户原码不再误报无出处():
 def test_字母开头的料号仍然认():
     assert A.codes("PR-00091345") == ["PR-00091345"]
     assert A.codes("CU26082501") == ["CU26082501"]
+
+
+# ── 6. 装订占位值必须在 CPMS 里标明（2026-11-17 森西）────────────────────
+def _placeholder_record() -> dict:
+    return {
+        "question_answers": [{
+            "id": "Q_ZDFS", "field": "ZDFS",
+            "question": ("装订方式无法判断（客户原文未给出可识别的装订方式）→ "
+                         "已按 ERP 第一个合法值「胶装/PAD书」落库，需业务自行判断"),
+            "answer": "", "status": "open", "blocking": False, "source": "pipeline",
+            "asked_at": "2026-11-17", "answered_at": None,
+        }],
+        "CPLB": "23.01;无线胶装书", "CD": 140, "KD": 198, "GD": 0,
+        "TZS": 4, "CPSL1": 4000, "DWMC": "本", "CPMS": "",
+    }
+
+
+def test_装订占位值未在CPMS标明会被抓():
+    import cpms_lint as L
+
+    spec = L.load_spec()
+    cpms = "产品规格：【140*198*0】\n装订：锁线胶装\n"
+    codes = {f.code for f in L.lint_text(cpms, spec, _placeholder_record())}
+    assert "CPMS081" in codes
+
+
+def test_装订占位值已标明就不报():
+    import cpms_lint as L
+
+    spec = L.load_spec()
+    cpms = ("产品规格：【140*198*0】\n装订：锁线胶装\n"
+            "备注：装订方式无法判断值，需业务自行判断\n")
+    codes = {f.code for f in L.lint_text(cpms, spec, _placeholder_record())}
+    assert "CPMS081" not in codes
+
+
+def test_没有装订占位项时不报CPMS081():
+    import cpms_lint as L
+
+    spec = L.load_spec()
+    record = _placeholder_record()
+    record["question_answers"] = []          # 装订有证据 / 没这项
+    cpms = "产品规格：【140*198*0】\n装订：锁线胶装\n"
+    codes = {f.code for f in L.lint_text(cpms, spec, record)}
+    assert "CPMS081" not in codes

@@ -1,0 +1,160 @@
+# ═══════════════════════════════════════════════════════════════
+# 客户档案：Ullmann Medien（德国乌尔曼）
+#
+# status: calibrated ✅ 2026-11-17
+#   校准样本：1 份真实询价（S.Smolinski@ullmannmedien.com，
+#             「Anfrage -- Crime Mysteries und Rätseluniversum FJ27」，2026-10-21）
+#   + ERP 语料 UMG19 共 787 份（2023–2026，见 derive_customer_defaults 报告）。
+#
+# 附件/邮件长什么样：
+#   纯文本德文询价，正文就是一封「规格清单」，**没有表格附件**：
+#
+#     ich bitte Sie um ein Angebot einer Aktion im Umfang von 4 Titeln:
+#     No. / Title / ISBN / Edition   ← 款名表（每款 Edition 4.000）
+#     total                          16.000
+#     Format:             140x198mm
+#     Extent:             T01+03: 224pp content +4pp cover
+#     Content:            4/4c (euroscale) on 120 gsm Offset paper, FSC mix
+#     Cover:              4/0c (euroscale) on 300 gsm C1S artboard, FSC mix + …
+#     Binding:            Softcover, perfect binding
+#     Packaging:          title by title packed in jumbo cartons, stacked on europallets (EPAL)
+#     Delivery:           FOB Yantian; date: tbc
+#     Bitte senden Sie mir das Angebot bis zum 28.10.26 zu.
+#
+#   所以布局策略是 `text_lines`（`标签:           值` 的平铺键值对），
+#   款数/数量走 `rules.scan` 正则（「im Umfang von 4 Titeln」/「total 16.000」）。
+#
+# 语料口径（UMG19，787 份）：
+#   BZFS 纸箱包装 100% / SHFS FOB 盐田 94%（另 工厂自提 44）/ 三个 chk* 全 false
+#   TBLX 不稳定（不打卡板 472 vs 欧标松木卡板 337）→ **不设默认**，交业务
+#   GD 恒 0（818/824）→ `thickness.enabled: false`，不按页数推算
+#   CPLB 方脊精装书 208 / 锁线胶装书 66 / 无线胶装书 62 / 普通BB书 53 / PAD头书 47
+#        → 装订写法决定，见 rules.cplb.map
+#   ZDFS 精装书 232 / 胶装-PAD书 210 / 线圈书 81 / BB书 148 —— **确实多样**，
+#        判断不出时按 2026-11-17 口径落 ERP 第一个合法值占位 + 留确认项
+# ═══════════════════════════════════════════════════════════════
+id: ullmann
+name: Ullmann Medien
+priority: 40
+status: calibrated
+# ERP 客户资料代码（KHZL）—— 语料里只有 UMG19 一个
+erp_khzl: [UMG19]
+notes: >
+  Ullmann Medien GmbH（德国，Rolandsecker Weg 30）。日常联系人
+  Sophia Smolinski（Projektmanagerin Herstellung）。
+  询价是**纯文本德文邮件**：款名表 + 「Format/Extent/Content/Cover/Binding/Packaging/Delivery」
+  七行规格。报价截止日期写在正文末尾（「Bitte senden Sie mir das Angebot bis zum …」），
+  客户常同时问增价项（Fadenheftung 锁线、80mm Klappe 勒口、Farbschnitte 书口刷色）。
+
+detect:
+  filename_keywords: []
+  # ★ 只用「这一家才会写」的标记：Anfrage/Angebotsfrist 之类德文词 NGV 也在用，
+  #   放进来会和 NGV 抢（NGV 的 label_signatures 里就有 enquiry/Angebotsfrist）。
+  label_signatures:
+    - "Ullmann Medien"
+    - "ullmannmedien"
+    - "im Umfang von"
+    - "Bitte teilen Sie mir"
+    - "Farbschnitte"
+    - "europallets"
+    - "jumbo cartons"
+  min_signature_hits: 1
+  # 发件方域名 30 分；转发件里地址只出现在正文 → 正文命中给 20 分（引擎 2026-11-17 起支持）
+  sender_domains:
+    - ullmannmedien.com
+  subject_keywords:
+    - ullmann
+
+fields:
+  size:                 ["Format", "Format (mm)"]
+  extent:               ["Extent", "Umfang"]
+  text_material:         ["Content", "Inhalt"]
+  cover_material:        ["Cover", "Umschlag"]
+  binding:              ["Binding", "Bindung"]
+  primary_packaging:    ["Packaging", "Verpackung"]
+  finishes:             ["Finishing", "Veredelung"]
+
+rules:
+  unit:
+    default: 本
+    map:
+      - { cplb_top: 套装, unit: 套 }
+  size:
+    unit: mm
+    order: [CD, KD, GD]
+  # 客户只给总数（`total 16.000`）+ 款数（4 款）→ 引擎按款数均分（能整除才均分）
+  quantity:
+    mode: single
+  versions:
+    title_pattern: "(\\d+)\\s*(?:titles?|Titeln|Titel)"
+    language_pattern: "(\\d+)\\s*(?:languages?|Sprachen)"
+  # 语料 GD 恒 0（818/824）→ 不按页数推算厚度
+  thickness:
+    enabled: false
+  binding:
+    enabled: true
+    # ⚠️ 引擎把每个 key 当**字面子串**做 `key.lower() in text.lower()`（不是正则），
+    #   所以键要一条一个写法，不能写 `a|b`。
+    map:
+      perfect binding: 胶装/PAD书
+      perfect bound: 胶装/PAD书
+      softcover: 胶装/PAD书
+      soft cover: 胶装/PAD书
+      paperback: 胶装/PAD书
+      hardcover: 精装书
+      hard cover: 精装书
+      hardback: 精装书
+      casebound: 精装书
+      case bound: 精装书
+      spiral: 线圈书
+      wire-o: 线圈书
+      wire o: 线圈书
+      coil: 线圈书
+      saddle stitch: 骑马钉
+      saddle-stitch: 骑马钉
+      staple: 骑马钉
+      # 刻意不映射 `sewn` / `Fadenheftung`：Ullmann 把它写成**增价项**
+      # （「Bitte teilen Sie mir auch die Mehrkosten für eine Fadenheftung mit」），
+      # 不是本单装订方式 —— 当成装订会覆盖真正的 `Softcover, perfect binding`。
+  product_category:
+    fallback: "32.00;其他"
+  cplb:
+    match_keys: [binding, format, finishes, project_description]
+    map:
+      # 锁线要先判（`sewn` 与 `perfect binding` 同时出现时锁线优先）
+      - { match: "fadenheftung|thread ?sewn|sewn", node: "23.02" }
+      - { match: "perfect binding|softcover|paperback|klebebindung", node: "23.01" }
+      - { match: "hardcover|hardback|case ?bound|hardcover", node: "22.02" }
+      - { match: "spiral|wire ?-? ?o|coil", node: "26.01" }
+      - { match: "saddle ?-? ?stitch|staple|klammerheftung", node: "24.01" }
+  # 材料：Content/Cover 行里直接写纸名与克重
+  materials:
+    text:
+      default: 书纸
+      map:
+        - { match: "offset|woodfree|uncoated|书纸|胶版|munk|蒙肯", page_style: 书纸 }
+        - { match: "art ?paper|c1s|c2s|铜版|光粉|白卡|artboard", page_style: 光粉纸 }
+    cover:
+      default: 光粉纸
+      map:
+        - { match: "c1s|artboard|art ?card|光粉|白卡|卡纸", page_style: 光粉纸 }
+        - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+  # 正则兜底：客户把款数/总数/截止日写在散文里，没有标签
+  scan:
+    - { key: number_of_titles, pattern: "im Umfang von\\s+(\\d+)\\s*(?:Titeln|Titel|titles?)" }
+    - { key: quantity,        pattern: "(?m)^\\s*total\\s+([\\d.,]+)\\s*$" }
+    - { key: offer_deadline,  pattern: "Angebot bis zum\\s+(\\d{1,2}\\.\\d{1,2}\\.\\d{2,4})" }
+    - { key: fsc,             pattern: "FSC[\\s-]*(?:Mix(?:[\\s-]*\\d+%)?|100%|Recycled(?:[\\s-]*\\d+%)?|Mix[\\s-]*Credit)", unique: true }
+
+# 公共层之外的客户常量（公共层已给 CPDL/YYS/PXH/KHMBDJ/YWY；这里只加该客户特有的）
+erp_defaults:
+  BZFS: 纸箱包装          # 787/787，一致 100%
+  SHFS: FOB 盐田          # 737/787，一致 94%（次多「工厂自提」44）
+  chkBSYTB: false
+  chkZDBJF: false
+  chkBSYJZX: false
+
+preferences:
+  - { field: BZFS, value: "纸箱包装", reason: "语料 787/787 一致 100%" }
+  - { field: SHFS, value: "FOB 盐田", reason: "语料 737/787 一致 94%（次多 工厂自提 44）" }
+  - { field: TBLX, value: "",       reason: "台板：不打卡板 472 vs 欧标松木卡板 337，**不稳定** → 不设默认，逐单从原文/问客户" }

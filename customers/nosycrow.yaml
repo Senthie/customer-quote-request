@@ -1,0 +1,139 @@
+# ═══════════════════════════════════════════════════════════════
+# 客户档案：Nosy Crow（英国童书出版社）
+#
+# status: calibrated ✅ 2026-11-17
+#   校准样本：1 份真实询价（Anastasiia Smishchenko，
+#             「Nosy Crow cost request - Little Museum」，2026-10-22）
+#   ⚠️ ERP 语料里**没有**这家客户的单据（KHZL 里查不到）—— 这是新客户，
+#      所以本档案只有 detect / fields / rules，erp_defaults 一律空着，
+#      等第一单真落库后按「覆盖率 ≥90% + 一致率 ≥90%」再补。
+#
+# 附件/邮件长什么样：
+#   纯英文正文，**标签行与值各占一行**（不是 `标签: 值` 同行）：
+#
+#     Product Type
+#     Picture Book
+#       Extent
+#     16
+#       Format
+#     300mm x 220mm -  trimmed. 300mm(h) x 220mm(w)
+#       Preparation & Text
+#     Text Paper: ApolloPape C1S Ivory Board (FSC) (GSM: 300). Text Print: 4x4 CMYK.
+#       Binding
+#     Orientation: Portrait. Binding: Paperback. Bind Type: Unsewn. … Inside pages are concertina.
+#       Cover
+#     Cover Colours: 4. … Cover Paper: ApolloPape C1S Ivory Board (FSC).
+#
+#   段名（Product Type / Preparation & Text / Binding / Cover / Cover Finishes /
+#   Interiors / Fastenings）是**分区标题**，值在下一行，可能一整段都是散文
+#   → 只把能整段消化的放进 `fields`，其余交给 CPMS（客户原文里的事实先别丢）。
+#
+#   数量写法：`for 1k, 2k, 3k, 4k, 5k, 7k, 10k copies?` —— 逗号分隔 + k 后缀，
+#   一档一个数。2026-11-17 修了 `parse_tier_list` 的后缀叠加问题（`10k copies`
+#   原来整段解析失败 → 十档全 0）。
+# ═══════════════════════════════════════════════════════════════
+id: nosycrow
+name: Nosy Crow
+priority: 40
+status: calibrated
+# 新客户：ERP 语料里还没有这家的单据（见文件头）
+erp_khzl: []
+notes: >
+  Nosy Crow（英国独立童书出版社）。联系人是项目/生产口（Anastasiia Smishchenko）。
+  询价正文是英式「分区 + 散文」写法：Extent/Binding/Cover/Interiors 每段一大句，
+  常带外链（Dropbox）给 PDF 样张。产品多为图画书、风琴折（concertina）、带贴纸袋的礼品书。
+
+detect:
+  filename_keywords: []
+  label_signatures:
+    - "Nosy Crow"
+    - "nosycrow"
+    - "cost request"
+    - "Preparation & Text"
+    - "Fastenings"
+    - "Wafer Seal"
+    - "concertina"
+  min_signature_hits: 1
+  sender_domains:
+    - nosycrow.com
+  subject_keywords:
+    - nosy crow
+
+fields:
+  size:                 ["Format", "TPS", "Size"]
+  extent:               ["Extent"]
+  product_name:         ["Product Type", "Title"]
+  text_material:        ["Text Paper", "Preparation & Text"]
+  text_printing_spec:   ["Text Print", "Print"]
+  binding:              ["Binding"]
+  finishes:             ["Cover Finishes", "Interiors", "Fastenings"]
+  cover_material:       ["Cover Paper", "Cover Stock"]
+
+rules:
+  unit:
+    default: 本
+    map:
+      - { cplb_top: 套装, unit: 套 }
+  size:
+    unit: mm
+    order: [CD, KD, GD]
+  quantity:
+    mode: single
+  quantity_tiers:
+    k_suffix: true
+    max_tiers: 10
+  versions:
+    title_pattern: "(\\d+)\\s*(?:titles?|versions?)"
+    language_pattern: "(\\d+)\\s*languages?"
+  thickness:
+    enabled: false              # 语料为空，先不推算（新客户，等真单校准）
+  binding:
+    enabled: true
+    # ⚠️ 引擎按**字面子串**匹配（`key.lower() in text.lower()`），不能写 `a|b`。
+    map:
+      cigarette box: 套装
+      slipcase: 套装
+      rigid box: 套装
+      set up box: 套装
+      hardback: 精装书
+      hardcover: 精装书
+      casebound: 精装书
+      case bound: 精装书
+      concertina: 胶装/PAD书
+      spiral: 线圈书
+      wire-o: 线圈书
+      coil: 线圈书
+      saddle: 骑马钉
+      staple: 骑马钉
+      # `unsewn` 必须排在 `sewn` 前面（`unsewn` 里含 `sewn`）
+      unsewn: 胶装/PAD书
+      sewn: 车线书
+      paperback: 胶装/PAD书
+      perfect binding: 胶装/PAD书
+      limp: 胶装/PAD书
+  product_category:
+    fallback: "32.00;其他"
+  cplb:
+    match_keys: [binding, product_name, project_description]
+    map:
+      - { match: "hardback|case ?bound", node: "22.02" }
+      - { match: "paperback|unsewn|perfect binding|concertina", node: "23.01" }
+  materials:
+    text:
+      default: 书纸
+      map:
+        - { match: "uncoated|woodfree|offset|书纸|胶版", page_style: 书纸 }
+        - { match: "c1s|ivory board|glossy|art ?paper|铜版|光粉", page_style: 光粉纸 }
+    cover:
+      default: 光粉纸
+      map:
+        - { match: "c1s|ivory board|artboard|art ?card|光粉|白卡", page_style: 光粉纸 }
+        - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+  # 数量在散文里：`for 1k, 2k, 3k, 4k, 5k, 7k, 10k copies?`
+  scan:
+    - { key: quantity, pattern: "(?i)for\\s+((?:\\d[\\d.,]*\\s*k?\\s*,\\s*)+\\d[\\d.,]*\\s*k?)\\s*cop(?:y|ies)" }
+
+# 新客户：语料里没有单据 → 不设默认值（宁可让业务填，也不要拿别家的口径套上去）
+erp_defaults: {}
+
+preferences: []

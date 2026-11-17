@@ -1,0 +1,155 @@
+# ═══════════════════════════════════════════════════════════════
+# 客户档案：Priddy Books（英国，Macmillan 旗下）
+#
+# status: calibrated ✅ 2026-11-17
+#   校准样本：2 份真实询价（Priddy / Neon Squid 生产部）
+#     · Kylie Hamley「New estimate request: STF Sticker Book」（2026-11-13）
+#     · Beth Warne「STF Flashcards」（2026-10-15）
+#   + ERP 语料 PRD21（221 份）+ PRD25（69 份），2023–2026。
+#
+# 附件/邮件长什么样：
+#   纯英文正文，规格是「标签行 + 值」两行或同行（`TPS: 215(w) x 280(h) - portrait`）：
+#
+#     TPS: 215(w) x 280(h) - portrait
+#     Extent: 64pp (32pp/16 sheets stickers, 16pp coated, 16pp uncoated)
+#     Uncoated contents: 4/4 on 120gsm uncoated woodfree offset
+#     Coated contents:   4/4 on 180gsm glossy art plus gloss UV varnish
+#     Sticker sheets:    4/0 on 100gsm reusable sticker stock, kiss cut…
+#     Cover:             4/0 on 250gsm plus gloss UV varnish on one side
+#     Binding:           Limp, sewn, cover drawn on, sticker sheets perforated 12mm from spine…
+#     Packing:           In cartons and on pallets
+#     Quantities:        1k-100k scales        ← **只给区间，不给具体档位**
+#
+#   ⚠️ `Quantities: 1k-100k scales` 是「从 1 千到 10 万都要报价」，客户没给档位。
+#      档案开 `quantity_tiers.range_expand: true` → 按 1-2-5 阶梯展开成 7 档
+#      （1000/2000/5000/10000/20000/50000/100000），日志 WARN 标明「我方展开，
+#      需业务确认」。不给具体档位就落 0 才是错的（那等于漏报价）。
+#
+# 语料口径（PRD21+PRD25，333 份）：
+#   BZFS 纸箱包装 100% / SHFS FOB 盐田 100% / 三个 chk* 全 false / GD 恒 0（320/333）
+#   TBLX 不稳定（1.2*1.0 欧式 149 vs 1.2*0.8 57）→ 不设默认
+#   CPLB：BB 书是绝对主场（精装BB书 48 / 普通BB书 33 / 拉卡机关BB书 30 / 毛毡布偶BB书 48 …）
+#         + 其它套装 40（卡片/盒子类）
+#   ZDFS ↔ CPLB 的对应关系稳定：BB 书按机制分「快线/中线/慢线BB书」，套装落「套装」
+#   → 见 rules.cplb.map / rules.binding.map
+# ═══════════════════════════════════════════════════════════════
+id: priddy
+name: Priddy Books
+priority: 40
+status: calibrated
+# PRD21 = 主资料代码；PRD25 = 2025 年起的新代码（同一客户，统计时合并）
+erp_khzl: [PRD21, PRD25]
+notes: >
+  Priddy Books / Neon Squid（Macmillan Publishers International，London EC1M 5NR）。
+  日常联系人 Kylie Hamley（Head of Production）、Beth Warne（Senior Production Controller）。
+  产品以 BB 书（纸板书）与卡片/盒子套装为主，偶尔有 64pp 贴纸活动书。
+  询价正文是纯英文标签清单；`Quantities:` 常写成 **区间**（`1k-100k scales`）。
+
+detect:
+  filename_keywords: []
+  label_signatures:
+    - "Priddy"
+    - "Neon Squid"
+    - "priddybooks.com"
+    - "STF "                      # 客户内部项目前缀（STF Sticker Book / STF Flashcards）
+    - "Kiss cut"                  # 贴纸工艺，Priddy 常用
+    - "reusable sticker stock"
+    - "kiss cut"
+    - "Sticker sheets:"
+  min_signature_hits: 1
+  sender_domains:
+    - priddybooks.com
+    - macmillan.com
+  subject_keywords:
+    - priddy
+    - "estimate request"
+
+fields:
+  size:                 ["TPS", "Size", "Format"]
+  extent:               ["Extent"]
+  text_material:        ["Uncoated contents", "Coated contents", "Contents", "Text Paper"]
+  text_printing_spec:   ["Text Print", "Text Printing"]
+  cover_material:       ["Cover", "Cover Stock"]
+  cover_printing_spec:  ["Cover Print", "Cover Colours"]
+  binding:              ["Binding", "Binding Extra"]
+  primary_packaging:    ["Packing", "Packaging"]
+  finishes:             ["Cover Finishes", "Finishes"]
+
+rules:
+  unit:
+    default: 本
+    map:
+      - { cplb_top: 套装, unit: 套 }
+  size:
+    unit: mm
+    order: [CD, KD, GD]
+  quantity:
+    mode: single
+  quantity_tiers:
+    range_expand: true          # `1k-100k scales` → 1-2-5 阶梯（见文件头注释）
+    max_tiers: 10
+  versions:
+    title_pattern: "(\\d+)\\s*(?:titles?|versions?|cards?)"
+    language_pattern: "(\\d+)\\s*languages?"
+  thickness:
+    enabled: false              # 语料 GD 恒 0（320/333）
+  binding:
+    enabled: true
+    # ⚠️ 引擎把每个 key 当**字面子串**（`key.lower() in text.lower()`），不是正则
+    #   → 一条一个写法。卡片/盒子套装要先判，否则会被后面的装订词抢走。
+    map:
+      cigarette box: 套装
+      set up box: 套装
+      rigid box: 套装
+      slipcase: 套装
+      lift up lid: 套装
+      saddle: 骑马钉
+      staple: 骑马钉
+      spiral: 线圈书
+      wire-o: 线圈书
+      wire o: 线圈书
+      coil: 线圈书
+      perfect binding: 胶装/PAD书
+      paperback: 胶装/PAD书
+      board book: 快线BB书
+      # 刻意不映射 `sewn` / `limp`：客户写 `Limp, sewn, cover drawn on` 时
+      # 「锁线胶装 vs 车线书」要业务判断（语料里 PRD 的 车线书 只有 3 份、
+      # 胶装/PAD书 15 份，两边都不足以定口径）→ 落占位值 + Q_ZDFS 标注。
+  product_category:
+    fallback: "32.00;其他"
+  cplb:
+    match_keys: [binding, product_name, project_description, finishes]
+    map:
+      - { match: "cigarette box|set up box|rigid box|slipcase|lift up lid|盒|卡片套装|flashcards?", node: "29.04" }
+      - { match: "sticker book|sticker|贴纸", node: "23.01" }
+      - { match: "felt|毛毡", node: "27.01" }
+      - { match: "pull ?tab|拉卡机关", node: "27.01" }
+      - { match: "board book|pappbuch|BB ?书", node: "27.01" }
+  materials:
+    text:
+      default: 书纸
+      map:
+        - { match: "uncoated|woodfree|offset|书纸|胶版", page_style: 书纸 }
+        - { match: "glossy art|c1s|c2s|art ?paper|铜版|光粉", page_style: 光粉纸 }
+    cover:
+      default: 光粉纸
+      map:
+        - { match: "c1s|artboard|art ?card|光粉|白卡|卡纸", page_style: 光粉纸 }
+        - { match: "c2s|art ?paper|铜版", page_style: 紫罗兰高压双铜 }
+  scan:
+    # ⚠️ 引擎用 `re.findall(pattern, 全文, re.I)`，**没有 MULTILINE** →
+    #   行首锚点要在 pattern 里自带 `(?im)`，不能只写 `^`。
+    - { key: quantity,        pattern: "(?im)^\\s*Quantities\\s*[:：]\\s*(.+)$" }
+    - { key: number_of_titles, pattern: "(?im)^\\s*(\\d+)\\s+cards?\\b" }
+
+erp_defaults:
+  BZFS: 纸箱包装          # 333/333，一致 100%
+  SHFS: FOB 盐田          # 333/333，一致 100%
+  chkBSYTB: false
+  chkZDBJF: false
+  chkBSYJZX: false
+
+preferences:
+  - { field: BZFS, value: "纸箱包装", reason: "语料 333/333 一致 100%" }
+  - { field: SHFS, value: "FOB 盐田", reason: "语料 333/333 一致 100%" }
+  - { field: TBLX, value: "",       reason: "台板：1.2*1.0 欧式 149 vs 1.2*0.8 欧式 57，**不稳定** → 不设默认" }

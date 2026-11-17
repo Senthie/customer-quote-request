@@ -62,6 +62,12 @@ detect:
     # 而且是 Rex 内部转发（发件人不是 vemag-medien.de）→ 靠这两行表头/交期行识别。
     - "Overview of Countries, Quantities, and Titles"
     - "Delivery Time: KW"
+    # ★ 2026-11-17：VEMAG / Naumann & Göbel 的**陈列与包装项目**（Bodendisplay、
+    #   PO 修订、ozalid 进度往来）正文里既没有 enquiry 表单标签、也不是 Lidl 款量表，
+    #   之前只能落 generic。补两条「这一家才会写」的标记。
+    #   ⚠️ 配上 min_signature_hits: 2，加标记不会让识别变松（仍要 ≥2 个命中）。
+    - "Bodendisplay"
+    - "Naumann & Göbel"
   min_signature_hits: 2
   # 发件方域名（Naumann & Göbel / VEMAG 出版社集团）；域名 30 分，配合正文特征才稳
   sender_domains:

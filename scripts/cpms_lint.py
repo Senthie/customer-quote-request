@@ -207,6 +207,22 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
 
     _check_required(lines, blocks, spec, record, add)
 
+    # ── CPMS081：装订判断不出时，正文必须让业务看到「这是占位值」──
+    # 2026-11-17 森西：判断不出装订方式 → ZDFS 落 ERP 第一个合法值占位，
+    # 「然后再 CPMS 中标明，xxx 项无法判断值，需要业务自行判断」。
+    # 不标的话，业务会把占位的「胶装/PAD书」当成我们核过的结论。
+    if record is not None and record.get("question_answers") is not None:
+        from question_answers import effective_status as _eff, normalize as _norm
+        placeholders = [q for q in _norm(record.get("question_answers"))
+                        if str(q.get("field") or "").strip().upper() == "ZDFS"
+                        and _eff(q) == "open"
+                        and "无法判断" in str(q.get("question") or "")]
+        if placeholders and "无法判断" not in raw:
+            add("CPMS081", 0,
+                "ZDFS 是按 ERP 第一个合法值占的位（装订方式判断不出）—— CPMS 正文要写明"
+                "「装订方式无法判断值，需业务自行判断」（建议写在备注段，不要写进装订段："
+                "装订段要写客户原文的装订方式，写 ZDFS 下拉值会踩 CPMS055）")
+
     # ── CPMS080：正文里的「待确认」必须有 question_answers 条目承接 ──
     # 2026-10-30 森西拍板：把散在四处的「还没确定的事」合并进 question_answers。
     # CPMS 是成品描述（给客户/ERP 看），不是待办本 —— 只在正文写一句「装箱：待确认」，

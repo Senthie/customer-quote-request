@@ -3,7 +3,9 @@
 
 1. **CPSL 存「单款本数」** —— 不再是印刷总量。导出层 × 款数 还原成 ERP 要的总量，
    所以不变式是 `CPSL1 × TZS == 客户总本数`。除不尽时**不许静默均分**。
-2. **没提到装订方式 → 默认「快线BB书」**（套装类例外，仍落「套装」）。
+2. **判断不出装订方式 → 落 ERP 第一个合法值「胶装/PAD书」占位**（套装类仍是「套装」），
+   并留一条确认项、CPMS 里标明「需业务自行判断」。
+   ★ 2026-11-17 森西改口径：此前是「没提到就默认 快线BB书」，已作废。
 3. KHDH 可用 RFQ 号 —— 见 `tests/test_ingest_email.py`。
 """
 from __future__ import annotations
@@ -15,6 +17,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+import customer_profile as C  # noqa: E402
+import main as MAIN  # noqa: E402
 from customer_profile import load_profile  # noqa: E402
 from extract_fields import CustomerData  # noqa: E402
 from main import default_binding_for, map_fields  # noqa: E402
@@ -79,12 +83,52 @@ def test_能整除时才均分():
     assert r2["CPSL1"] == 40000 and r2["CPSL1"] * r2["TZS"] == 120000
 
 
-# ── ② 装订缺省 ──────────────────────────────────────────────────────────
-def test_装订缺省是快线BB书():
-    assert default_binding_for({"CPLB": "23.01;无线胶装书"}) == "快线BB书"
-    assert default_binding_for({}) == "快线BB书"
+# ── ② 装订缺省（2026-11-17 口径变更：快线BB书 → ERP 第一个合法值）────────
+def test_装订缺省是ERP第一个合法值():
+    """业务 2026-11-17：判断不出就落**第一个值**，再在 CPMS 里标明需业务自行判断。"""
+    assert default_binding_for({"CPLB": "23.01;无线胶装书"}) == "胶装/PAD书"
+    assert default_binding_for({}) == "胶装/PAD书"
 
 
-def test_套装类不套用快线BB书():
+def test_缺省值必须等于表单字典的第一个枚举():
+    """ERP 下拉顺序一变，缺省值就跟着错 —— 钉住它，别让人默默改常量。"""
+    import erp_schema
+
+    schema = erp_schema.load_schema()
+    first = schema["fields"]["ZDFS"]["options"][0]
+    assert MAIN.DEFAULT_BINDING == first, \
+        f"缺省装订 {MAIN.DEFAULT_BINDING!r} ≠ ERP 第一个合法值 {first!r}"
+
+
+def test_套装类不套用缺省装订():
     assert default_binding_for({"CPLB": "32.00;其它套装"}) == "套装"
     assert default_binding_for({"CPMC": "礼盒套装"}) == "套装"
+
+
+def test_判断不出装订时留确认项(monkeypatch):
+    """产出必须带一条「装订方式无法判断…需业务自行判断」的确认项，agent 才能写进 CPMS。"""
+    profile = C.load_profile("generic")
+    record = {"CPLB": "23.01;无线胶装书",
+              "CPMC": "犯罪悬疑与谜题宇宙解谜书",
+              "ZDFS": default_binding_for({"CPLB": "23.01;无线胶装书"})}
+
+    class _Data(dict):
+        pass
+
+    note = MAIN.binding_inferred_note(record, _Data({"binding": ""}), profile)
+    assert "无法判断" in note
+    assert "需业务自行判断" in note
+    assert "胶装/PAD书" in note
+
+
+def test_有装订证据时不留确认项():
+    profile = C.load_profile("generic")
+    # 档案 binding.map 命中（generic 默认关闭映射，用合成档案验证判据）
+    fake = type("P", (), {"rule": lambda self, key, default=None: {
+        "binding.match_keys": ["binding"],
+        "binding.map": {"perfect binding": "胶装/PAD书"},
+    }.get(key, default)})()
+    record = {"ZDFS": "胶装/PAD书"}
+    assert MAIN.binding_inferred_note(record, {"binding": "Softcover, perfect binding"}, fake) == ""
+    # 没有证据时才报
+    assert MAIN.binding_inferred_note(record, {"binding": "Softcover, sewn"}, fake)

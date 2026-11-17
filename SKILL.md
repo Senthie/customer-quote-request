@@ -14,7 +14,52 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.78（2026-11-16 **CPMS 概要行推送去重**：森西让核 `BJXQ261113003` 是否真进
+> **版本：** 1.0.82（2026-11-17 **三个新客户档案 + 装订口径变更 + 五项引擎修复**：
+> ① **新建 3 个客户档案**（各有子技能）：`ullmann`（Ullmann Medien，德文纯文本「款名表 + 七行规格」，
+> 语料 UMG19 787 份）、`priddy`（Priddy Books / Neon Squid，英文标签清单，语料 PRD21+PRD25 333 份）、
+> `nosycrow`（Nosy Crow，「分区 + 散文档」，**无语料** → 默认值全空是故意的）。建档依据是
+> 11-17 那批 10 封真实邮件里 4 封真询价全落 generic 空单 —— 不是引擎错，是没有档案。
+> 语料默认值用 `derive_customer_defaults.py` 反推（覆盖率×一致率 ≥90% 才收）。
+> ② **装订口径变更**：判断不出装订方式时落 **ERP 第一个合法值**（`胶装/PAD书`）+ 确认项
+> `Q_ZDFS` + CPMS 标明「需业务自行判断」，`cpms_lint` 新增 **CPMS081** 守着；2026-11-16 的
+> 「缺省快线BB书」作废（把 224pp 锁线胶装书标成 BB 书是错标）。套装类仍落「套装」。
+> ③ 五项引擎修复：**收信方向判断**（自家域名外发的回信不进流水线 —— 那批 10 封里 4 封是
+> 我们自己的回复，全被抽成空单）、**转发件识别**（正文里的客户域名给 20 分）、
+> **尺寸兜底**（`Format:`/`TPS:` 行、`A x B x C`、脏尺寸如「两组尺寸写一句」/「整句只有一个数字」）、
+> **`YWY=KM` 移到公共层**（客户无关的生成方标记）、**审计 token 回溯 bug**（`37SI` 被拆成 `3`）。
+> ④ 修两处静默算错：`TZS` 被「分组只识别到 1 个条目」打回 1（Ullmann 4 款 → 真值 4）、
+> `parse_tier_list` 不认「k + 量词」叠写（`1k, 2k, …, 10k copies` 整条失败 → 全 0）；
+> 另增 `expand_quantity_range()`（`1k-100k scales` 按 1-2-5 展开，档案开关 `quantity_tiers.range_expand`）。
+> 回归 +56（`tests/test_engine_fixes_20261117.py` 29 + `tests/test_new_profiles_20261117.py` 26），
+> 全量 **970 绿**。4 份真询价已重跑，旧 generic 产物归档 `customer-files/processed/_superseded_20261117/`）
+> —— 前序 1.0.80（2026-11-16 **三条业务口径（森西）：KHDH 可用 RFQ 号 / CPSL 存单款 / 装订缺省快线BB书**：
+> ① `KHDH`（客户单号）**可以用客户的 RFQ / 询价单号** —— 终端客户报价阶段还没有 PO，
+> 唯一稳定的客户侧编号就是 RFQ（`Request for Quotation #105819`、`RFQ 103859`）。
+> 规则进 `customers/_defaults.yaml` 的 `email.khdh.*`，**必须**「询价/报价请求」字样紧跟编号，
+> 裸号（`137424`）、年份、页码不取。
+> ② **`CPSL` 存「单款本数」**：旧实现把**总量**写进 `CPSL1`，导出层再 × 款数 → 数量翻倍
+> （真实邮件实测：`LG26090401` 410000 会被推成 4,100,000、`CU26082501` 160000 → 640000）。
+> 现在客户只给总数时按款数均分（`130000 ÷ 8 → 16250`），**除不尽就不均分**：保留总数 +
+> `_qty_conflict` → 「数量口径待确认」提醒交人工。不变式 `CPSL1 × TZS == 客户总本数`。
+> ③ **客户没提到装订方式 → 默认「快线BB书」**（2026-10-21「留空」作废）；套装类仍落「套装」。
+> 产物侧 `main.py::default_binding_for()` + 推送侧 `erp_mcp_export.apply_defaults()` 双兜。
+> 回归 +14（`tests/test_quantity_and_binding_20261116.py` 5 项 + RFQ 3 项 + 4 处旧断言改口径），
+> 全量 **918 绿**；`docs/erp-push-字段口径.md` §4 / §4.0 / §4.0.1 记同一条）
+> —— 前序 1.0.79（2026-11-16 **邮件里套邮件：嵌套 `.eml` 不再被静默丢掉**：07:20 收到
+> 「测试 AI 的邮件分类+客户报价提取功能」——封皮正文只有一句「附件5个询价邮件共你参考」，
+> 真内容是 **5 个嵌套 `.eml`**。`SUPPORTED_ATTACHMENTS` 里没有 `.eml`（它是**入口**类型）→
+> 5 封全按「不支持的附件类型」跳过 → `usable` 为空 → 走 `body_as_task` → 抽出空单
+> （`values={}` / `profile=generic` / `CPSL1..10=0`），硬伤与 1.0.76 的 zip 一模一样。
+> 修法同源：`ingest_email.quarantine_nested_emls()` 把嵌套 `.eml` 落到
+> `pending/.eml_quarantine/<标题>_<时间戳>/`（**点开头 → 扫描器不认 → 不自动入队**）
+> + `_nested_eml_manifest.json`（每封的**标题/发件人/子附件**）；**有嵌套 `.eml` 时不再落
+> 封皮正文空单**。与 zip 的唯一区别：分组**不用猜** —— 一封 `.eml` 就是一份独立询价；
+> 但不入队，因为这 5 封（Fleurus ×3 / Casterman / `137424`）**都没有客户档案**，
+> 硬抽只会批量产出 `32.00;其他` 空单、让 `cpms_todo` 每 5 分钟催不存在的欠账。
+> 闸门边界：只有签名图/logo 时正文**照常**落任务（别把闸门开太大）。
+> 回归 +7（`tests/test_nested_eml_attachments.py`），全量 **901 绿**；6 个 generic 中间产物
+> 移进 `processed/_quarantine_20261116_nested_eml/`（附 README 说明下一步建档案））
+> —— 前序 1.0.78（2026-11-16 **CPMS 概要行推送去重**：森西让核 `BJXQ261113003` 是否真进
 > ERP → 确认在（记录ID `e58519c9…`、PSN22、制单人张爽、状态需求编辑、10 档 2000–25000 全落库），
 > 但详情页 CPMS **「书籍方向/产品规格」那行出现了两次**。回查发出入参只有 1 次 →
 > 是 ERP 需求录入页按 `Drop_SJFX/CD/KD/GD/TZS` **自己又渲染一行**。语料 18395 份
@@ -376,7 +421,9 @@ uv run ./scripts/main.py customer-files/pending/两张单/ --customer auto
 | **取值权威** | `assets/erp_form_schema.yaml` | **ERP 只认哪些值**（下拉枚举/类型/必填） | 不用（ERP 全局恒定） |
 
 > **客户专属知识在独立子技能里**：处理 IGL 前加载 `customer-quote-igl`、
-> 处理 NGV 前加载 `customer-quote-ngv`、处理 PSN22 前加载 `customer-quote-psn22`
+> 处理 NGV 前加载 `customer-quote-ngv`、处理 PSN22 前加载 `customer-quote-psn22`、
+> 处理 Ullmann 前加载 `customer-quote-ullmann`、处理 Priddy 前加载 `customer-quote-priddy`、
+> 处理 Nosy Crow 前加载 `customer-quote-nosycrow`
 > （附件形态 / 抽取范式 / 口径 / 坑 / 检查清单）。
 > 本文件是**总纲**：架构、引擎、邮件入口、字段总览、`CPMS` 规则、校验方法、新增客户 SOP。
 >
@@ -599,6 +646,9 @@ uv run ./scripts/main.py "customer-files/pending/QUOTE.xlsx" --customer auto
 | `customers/igl.yaml` | IGL | **`customer-quote-igl`** | ✅ calibrated（真实样本校准） | 平铺 + 横向键值对表 |
 | `customers/ngv.yaml` | NGV | **`customer-quote-ngv`** | ✅ calibrated（4 份真实附件 + ERP 导出） | **德英双语 enquiry 分区表单** |
 | `customers/psn22.yaml` | PSN22（Magic Cat） | **`customer-quote-psn22`** | ✅ calibrated（第一份真实询价 + 454 份语料） | **无标签 docx 规格书 + 刀模 PDF** |
+| `customers/ullmann.yaml` | Ullmann Medien（德国） | **`customer-quote-ullmann`** | ✅ calibrated（1 份真实询价 + 787 份语料 UMG19） | **纯德文正文：款名表 + 七行规格** |
+| `customers/priddy.yaml` | Priddy Books / Neon Squid（英国） | **`customer-quote-priddy`** | ✅ calibrated（2 份真实询价 + 333 份语料 PRD21/PRD25） | **英文标签清单；`Quantities: 1k-100k scales` 区间报价** |
+| `customers/nosycrow.yaml` | Nosy Crow（英国） | **`customer-quote-nosycrow`** | ✅ calibrated（1 份真实询价，**无语料**） | **英文「分区 + 散文档」；逗号分隔的 k 档位** |
 | `customers/_defaults.yaml` | 兜底 + 公共默认值 | 所有档案都叠加在它之上；认不出客户时用它（会打 WARN） | — |
 | `customers/_template.yaml` | 新客户骨架 | 复制它开始 | — |
 
@@ -979,6 +1029,31 @@ Message-ID 兜底、单轮上限、dry-run 不写盘、单封失败不影响其�
 可以直接再走一遍解包解析。
 
 回归：`tests/test_zip_attachments.py`（15 项）。
+
+### 3.0.2 邮件里套邮件（嵌套 `.eml`）：隔离但**不丢**（1.0.79，2026-11-16）
+
+客户（或转发的同事）常把「若干封询价邮件」当**附件**再转一封封皮过来，正文只有一句
+「附件 5 个询价邮件共你参考」。`.eml` 不在 `SUPPORTED_ATTACHMENTS`（它是**入口**类型），
+旧代码按「不支持的附件类型」WARN 跳过 → `usable` 为空 → 走 `body_as_task` →
+抽出一张空单，5 封询价一个字段都没进来。**与 1.0.76 的 zip 是同一类硬伤。**
+
+**口径**
+
+* 嵌套 `.eml` → `pending/.eml_quarantine/<标题>_<时间戳>/`，原文件逐封落盘；
+* `_nested_eml_manifest.json` 记 `grouping: "每封 .eml = 一份独立询价（未入队）"` +
+  每封的**标题 / 发件人 / 子附件清单**（人一看就知道该先给谁建档案）；
+* 目录**点开头** → `scan_pending.pending_items` 不认 → 不会自动入队；
+* **有嵌套 `.eml` 时不落封皮正文空单**（`body_as_task` 短路，与 zip 同一条闸）；
+* 只有签名图 / logo（无实质附件）时正文**照常**落任务 —— 别把闸门开太大；
+* 入队方式：`把 .eml 移到 pending/ 根下`（扫描器认 `.eml`，会走 `ingest_email` 展开）。
+
+**为什么分组不用猜却仍不入队**：与 zip 不同，一封 `.eml` 就是一份询价，拆分没有歧义；
+但这些嵌套邮件往往来自**还没有客户档案**的客户（2026-11-16 的 5 封：Fleurus Editions ×3、
+Casterman、`137424 Adventskalender`），硬抽只会批量产出 `32.00;其他` + `CPSL=0` 的空单，
+让 `cpms_todo` 每 5 分钟催一次不存在的欠账。先校准档案，再入队。
+
+回归：`tests/test_nested_eml_attachments.py`（7 项：不丢件 / 清单字段 / 不进队列 /
+不落空单 / 只有图片时照常落正文 / 与普通附件并存 / CLI 汇总）。
 
 ### 3.1 `.eml` 怎么读（1.0.33 实单 `CU26070802`）
 

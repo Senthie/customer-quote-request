@@ -66,19 +66,47 @@ SIZE_PAIR_RE = re.compile(
 # `.xlsm` = xlsx + VBA 宏（2026-10-29 Lidl/NGV 附件实测，读数据不需要宏）
 SUPPORTED_INPUT_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls", ".docx", ".txt", ".pdf")
 
-# 装订方式缺省（业务 2026-11-16 森西：「没有提到就默认快线BB书」）。
-# 套装单例外 —— 把套装标成 BB书 是明显错标，套装类别仍落「套装」。
-DEFAULT_BINDING = "快线BB书"
+# 装订方式缺省（业务 2026-11-17 森西）：
+#   「有时候我们没办法判断装订方式，但是上传 ERP 可能需要，这个时候默认选择**第一个值**，
+#    然后在 CPMS 中标明 xxx 项无法判断值，需要业务自行判断」
+# 第一个值 = `assets/erp_form_schema.yaml` 里 `ZDFS.options[0]`（= 胶装/PAD书）。
+# ★ 有测试钉住两者相等（test_erp_schema / test_engine_fixes）：ERP 下拉顺序一变就红。
+# 旧口径（2026-11-16「没提到就默认快线BB书」）作废 —— 把一本 224pp 锁线胶装书
+# 标成「快线BB书」是明显错标，而且 BB 书本身还分快线/慢线/中线/胶装。
+DEFAULT_BINDING = "胶装/PAD书"
 DEFAULT_BINDING_SET = "套装"
 DEFAULT_BINDING_SET_TOKENS = ("套装",)
 
 
 def default_binding_for(record: dict) -> str:
-    """客户没提装订时给什么值：套装类 → 套装，其余 → 快线BB书。"""
+    """判断不出装订方式时给什么值：套装类 → 套装，其余 → ERP 第一个合法值（胶装/PAD书）。
+
+    这个值是**占位**，不是结论 —— 调用方必须同时留一条确认项
+    （见 `binding_inferred_note()`），CPMS 里也要写明「需业务自行判断」。
+    """
     probe = f"{record.get('CPLB') or ''} {record.get('CPMC') or ''}"
     if any(tok in probe for tok in DEFAULT_BINDING_SET_TOKENS):
         return DEFAULT_BINDING_SET
     return DEFAULT_BINDING
+
+
+def binding_inferred_note(record: dict, record_data: Any,
+                          profile: "CustomerProfile") -> str:
+    """ZDFS 是不是「判断不出 → 落的占位缺省值」？是则返回要写进确认清单/CPMS 的话。
+
+    判据：客户原文里**没有任何** `binding.map` 关键词命中（= 我们压根没证据），
+    而落库值正好是缺省值。有映射证据（哪怕映射到的值与缺省值相同）就不算。
+    """
+    keys = profile.rule("binding.match_keys", ["binding"]) or ["binding"]
+    text = " ".join(str(record_data.get(k) or "") for k in keys).lower()
+    for key in (profile.rule("binding.map", {}) or {}):
+        if str(key).lower() in text:
+            return ""                      # 有证据，不是占位
+    value = str(record.get("ZDFS") or "").strip()
+    if not value:
+        return ""
+    return (f"装订方式无法判断（客户原文未给出可识别的装订方式）→ 已按 ERP 第一个合法值"
+            f"「{value}」落库，需业务自行判断")
 
 
 # ── 运行基准日期 ─────────────────────────────────────────────────────────
@@ -523,7 +551,11 @@ def parse_tier_list(text: str) -> list:
     parts = [p.strip() for p in re.split(r"[/、;,]|\s+or\s+|\s+oder\s+", s) if p.strip()]
     tiers = []
     for part in parts:
-        m = re.fullmatch(r"(\d[\d.,]*)\s*(k|cps|pcs|st\.?|stk\.?|ex\.?|copies)?", part, re.IGNORECASE)
+        # ★ 2026-11-17：后缀可以叠加（`10k copies` / `5k cps`）—— 旧正则只允许
+        #   **一个**后缀，Nosy Crow 的 `1k, 2k, …, 10k copies` 就整体解析失败（全 0）。
+        m = re.fullmatch(
+            r"(\d[\d.,]*)\s*(k)?\s*(?:cps\.?|pcs|st\.?|stk\.?|ex\.?|copies)?",
+            part, re.IGNORECASE)
         if not m:
             return []
         raw = m.group(1)
@@ -535,6 +567,39 @@ def parse_tier_list(text: str) -> list:
         if not value:
             return []
         tiers.append(int(value))
+    return tiers if len(tiers) >= 2 else []
+
+
+_RANGE_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*[kK]?\s*(?:-|–|—|~|to)\s*(\d+(?:[.,]\d+)?)\s*[kK]\b")
+
+
+def expand_quantity_range(text: str, max_tiers: int = 10) -> list:
+    """`1k-100k scales` → 1-2-5 阶梯 [1000, 2000, 5000, 10000, 20000, 50000, 100000]。
+
+    客户只说「从 1 千到 10 万都要报价」（Priddy `Quantities: 1k-100k scales`）时
+    **没有具体档位** —— 按 1-2-5 阶梯展开是报价的通行做法，也是唯一可机械推导的
+    做法。刻意做成**档案开关**（`quantity_tiers.range_expand: true`），不做全局默认：
+    这是「我方展开的档位」，不是客户给的事实，日志会 WARN 说明需业务确认。
+    """
+    m = _RANGE_RE.search(str(text or ""))
+    if not m:
+        return []
+    lo = _de_number(m.group(1))
+    hi = _de_number(m.group(2))
+    if not lo or not hi or hi <= lo:
+        return []
+    lo, hi = int(lo * 1000), int(hi * 1000)
+    tiers: list = []
+    power = 1
+    while power <= hi and len(tiers) < max_tiers:
+        for mant in (1, 2, 5):
+            value = power * mant
+            if lo <= value <= hi and (not tiers or value > tiers[-1]):
+                tiers.append(value)
+                if len(tiers) >= max_tiers:
+                    break
+        power *= 10
     return tiers if len(tiers) >= 2 else []
 
 
@@ -633,6 +698,52 @@ def _size_number(chunk: str) -> Optional[float]:
     if re.fullmatch(r"\d+,\d{1,2}", text):
         return float(text.replace(",", "."))
     return _to_number(text)
+
+
+# 单个尺寸段：「数字 + 可选单位 + 可选 (w)/(h)」，此外不许有别的东西
+_SIZE_CHUNK_RE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*(?:mm|cm)?\s*(?:\([wh]\))?\s*$", re.IGNORECASE)
+# 从开头取「A x B[ x C]」——每段都必须是干净数字，碰到脏东西就停
+_SIZE_RUN_RE = re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm)?\s*(?:\([wh]\))?\s*"
+    r"(?:[x×*]\s*(\d+(?:[.,]\d+)?)\s*(mm|cm)?\s*(?:\([wh]\))?\s*)?"
+    r"(?:[x×*]\s*(\d+(?:[.,]\d+)?)\s*(mm|cm)?\s*(?:\([wh]\))?\s*)?",
+    re.IGNORECASE,
+)
+
+
+def size_looks_clean(raw: Any) -> bool:
+    """整串是不是干净的「A x B」/「A x B x C」（每段只有数字 + 单位 + (w)/(h)）。
+
+    `198mm x 129mm x 10mm` → True；`300mm x 220mm - trimmed. 300mm(h) x 220mm(w)`、
+    `Size to house the 15 cards` → False（这两种都会让 `parse_size` 算出假尺寸）。
+    """
+    text = re.sub(r"(?i)\b(mm|cm)\b", " ", str(raw or "")).strip()
+    if re.search(r"(?i)\bcm\b", str(raw or "")):
+        return False          # cm 要换算成 mm，交给 normalize_size_run
+    chunks = re.split(r"[x×*]", text)
+    if len(chunks) not in (2, 3):
+        return False
+    return all(_SIZE_CHUNK_RE.match(chunk.replace("mm", " ")) for chunk in chunks)
+
+
+def normalize_size_run(raw: Any) -> str:
+    """取**开头那段**干净尺寸，统一成 mm：`300mm x 220mm - trimmed…` → `300 x 220 mm`。
+
+    取不到（整串不以数字开头、或第一段就不干净）返回空串 —— 调用方据此落 0 交人工。
+    """
+    original = str(raw or "").strip()
+    factor = 10 if re.search(r"(?i)\bcm\b", original) else 1
+    text = re.sub(r"(?i)\b(mm|cm)\b", " ", original)
+    m = _SIZE_RUN_RE.match(text)
+    if not m or not m.group(1):
+        return ""
+    first = _size_number(m.group(1))
+    second = _size_number(m.group(3)) if m.group(3) else None
+    third = _size_number(m.group(5)) if m.group(5) else None
+    if first is None or second is None:
+        return ""
+    parts = [first, second] + ([third] if third is not None else [])
+    return " x ".join(str(_num(part * factor)) for part in parts) + " mm"
 
 
 def size_from_text(text: Any) -> str:
@@ -1193,6 +1304,16 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         #   —— 档案写 single 只是「默认只有一个数」，不代表客户不会给多档。
         #   落到 CPSL1..n 并 WARN 说明「档案是 single、客户给了 N 档」，不静默丢数据。
         tiers = [] if qty else parse_tier_list(qty_text)
+        # ★ 2026-11-17：客户只给**区间**（Priddy `Quantities: 1k-100k scales`）——
+        #   没有具体档位时按 1-2-5 阶梯展开，并明确留痕「这是我方展开的」。
+        #   只有档案 `quantity_tiers.range_expand: true` 才启用（不做全局默认）。
+        if not tiers and not qty and profile.rule("quantity_tiers.range_expand", False):
+            expanded = expand_quantity_range(qty_text)
+            if expanded:
+                tiers = expanded
+                logger.warn(f"  数量: 客户只给区间 {qty_text!r} → 按 1-2-5 阶梯展开为 "
+                            f"{len(tiers)} 档 {tiers}（**这是我方展开的档位，"
+                            f"不是客户给的具体数量，需业务确认**）")
         if tiers:
             for idx, tq in enumerate(tiers[:10], start=1):
                 result[f"CPSL{idx}"] = tq
@@ -1241,6 +1362,24 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         if size_str:
             logger.warn(f"  size 规范键为空 → 从 format 取尺寸 {size_str!r}"
                         f"（按书写顺序落 CD/KD，需人工核一眼）")
+    if size_str:
+        # ★ 2026-11-17（Nosy Crow / Priddy Flashcards 实测）两条脏数据：
+        #   ① `300mm x 220mm - trimmed. 300mm(h) x 220mm(w)` —— **两组**尺寸写一起，
+        #      `parse_size` 按 `x` 切三段 → GD 被塞成 220（真值 0）。
+        #   ② `Size to house the 15 cards` —— 整句里只有一个数字 15，`parse_size`
+        #      会把 15 当 CD（真值 0，卡片尺寸在另一段里）。
+        #   判据：整串必须就是「A x B」或「A x B x C」、每段都是干净的数字(+单位)。
+        #   不干净 → 先取开头那段干净尺寸（`300mm x 220mm`）；再取不到就整条作废
+        #   （宁可 0 + WARN，也不要落一个假尺寸）。
+        if not size_looks_clean(size_str):
+            normalized_size = normalize_size_run(size_str)
+            if normalized_size:
+                logger.warn(f"  尺寸原文 {size_str!r} 不是干净的「A x B[ x C]」"
+                            f"→ 取开头那段 {normalized_size!r}（需人工核一眼）")
+                size_str = normalized_size
+            else:
+                logger.warn(f"  尺寸原文 {size_str!r} 里找不到尺寸 → CD/KD 落 0 交人工确认")
+                size_str = ""
     # 档案 rules.size.zero_tops：该类别录系统时尺寸一律写 0/0/0。
     # 业务依据（2026-09-24）：NGV 的套装（盒子 —— 卡盒、卡片+底座组合）不按单件尺寸录入。
     # 附件的 TPS 是盒内卡片的尺寸（160x104 / 100x155），但 ERP 记录里 CD/KD/GD 全是 0。
@@ -1435,22 +1574,31 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
             if not fallback_binding:
                 fallback_binding = default_binding_for(result)
                 logger.warn(f"  装订方式未命中映射表（binding={binding_text!r}）"
-                            f"→ ZDFS 用业务缺省 {fallback_binding!r}"
-                            f"（业务 2026-11-16 口径：客户没提到装订方式就默认 快线BB书；"
-                            f"套装类仍落「套装」）")
+                            f"→ ZDFS 用 ERP 第一个合法值 {fallback_binding!r} 占位"
+                            f"（业务 2026-11-17 口径：判断不出就落第一个值，"
+                            f"并在 CPMS 里标明「需业务自行判断」）")
             else:
                 logger.warn(f"  装订方式未命中映射表（binding={binding_text!r}）"
                             f"→ ZDFS 用档案默认值 {fallback_binding!r}")
             result["ZDFS"] = fallback_binding
             default_count += 1
     elif binding_text:
-        logger.info(f"  装订方式 ZDFS: 档案未启用映射（binding={binding_text!r}，"
-                    f"口径待业务确认 → 保持模板默认值）")
+        if not str(result.get("ZDFS") or "").strip():
+            # 客户写了装订（`Softcover, perfect binding`）但档案没有映射表 → 我们**判断不出**
+            # ERP 的那个下拉，落第一个合法值占位，并留确认项（2026-11-17 口径）。
+            result["ZDFS"] = default_binding_for(result)
+            logger.warn(f"  装订方式 ZDFS: 原文有写法（{binding_text!r}）但档案未启用映射"
+                        f"→ 落 ERP 第一个合法值 {result['ZDFS']!r} 占位"
+                        f"（CPMS 里要标明需业务自行判断）")
+            default_count += 1
+        else:
+            logger.info(f"  装订方式 ZDFS: 档案未启用映射（binding={binding_text!r}，"
+                        f"沿用已填值 {result['ZDFS']!r}）")
     elif not str(result.get("ZDFS") or "").strip():
-        # 客户一个字都没提装订、档案也没启用映射 → 仍给业务缺省，别留空
+        # 客户一个字都没提装订、档案也没启用映射 → 落 ERP 第一个合法值占位，别留空
         result["ZDFS"] = default_binding_for(result)
-        logger.warn(f"  装订方式 ZDFS: 客户未提到 → 用业务缺省 {result['ZDFS']!r}"
-                    f"（2026-11-16 口径）")
+        logger.warn(f"  装订方式 ZDFS: 判断不出 → 用 ERP 第一个合法值 {result['ZDFS']!r} 占位"
+                    f"（2026-11-17 口径；CPMS 里要标明需业务自行判断）")
         default_count += 1
 
 
@@ -2489,9 +2637,21 @@ def process_unit(unit: InputUnit, args, processed_dir: Path,
         result = step5_map_fields(record_data, template, profile, logger, email_meta,
                                   task_id=task_id)
         record_issues = step5b_validate_erp_values(result, logger, profile)
+        # ★ 2026-11-17 森西口径：装订方式判断不出时落 ERP 第一个合法值占位，
+        #   **必须**留一条确认项并在 CPMS 里标明「需业务自行判断」。
+        #   走 warn 级 issue → 自动折成 `Q_ZDFS` 确认项（不堵交付，但看得见），
+        #   cron 那边的 agent 读产物时会把它写进 CPMS。
+        binding_note = binding_inferred_note(result, record_data, profile)
+        if binding_note:
+            record_issues.append({"level": "warn", "field": "ZDFS",
+                                  "message": binding_note})
         # TZS 兜底：分组算出的款数是硬事实（一组几款就是几款），
         # map_fields 从客户原文推出来的值若不一致，以分组为准并留痕。
-        if group.aggregated and group.titles:
+        # ★ 2026-11-17 修（Ullmann「im Umfang von 4 Titeln」）：纯文本询价没有逐款条目，
+        #   分组只会给出 **1 个条目** —— 那不是「1 款」的证据，而是「没有逐款数据」。
+        #   旧实现照着覆盖 → TZS 从扫描出的 4 被打回 1，CPSL1×TZS 直接错 4 倍。
+        #   只在分组**真的识别出多款**（>1）时才覆盖。
+        if group.aggregated and group.titles and group.titles > 1:
             try:
                 mapped_titles = int(result.get("TZS") or 0)
             except (TypeError, ValueError):
