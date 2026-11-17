@@ -130,7 +130,10 @@ def test_同结构两款_走_map_fields后TZS与CPSL正确():
     result = map_fields(to_customer_data(groups[0], data), TEMPLATE, NGV, _Quiet())
 
     assert result["TZS"] == 2, result["TZS"]
-    assert result["CPSL1"] == 12500, result["CPSL1"]
+    # 2026-11-16 口径：CPSL 存单款（12500 是两款合计 → 单款 6250）
+    assert result["CPSL1"] == 6250, result["CPSL1"]
+    assert result["CPSL1"] * result["TZS"] == 12500
+
 
 
 # ── ③ 结构不同必拆 ──────────────────────────────────────────────────────

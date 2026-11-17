@@ -140,5 +140,8 @@ def test_整封邮件抽出数量与款数并落库():
     data = _extract()
     assert data.values.get("quantity"), "QTY 行没被认成 quantity 规范键"
     result = map_fields(data, _template(), NGV, _Quiet())
-    assert result.get("CPSL1") == 60000, "QTY 行没被认成数量（CPSL1 仍是默认 0）"
     assert result.get("TZS") == 3
+    # 2026-11-16 口径：CPSL 存单款；总量 60000 由导出层 × 3 款还原
+    assert result.get("CPSL1") == 20000, "CPSL1 应为单款 60000/3"
+    assert result.get("CPSL1") * result.get("TZS") == 60000
+

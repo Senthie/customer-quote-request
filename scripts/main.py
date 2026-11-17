@@ -58,6 +58,21 @@ DEFAULT_UNIT = "mm"
 # `.xlsm` = xlsx + VBA 宏（2026-10-29 Lidl/NGV 附件实测，读数据不需要宏）
 SUPPORTED_INPUT_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls", ".docx", ".txt", ".pdf")
 
+# 装订方式缺省（业务 2026-11-16 森西：「没有提到就默认快线BB书」）。
+# 套装单例外 —— 把套装标成 BB书 是明显错标，套装类别仍落「套装」。
+DEFAULT_BINDING = "快线BB书"
+DEFAULT_BINDING_SET = "套装"
+DEFAULT_BINDING_SET_TOKENS = ("套装",)
+
+
+def default_binding_for(record: dict) -> str:
+    """客户没提装订时给什么值：套装类 → 套装，其余 → 快线BB书。"""
+    probe = f"{record.get('CPLB') or ''} {record.get('CPMC') or ''}"
+    if any(tok in probe for tok in DEFAULT_BINDING_SET_TOKENS):
+        return DEFAULT_BINDING_SET
+    return DEFAULT_BINDING
+
+
 # ── 运行基准日期 ─────────────────────────────────────────────────────────
 # 「今天是几号」会影响两类结果：报价截止日期是否过期、WCRQ 的 today_plus_days。
 # 用 `main.py --today YYYY-MM-DD` 覆盖，让回归测试与补跑可复现（否则测试结果
@@ -1100,24 +1115,34 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     if qty_mode == "single":
         qty_text = str(customer_data.get("quantity") or "")
         qty = parse_single_quantity(qty_text, logger)
-        # ★ 2026-10-29（Rossmann 半返单 PO 15910）：客户只写「每款」数量 ——
-        #   `12,500 cps each (= 25,600 cps in total)`，没有 `total qty:` 标签。
-        #   报价基数是**每款**数量，而 CPSL1 存的是**印刷总量**（语料实证：TZS=2 的单
-        #   CPSL1=6000 就是 2×3000；TZS=4 的 20000 就是 4×5000）→ 总量 = 每款 × 款数。
-        #   客户自己写的总数与之不符时**不静默采信**，按每款算并 WARN 交人工核对。
-        if not qty:
-            per_title = parse_single_quantity(str(customer_data.get("qty_per_title") or ""))
-            tzs_n = result.get("TZS")
-            if per_title and isinstance(tzs_n, int) and tzs_n > 0:
-                qty = per_title * tzs_n
-                declared = parse_single_quantity(str(customer_data.get("qty_total") or ""))
-                if declared and declared != qty:
-                    logger.warn(
-                        f"  数量: 客户写「每款 {per_title} × {tzs_n} 款 = {qty}」，"
-                        f"但客户自报总数 {declared} —— 两者不符，CPSL1 按每款×款数取 {qty}，"
-                        f"CPMS 备注必须写明待客户确认")
-                else:
-                    logger.info(f"  数量: 客户只给每款数量 {per_title} × {tzs_n} 款 = {qty}")
+        tzs_n = result.get("TZS") if isinstance(result.get("TZS"), int) else None
+        # ★ 2026-11-16 森西口径：**CPSL 存「单款本数」**（旧口径存印刷总量，作废）。
+        #   导出层 `erp_mcp_export` 会 × 款数 还原成 ERP 要的总量，所以两边必须一致：
+        #   产物单款 × TZS == 客户总本数。
+        #   - 客户给了「每款」数量 → 直接用
+        #   - 客户只给总数 → 按款数均分（能整除才均分，除不尽就 WARN 留总量交人工）
+        per_title = parse_single_quantity(str(customer_data.get("qty_per_title") or ""))
+        if per_title:
+            single = per_title
+            declared = parse_single_quantity(str(customer_data.get("qty_total") or ""))
+            if declared and tzs_n and declared != per_title * tzs_n:
+                logger.warn(
+                    f"  数量: 客户写「每款 {per_title} × {tzs_n} 款 = {per_title * tzs_n}」，"
+                    f"但客户自报总数 {declared} —— 两者不符，CPSL1 按每款取 {per_title}，"
+                    f"CPMS 备注必须写明待客户确认")
+            else:
+                logger.info(f"  数量: 客户给每款数量 {per_title}（CPSL 存单款，×{tzs_n} 款由导出层还原）")
+            qty = single
+        elif qty and tzs_n and tzs_n > 1:
+            if qty % tzs_n == 0:
+                logger.warn(f"  数量: 客户只给总数 {qty}，按款数 {tzs_n} 均分 → CPSL1 = {qty // tzs_n}"
+                            f"（业务口径：CPSL 清单款；导出时再 ×{tzs_n} 还原 {qty}）")
+                qty = qty // tzs_n
+            else:
+                logger.warn(f"  数量: 客户给总数 {qty}，但除不尽 {tzs_n} 款 → CPSL1 暂存 {qty} 并标待确认"
+                            f"（否则导出会算出 {qty * tzs_n}）")
+                result["_qty_conflict"] = f"总数 {qty} 不能被款数 {tzs_n} 整除"
+
         # ★ 2026-10-29：客户给的是**一排档位**（`5.000 / 7.500 / 10.000`）而不是单一总数
         #   —— 档案写 single 只是「默认只有一个数」，不代表客户不会给多档。
         #   落到 CPSL1..n 并 WARN 说明「档案是 single、客户给了 N 档」，不静默丢数据。
@@ -1352,15 +1377,28 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         if mapped:
             assign("ZDFS", mapped, f"binding（规范键）={binding_text}", 10)
         else:
-            fallback_binding = str(profile.rule("binding.default", ""))
-            logger.warn(f"  装订方式未命中映射表（binding={binding_text!r}）"
-                        f"→ `ZDFS` 留空（业务 2026-10-21 口径：客户没提到装订方式就留空；"
-                        f"档案默认值 {fallback_binding!r}）")
+            fallback_binding = str(profile.rule("binding.default", "") or "").strip()
+            if not fallback_binding:
+                fallback_binding = default_binding_for(result)
+                logger.warn(f"  装订方式未命中映射表（binding={binding_text!r}）"
+                            f"→ ZDFS 用业务缺省 {fallback_binding!r}"
+                            f"（业务 2026-11-16 口径：客户没提到装订方式就默认 快线BB书；"
+                            f"套装类仍落「套装」）")
+            else:
+                logger.warn(f"  装订方式未命中映射表（binding={binding_text!r}）"
+                            f"→ ZDFS 用档案默认值 {fallback_binding!r}")
             result["ZDFS"] = fallback_binding
             default_count += 1
     elif binding_text:
         logger.info(f"  装订方式 ZDFS: 档案未启用映射（binding={binding_text!r}，"
                     f"口径待业务确认 → 保持模板默认值）")
+    elif not str(result.get("ZDFS") or "").strip():
+        # 客户一个字都没提装订、档案也没启用映射 → 仍给业务缺省，别留空
+        result["ZDFS"] = default_binding_for(result)
+        logger.warn(f"  装订方式 ZDFS: 客户未提到 → 用业务缺省 {result['ZDFS']!r}"
+                    f"（2026-11-16 口径）")
+        default_count += 1
+
 
     # ── 10. 交货日期 JHRQ ──────────────────────────────────
     # 档案 rules.dates.JHRQ.mode: empty → 该客户交货日期不落库（保持空）。
@@ -1959,6 +1997,11 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
         extra.pop("_task_id", None)
         extra.pop("_deadline", None)
     cpmc_zh_by_record = [str(rec.pop("_cpmc_zh", "") or "") for rec in records]
+    # 数量口径冲突（2026-11-16：CPSL 存单款；总数除不尽款数时不静默均分）
+    for _conflict in [rec.pop("_qty_conflict", None) for rec in records]:
+        if _conflict:
+            logger.warn(f"⚠ 数量口径待确认：{_conflict}（导出层会 ×款数，务必人工核对）")
+
     cpmc_zh = cpmc_zh_by_record[0] if cpmc_zh_by_record else ""
     logger.info(f"任务ID: {task_id}")
     logger.info(f"产品记录: {len(records)} 条（ERP 导出为数组，一条产品一行）")

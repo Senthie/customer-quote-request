@@ -302,11 +302,17 @@ def test_兜底值本身符合业务口径(tmp_path: Path):
     assert fields["binding"] == "快线BB书"
 
 
-def test_非BB类目不瞎填装订(tmp_path: Path):
-    """不是 BB 书就别替客户选装订方式 —— 让它照常拦住。"""
+def test_没提装订就默认快线BB书_套装例外(tmp_path: Path):
+    """2026-11-16 森西：「没有提到就默认快线BB书」；套装类仍落「套装」。"""
     rec = _rec(ZDFS="", CPLB="01.02;精装书")
-    _, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
-    assert any("binding" in p for p in problems)
+    payload, problems = erp_push.build_payload([rec], customer="NGV10", qty_override=100)
+    assert payload["products"][0]["fields"]["binding"] == "快线BB书"
+    assert not any("binding" in p for p in problems), problems
+
+    rec2 = _rec(ZDFS="", CPLB="32.00;其它套装")
+    payload2, _ = erp_push.build_payload([rec2], customer="NGV10", qty_override=100)
+    assert payload2["products"][0]["fields"]["binding"] == "套装"
+
 
 
 def test_日期兜底只补空值(tmp_path: Path):

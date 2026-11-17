@@ -378,3 +378,31 @@ def test_读副档_坏JSON不炸(tmp_path):
     bad.write_text("x", encoding="utf-8")
     bad.with_name("a.xlsx" + META_SUFFIX).write_text("{ not json", encoding="utf-8")
     assert read_attachment_meta(bad) == {}
+
+
+# ── KHDH 用 RFQ 号（业务 2026-11-16 森西口径）──────────────────────────
+PSN22 = load_profile("psn22")   # 没有 email 覆盖 → 走 customers/_defaults.yaml
+
+
+def test_RFQ号可以当客户单号_标题():
+    for subject, want in (
+        ("询价1- Request for Quotation #105819 Bienvenue à Zinzinville !", "105819"),
+        ("询价2- Request for Quotation #103859 Les énigmes d'Arsène Lupin", "103859"),
+        ("RFQ 103859 Les énigmes", "103859"),
+        ("QRF: 105819 coédition", "105819"),
+    ):
+        value, source = extract_khdh(PSN22, subject, "", LOGGER)
+        assert value == want, (subject, value, source)
+
+
+def test_RFQ号可以当客户单号_正文():
+    body = "Hi,\nplease quote per RFQ #99601, see attached.\nThanks"
+    value, _ = extract_khdh(PSN22, "", body, LOGGER)
+    assert value == "99601"
+
+
+def test_没有RFQ字样就不硬凑单号():
+    """`137424`（询价3 的裸号）、年份、页码都不许被当客户单号。"""
+    for subject in ("询价3_ 137424 _ Adventskalender Witze", "Price enquiry Q4 27", "Page 4"):
+        value, _ = extract_khdh(PSN22, subject, "", LOGGER)
+        assert value == "", (subject, value)

@@ -181,5 +181,12 @@ email:
     subject_patterns:
       - '(?i)\b(?:p\.?o\.?|ref(?:erence)?|order)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{3,8}(?:\s*[/,&]\s*\d{3,8})*)'
       - '\b(\d{5}(?:\s*[/,&]\s*\d{5})*)\b'
+      # ★ 2026-11-16 森西口径：KHDH（客户单号）可以用客户的 **RFQ / 询价单号** 当值。
+      #   终端客户往往还没有 PO，唯一稳定的客户侧编号就是 RFQ 号
+      #   （`Request for Quotation #105819` / `RFQ 103859` / `Quotation request 42 PE`）。
+      #   必须是「询价/报价请求」这类词紧跟编号，避免把年份、页码当单号。
+      - '(?i)(?:request\s+for\s+(?:quotation|quote)|rfq|qrf|quotation\s+request|quote\s+request|quote\s+no)\s*(?:no\.?|nr\.?|number|:)?\s*[#:：]?\s*(\d{3,8})'
     body_patterns:
       - '(?i)works?\s+references?\s*[:#]?\s*(\d{3,8}(?:\s*[/,&]\s*\d{3,8})*)'
+      - '(?i)(?:request\s+for\s+(?:quotation|quote)|rfq|qrf|quotation\s+request)\s*(?:no\.?|nr\.?|number|:)?\s*[#:：]?\s*(\d{3,8})'
+

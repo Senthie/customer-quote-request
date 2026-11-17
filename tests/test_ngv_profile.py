@@ -658,11 +658,16 @@ def test_真实样本_关键字段(order):
 
 @needs_samples
 def test_真实样本_数量与款数语言数():
+    """2026-11-16 口径：`CPSL` 存**单款本数**，总量 = CPSL1 × TZS。"""
     r1 = _run(next(p for p in MANIFEST["pairs"] if p["order"] == "CU26061701")["attachment"])
-    assert r1["CPSL1"] == 512580 and r1["TZS"] == 12 and r1["YYS"] == 5
+    assert r1["TZS"] == 12 and r1["YYS"] == 5
+    assert r1["CPSL1"] * r1["TZS"] == 512580, r1["CPSL1"]
+    assert r1["CPSL1"] == 512580 // 12
 
     r2 = _run(next(p for p in MANIFEST["pairs"] if p["order"] == "CU26072302")["attachment"])
-    assert r2["CPSL1"] == 70000          # 4 x 17.500
+    assert r2["CPSL1"] * r2["TZS"] == 70000      # 4 x 17.500（单款 17500）
+    assert r2["CPSL1"] == 17500
+
     # 附件写 `4 titles, 1 language` → 单语言**不落库**（业务决定 2026-09-24，
     # 依据：两单单语言的 ERP 记录里 YYS 都是空的）
     assert r2["TZS"] == 4 and r2["YYS"] == ""

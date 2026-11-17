@@ -339,10 +339,11 @@ def apply_defaults(record: dict[str, Any], fields: dict[str, Any]
     out: dict[str, tuple[Any, str]] = {}
     if "binding" not in fields:
         cplb = str(record.get("CPLB") or "")
-        for token, val in BINDING_BY_CATEGORY:
-            if token in cplb:
-                out["binding"] = (val, f"产品类别含「{token}」→ 装订方式取 {val}")
-                break
+        if "套装" in cplb:
+            out["binding"] = ("套装", "客户没提装订 + 类别是套装 → 套装（2026-11-16 口径的例外）")
+        else:
+            out["binding"] = ("快线BB书", "客户没提装订方式 → 业务缺省 快线BB书（2026-11-16 森西）")
+
     for key, (val, reason) in FIELD_DEFAULTS.items():
         arg = PRODUCT_FIELD_MAP.get(key)
         if arg and arg not in fields:
