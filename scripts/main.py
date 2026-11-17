@@ -1221,8 +1221,13 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         num_titles = email_titles
         tzs_source = "邮件正文（最新一封）用 rules.versions.title_pattern 提取"
     if num_titles is None:
-        raw_titles = customer_data.get("number_of_titles", "1")
-        num_titles = int(raw_titles) if str(raw_titles).isdigit() else 1
+        raw_titles = str(customer_data.get("number_of_titles", "1") or "1").strip()
+        # ★ 2026-11-17（Igloo 新版 QRF）：客户把款数写成 `2T` / `4T`
+        #   （Printer Sheet `Number of Titles: 2T`）—— 旧实现 `isdigit()` 不认
+        #   → TZS 落 1，导出层 CPSL×TZS 就少一倍（B 单 6000 变 3000）。
+        _m_titles = re.fullmatch(r"(\d+)\s*[tT]", raw_titles)
+        num_titles = (int(_m_titles.group(1)) if _m_titles
+                      else (int(raw_titles) if raw_titles.isdigit() else 1))
     assign("TZS", num_titles, tzs_source, 12)
 
     # YYS 取不到时怎么办由档案 rules.versions.when_missing 决定
@@ -1611,13 +1616,24 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
         logger.info("  来源: 档案 rules.dates.JHRQ.mode=empty —— 该客户交货日期不落库")
         logger.info("  映射值: 保持空值（业务决定，不是「取不到默认值」）")
     else:
-        jhrq_source = str(profile.rule("dates.JHRQ.from", "pub_month"))
-        jhrq_value = customer_data.get(jhrq_source)
+        # `dates.JHRQ.from` 支持**一串**规范键（按顺序取第一个有值的）：
+        # 2026-11-17 Igloo 新版 QRF 的 `Required Pub Month` 是空的，但
+        # `Required Ex-works` 给了确切的交货日（2027-03-16）——
+        # 单键写法会直接落空，交货日期就白丢了。
+        jhrq_from = profile.rule("dates.JHRQ.from", "pub_month")
+        jhrq_keys = ([jhrq_from] if isinstance(jhrq_from, str)
+                     else [str(k) for k in (jhrq_from or [])])
+        jhrq_source, jhrq_value = "", None
+        for key in jhrq_keys:
+            value = customer_data.get(key)
+            if value:
+                jhrq_source, jhrq_value = key, value
+                break
         if jhrq_value:
             assign("JHRQ", parse_date_to_datestr(jhrq_value, logger),
                    f"{jhrq_source}（规范键，档案 dates.JHRQ.from）={jhrq_value}", 34)
         else:
-            logger.warn(f"  来源: 规范键 {jhrq_source} 未提供，使用默认值")
+            logger.warn(f"  来源: 规范键 {'/'.join(jhrq_keys) or '(未声明)'} 未提供，使用默认值")
             default_count += 1
 
     # ── 11. 预计下单日期 WCRQ ──────────────────────────────

@@ -22,8 +22,10 @@ notes: >
 
 # ── 1. 身份识别：还不知道他们的文件名/标签长什么样，先留空 ──────────
 detect:
+  # ★ 2026-11-17 补：真实询价由 fleuruseditions.com 发来（路由提示；档案仍是 draft）
   filename_keywords: []
   label_signatures: []
+  sender_domains: [fleuruseditions.com]
 
 # ── 2. 列名别名表：等真实询价文件──────────────────────────────
 fields: {}

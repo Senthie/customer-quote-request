@@ -69,10 +69,20 @@ Bitte senden Sie mir das Angebot bis zum 28.10.26 zu.
 3. **`total 16.000` 是德式千分位**（= 16000），不是 16。引擎已按德式解析；手算时别当成 16。
 4. **报价截止日在散文里**（「Angebot bis zum 28.10.26」），不在标签行；
    档案 `rules.scan` 有 `offer_deadline` 正则，抽不到就问客户，别默认一个日期。
+   ⚠️ 2026-11-17 实测：**德式 `28.10.26` 这种写法没抽出来** —— 产物 `reminders` 与
+   `Reminder` 都是空的（当天 11-17 早已过 10-28）。所以交付时要自己读一眼这句：
+   已过期就在汇报里点名「报价截止已过 N 天，请业务确认是否还报」，**不要**自己补日期进字段。
 5. **`euroscale` 是 NGV 的特征词**，Ullmann 正文也会出现。识别不会串：Ullmann 靠
    `Ullmann Medien` / `im Umfang von` / `europallets` 等独有标记，NGV 要求 ≥2 个特征命中。
 6. 客户偶尔用 `PAD` 系列（语料有 `PAD头书` / `PAD头书(全封面)`）→ CPMS 按原文写，
    `CPLB` 用 `rules.cplb.map` 的节点，别自己拼编号。
+7. **`Drop_SJFX` 方向按「书写顺序的两个数」比大小，不是比长短边**（2026-11-17 实测）。
+   `Format: 140x198mm` → `CD=140 / KD=198` → 引擎落「短书脊」；但这是**竖版**书，
+   书脊沿 198 的长边，应然是「长书脊」。字段疑义如实汇报（字段 / 现值 / 原文 / 应然值），
+   CPMS 概要行仍与字段一致（否则 `cpms_lint` 红），**不要**为了消 CPMS013 编方向。
+8. **`KHDH` 报价阶段恒空**：语料 18476 份 KHDH 有值 0 份（UMG19 824 份全空）→
+   `ullmann.yaml` 已声明 `rules.required_empty: [KHDH, KHDDH]`，不再生成卡交付的 `Q_KHDH`。
+   老产物里那条直接 `waived`（answer 写清「客户邮件无 PO/RFQ 号，`FJ27` 是季节代号不是单号」）。
 
 ## 4. 交付检查清单
 
@@ -94,3 +104,5 @@ uv run ./scripts/cpms_content_audit.py --cpms <产物>.json --source <客户原�
 - [ ] CPMS 写了增价项（Fadenheftung / Klappe / Farbschnitte），但没写进 `ZDFS`
 - [ ] 两个 Extent 在 CPMS 里分开写清楚
 - [ ] `CPMC`/`CPMC_ZH` 是中文品名（agent 手写），`ECPMC` 照抄客户原文（这里就是德文）
+      —— ⚠️ 本档案**没有** `rules.ecpmc.source_keys`，引擎产物里 `ECPMC` 是空的，
+      交付时由 agent 手写补上（2026-11-17 实单 `Crime Mysteries und Rätseluniversum` 即如此）

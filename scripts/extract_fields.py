@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from customer_profile import CustomerProfile, load_profile, norm_label, resolve_profile  # noqa: E402
+from customer_profile import (CARTON_LABEL_RE, CustomerProfile, load_profile,  # noqa: E402
+                              norm_label, resolve_profile)
 
 # 特殊键：透传给 main.py 的非规范数据（双下划线前缀，不会被当成规范键）
 QUANTITY_TIER_KEY = "__quantity_tiers__"
@@ -144,6 +145,74 @@ def _rows_to_matrix(df) -> list:
 
 
 # ── 数量档位 ─────────────────────────────────────────────────────────────
+_QTY_K_TOKEN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[kK]\s*$")
+_QTY_PLAIN_TOKEN = re.compile(r"^\s*(\d{3,7})\s*$")
+# 「每款」写法：`3000 per T = 6000 books = 300 SRP` / `3000 x 4T`
+_QTY_PER_T = re.compile(r"(\d[\d,\.]*)\s*(?:k)?\s*per\s*t\b", re.I)
+_QTY_TIMES_T = re.compile(r"^\s*(\d[\d,\.]*)\s*[x×*]\s*\d+\s*[tT]\b")
+
+
+def parse_qty_cell(text: Any, max_tiers: int = 10) -> list:
+    """把「一个档位单元格」解析成单款本数档位列表（解析不出返回 `[]`）。
+
+    为什么要单列一个解析器（2026-11-17 Igloo 新版 QRF 两单）：客户的档位不是
+    「一行多个格子」，而是**一格文本**，三种写法混着来：
+
+        `3k, 5k`                           → [3000, 5000]   （逗号分隔 + k 后缀）
+        `3000 per T = 6000 books = 300 SRP` → [3000]          （★ 取 per T 的单款量，
+                                                              不是 6000 总量、更不是 300 SRP）
+        `3000 x 4T`                         → [3000]          （同上，× 后面的 4T 是款数）
+        `3000/5000/7500/10000`              → 复用 split_tier_list
+
+    ⚠️ 顺序很重要：`per T` / `x NT` 必须先判 —— 否则「6000 books」会被当成一档，
+    产物 CPSL 就变成「总量」而不是业务口径要求的「单款本数」。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return []
+
+    def _num(token: str) -> Optional[int]:
+        token = token.strip().rstrip(",.")
+        if not token:
+            return None
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+", token):     # 1,500 / 12,000
+            return int(token.replace(",", ""))
+        if re.fullmatch(r"\d+(?:\.\d+)?", token):
+            return int(round(float(token)))
+        return None
+
+    m = _QTY_PER_T.search(s)
+    if m:
+        val = _num(m.group(1))
+        return [val] if val else []
+    m = _QTY_TIMES_T.match(s)
+    if m:
+        val = _num(m.group(1))
+        return [val] if val else []
+
+    # 逗号 / 分号分隔的档位串（≥2 段，每段都必须是干净数量，否则不认）
+    if any(sep in s for sep in (",", "，", ";")):
+        parts = [p for p in re.split(r"[,，;]", s) if p.strip()]
+        if len(parts) >= 2:
+            tiers: list = []
+            for part in parts:
+                token = part.strip()
+                mk = _QTY_K_TOKEN.match(token)
+                if mk:
+                    tiers.append(int(round(float(mk.group(1)) * 1000)))
+                    continue
+                mp = _QTY_PLAIN_TOKEN.match(token)
+                if mp:
+                    tiers.append(int(mp.group(1)))
+                    continue
+                tiers = []
+                break
+            if len(tiers) >= 2:
+                return tiers[:max_tiers] if max_tiers > 0 else tiers
+
+    return split_tier_list(s, max_tiers=max_tiers)
+
+
 def extract_quantity_tiers(rows: list, profile: CustomerProfile, logger=None) -> list:
     """从表格里抽数量档位（CPSL1~CPSL10 的取值来源）。
 
@@ -199,6 +268,28 @@ def extract_quantity_tiers(rows: list, profile: CustomerProfile, logger=None) ->
         if len(run) > len(best):
             best = run
 
+    # ── 标签式档位格（默认关，档案 rules.quantity_tiers.label_fallback 打开）──
+    # 有些客户不给「一行多格」，而是 `Qty Per Title | 3k, 5k` 这种**一格文本**
+    # （Igloo 新版 QRF 两单）。它过不了 row_run（一格一个值，<2 个），
+    # 所以单独走一条：找到档位标签 → 取右边（或下面）第一个非空格 → parse_qty_cell。
+    # ⚠️ 只在 row_run 一个都没抽到时才跑，且必须档案显式打开 —— 否则 NGV 的
+    #    `Quantity | 1.000` 会被当成档位，改变既有客户产物。
+    label_hits: list = []
+    if not best and bool(profile.rule("quantity_tiers.label_fallback", False)):
+        for cells in rows:
+            for idx, cell in enumerate(cells):
+                if not cell or profile.match_label(cell) != "quantity_tiers":
+                    continue
+                value = next((c for c in cells[idx + 1:] if c), "")
+                if not value:
+                    continue
+                parsed = parse_qty_cell(value, max_tiers=max_tiers)
+                if parsed:
+                    label_hits.append(parsed)
+                    log(f"数量档位（标签格）{cell!r} → {value!r} → {parsed}")
+        if label_hits:
+            best = max(label_hits, key=len)
+
     tiers: list = []
     for qty in best:
         if qty not in tiers:
@@ -216,10 +307,21 @@ def extract_quantity_tiers(rows: list, profile: CustomerProfile, logger=None) ->
 
 
 # ── 分区式表单（section_pairs）────────────────────────────────────────────
+# 「外箱」标签不能被当成成品尺寸（护栏本体在 customer_profile.match_label，
+# 这里 section_pairs 走的是 _label_matches，也要同一道闸）。
+_CARTON_LABEL_RE = CARTON_LABEL_RE
+_SIZE_LIKE_ALIASES = {
+    "size", "tps", "trim size", "trimmed size", "finished size", "finished size (w x h)",
+    "size (tps) h x w x d mm", "尺寸", "成品尺寸", "产品尺寸", "产品规格",
+}
+
+
 def _label_matches(profile: CustomerProfile, alias: str, cell: str) -> bool:
     """声明标签与单元格「整词包含」匹配（客户常把双语标签挤在一格）。"""
     a, t = norm_label(alias), norm_label(cell)
     if not a or not t:
+        return False
+    if a in _SIZE_LIKE_ALIASES and _CARTON_LABEL_RE.search(str(cell or "")):
         return False
     if a == t:
         return True

@@ -46,6 +46,15 @@ metadata:
 > ★ **推 ERP 前读 `customer-quote-request/references/erp-mcp-push.md`**：入参真值 = 服务端
 > `inputSchema`（别抄文档）、`products[].product_category` 喂 `CPLB` 可免建档、
 > `qty_1` 不许显式传、判成败只看 `status`（`failed` 也带 `bdbh`）、失败可能留空单要删。
+> ↳ **必填五项（`packing`/`pallet`/`delivery`/`delivery_date`/`inspection`）缺一项就留空单**、
+> 五项各自去哪取证、`customer_order_no` 就是 `KHDH`（可写）、没有 `ERP_MCP_TOKEN` 时
+> 改用 Hermes 侧 `mcp_erp_erp_quote_create` 直推并**补回 `erp-push.json` + `.erp_push_log.jsonl`**：
+> `customer-quote-request/references/erp-push-required-fields.md`。
+>
+> ★ **定时任务「后半段」拿到 `profile_id=generic` / 字段明显错时，先读
+> `references/generic-artifact-handling.md`** —— 那不是「欠 CPMS」，是识别/抽取失败：
+> 写了就是拿外箱尺寸/0 数量当成品规格报给客户。规矩是**不写 CPMS** → 隔离进
+> `processed/_quarantine_<日期>_<原因>/` → 写「现值/原文/应然」表 + 原文事实清单 → 如实汇报。
 
 - 客户：IGL（香港书商；许可证 `LICENSE` 同仓库）
 - 状态：`calibrated`（用真实报价表 `PUZZLE COLOUR DISNEY.xlsx` 校准）
@@ -86,6 +95,29 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 > 因为这个被误判成 igl，整单字段全错（2026-09-24 修的真 bug，详见 NGV 子技能第 2 节）。
 > 现在表格类文件一律把**正文**一起送进识别；得分 <30（只有文件名/主题这类弱证据）打 WARN。
 
+### 2.1 Igloo 有**两种**附件形态（2026-11 起）
+
+上面三条 signature 只覆盖**老表**（`Works References For all Titles` 那种横向键值对）。
+2026-11-17 起 Igloo 改发 **QRF 四表**（`QRF<8位>-<系列>-<客户>.xlsx`：
+Sales Request Form / Printer Sheet / All Printer Costs / Sales Returned infomation，
+真规格在 **`Printer Sheet`**）—— 三条 signature **一条都不命中**，
+`--detect` 直接 `未匹配到任何客户档案` → 落 `generic` 兜底。
+
+**先确认客户是谁再判断要不要报警**：`igl` **就是 Igloo Books**
+（`erp_khzl: [IBL10, IGL10]`，语料 `CPMC` 写作 `IGLOO-…`）。看到
+`Qty Per Title` / `No. of Titles` / `Required Pub Month` / `Book Specification for Costing`
+这组标签、发件人 `ghouseproducts.com` 或 `igloobooks.com` → 是 Igloo 的 QRF，**不是新客户**。
+
+形态细节 / 逐字段错值 / 修的顺序 / 两单原文事实清单：
+`references/igloo-qrf-form.md`。落 `generic` 时**先读
+`references/generic-artifact-handling.md` 再动手**（不写 CPMS 的判据与隔离流程在那儿）。
+
+**反过来：确认不是 Igloo 的新客户**（正文字段 ≥3 个、又不命中任何档案）→
+`customer-quote-request/references/new-customer-auto-profile.md`：
+`scripts/auto_profile.py` 自动落 `status: draft` 草稿档案，能猜的别名先补、剩下的列清单交人。
+⚠️ 建之前**先查有没有同域名的语料档案**（Fleurus 早就有 `fes22`，再建 `fes26` 会把同一客户
+分叉成两份）；脚本已带这道闸，手工建档别忘了。
+
 ---
 
 ## 3. 客户偏好表（固定值口径）
@@ -116,13 +148,13 @@ Total Costs | 3k | 5k | 7.5k | 10k | 20k | 25k | 30k
 | `TZS` 款数 | `number_of_titles` / `versions`（样本 2） |
 | `CPSL1`~`CPSL10` | **档位口径**（`quantity.mode: tiers`）：客户给一排档位按列序依次落 `CPSL1..n`，其余 `0`（样本 3000/5000/7500/10000/20000/25000/30000） |
 | `CD`/`KD`/`GD` | `size` 按 `size.order: [CD, KD, GD]`（客户写 `H x W x D`）。样本 `198 × 129`（客户**没给厚度**）→ `GD=0`。★ 2026-10-21：**`thickness.enabled: false` + `boards.enabled: false`，不做任何厚度推算**；客户写了 `D` 就照抄，没写就是 0 |
-| `ZDFS` 装订方式 | `rules.binding.map`（`perfect bound`/`paperback`/`无线胶装` → `胶装/PAD书`），未命中用 `default`（同样必须合法） |
+| `ZDFS` 装订方式 | `rules.binding.map`（`perfect bound`/`paperback`/`无线胶装` → `胶装/PAD书`），未命中用 `default`（同样必须合法）。★ **现行口径（2026-11-17 森西，取代 11-16 的「默认快线BB书」）**：判断不出装订方式 → `ZDFS` 落 **ERP 下拉第一个合法值 `胶装/PAD书`**（套装类仍落 `套装`），引擎自动加 `Q_ZDFS`，且 **`CPMS` 正文必须写「装订方式无法判断值，需业务自行判断」**（`cpms_lint` CPMS081 守；写进备注段，不要写进装订段 —— 装订段写 ZDFS 下拉值踩 CPMS055）。BB 书该落快线/中线/慢线哪一档是**业务判断**，不许按类别猜（历史单 普通BB书 快线/慢线各半） |
 | `Drop_SJFX` 书脊方向 | `spine.mode: cd_vs_kd`（`CD > KD` → `长书脊`）。样本 `198×129` → `长书脊` |
 | `DWMC` 单位 | 档案固定值 `本` |
 | `CPSX` 产品属性 | `rules.cpsx`：`Target Age Group=7+` + `Safety Checks=Y` → `3岁以上（要寄第三方测试）` |
 | `JHRQ` 交货日期 | `dates.JHRQ.from: pub_month` → `YYYY-MM-DD`（样本 `May-27` → `2027-05-01`） |
 | `WCRQ` 预计下单日期 | `today_plus_days: 10` |
-| `KHDH` 客户单号 | 邮件标题/正文优先，其次附件列 `works_references`（样本 `23992 / 23993`） |
+| `KHDH` 客户单号 | 邮件标题/正文优先，其次附件列：老表 `works_references`（样本 `23992 / 23993`）；新版 QRF 是表内 `Quote Ref`（`QRF20260342`，业务 2026-11-17 拍板「QRF 号可以直接当客户单号」）。★ **都没有 → 落占位符 `NULL000`**（公共 `customers/_defaults.yaml` 的 `erp_defaults`，只补空）：字典里它是 `required: error`，不补每单都红一次、把交付闸门变噪声 |
 | `CPMS` | ★ **agent 亲自写**，脚本留空 |
 
 **尺寸/厚度两个坑**：① 纸张克重传**裸数字**（`250`，不是 `250g`）—— 带 `g` 查不到，
@@ -179,7 +211,7 @@ cd /home/claw/customer-quote-request
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" --customer igl
 
 # 全量测试（含 IGL 端到端逐字段基线）
-uv run pytest -q                              # 当前 179 项
+uv run pytest -q                              # 全量（2026-11 起 900+ 项；全绿才算过，「179」是旧数字）
 uv run pytest tests/test_pipeline.py -v       # 只看 IGL 端到端
 
 # 只看抽取结果（调试用）
@@ -221,6 +253,27 @@ CPMS=''（必须为空，交给 agent）
 - **`ZDFS` 不合法值**：`无线胶装` 不是 ERP 合法值（历史单据 `0e39e2e2` 就填错了），
   正确是 `胶装/PAD书`。映射表里 `无线胶装` 已经被映射过去。
 - **`CPMS` 完全不是脚本的事**：留空的 JSON 视为未完成，不得交付。
+- ★ **裸别名 `Size` 会截走外箱尺寸**（2026-11-17 QRF 实单）：`All Printer Costs` 里有
+  `Carton Size (mm) - H x W x L`，整词包含 `size` → `CD/KD/GD` 落成 **413/292/152**
+  （外箱），成品其实在 `Printer Sheet` 的 `TPS height x width (mm)`。
+  **修法（已落地）**：护栏放在引擎 `customer_profile.match_label` —— 尺寸类规范键
+  （`SIZE_CANONICAL_KEYS = {size, size_actual}`）遇到含 `carton|shipper|外箱|外盒|装箱尺寸`
+  的标签一律跳过，所以 `Size` 别名**保留**（老表 `Size: 198 x 129` 照常能用）、
+  `section_pairs` 那条 `_label_matches` 也挂了同一道闸。见到 `CD*KD*GD` 三项都远大于直觉、
+  或恰好等于某个箱规 → 先怀疑这条，别怀疑客户。
+- **同一个格子里塞多个档位**（`Qty Per Title: 3k, 5k`）过去不满足「同一行 ≥2 个连续档位」的判定
+  → `CPSL1..10` 静默全 `0`。**现已支持**：`extract_fields.parse_qty_cell()` 认
+  `3k, 5k` / `3k,5k,7.5k` / `3000/5000/7500` / **`3000 per T = 6000 books = 300 SRP`**（取
+  per-T 的**单款量**，不是 6000 总量、也不是 300 SRP）/ `3000 x 4T`；由档案
+  `rules.quantity_tiers.label_fallback: true` 打开（默认关 —— 别的客户 `Quantity | 1.000` 不会被误当档位）。
+  认出「一格文本档位」后仍**不要**自己换算单款/总量口径：`CPSL` 存单款本数，× TZS 是导出层的事。
+- **`2T` 这种款数写法**过去解析不出 → `TZS` 退成 `1`（QRF 实单 B 单本该是 2）。**现已支持**
+  （`main.py` 对 `number_of_titles` 认 `(\d+)[tT]`）。核对 `TZS` 时仍然回原文数书名，别信字段。
+- **`Required Pub Month` 空、`Required Ex-works` 有值**是 QRF 常态：`dates.JHRQ.from`
+  支持**一串键**（`[pub_month, delivery_date]`，取第一个有值的），别把交货日期丢了。
+- **`Board book` 别再一律落 `27.02;精装BB书`**：BB 书树节点判据是「封面**有没有灰板**」
+  → 带 `grey board / chipboard / 板上裱` 落 `27.02`，纯 `board book`（如 250g C1S 卡纸）落
+  `27.01;普通BB书`。顺序写反会把普通纸板书报成精装。
 
 ---
 
@@ -258,7 +311,8 @@ CPMS=''（必须为空，交给 agent）
 - [ ] 59 键顺序断言通过、`.validation.json` 里 **0 error**
 - [ ] 与 `tests/test_pipeline.py` 的基线逐字段一致（尤其是 `CPSL1~7`、`CD/KD/GD`）
 - [ ] `CPLB` 是树里真实节点，名称与树一致
-- [ ] `KHDH` 来自邮件或附件列，允许 `23992 / 23993` 这种多号写法
+- [ ] `KHDH` 来自邮件或 QRF 的 `Quote Ref`，允许 `23992 / 23993` 这种多号写法；
+      都没有时必须是占位符 **`NULL000`**（不是空、也不是编一个号）
 - [ ] 档位数与客户表一致的**列序**（这是「档位顺序口径」待确认项，若业务改口径需重写规则）
 - [ ] `CPMS` 已由 agent 手写（非空），**严格模式**：只写客户文件里的事实，确认单/历史单据的补充信息不进 CPMS
 - [ ] ★ `CPMC` / `CPMC_ZH` 已由 agent 译成中文品名（**不能留 `【中文品名待定】` 占位符**，两者同值）

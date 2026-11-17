@@ -126,8 +126,8 @@ def test_装订映射的键必须是字面子串():
 def test_新客户档案的ERP代码():
     assert C.load_profile("ullmann").erp_khzl == ["UMG19"]
     assert set(C.load_profile("priddy").erp_khzl or []) == {"PRD21", "PRD25"}
-    # Nosy Crow 还没有 ERP 单据 → 故意留空（别凭空填）
-    assert (C.load_profile("nosycrow").erp_khzl or []) == []
+    # Nosy Crow：2026-11-17 在 ERP 客户资料里查到 NSC21（01.0517），已补进档案。
+    assert set(C.load_profile("nosycrow").erp_khzl or []) == {"NSC21"}
 
 
 def test_新客户档案都有语料来源的默认值或明确留空():

@@ -685,23 +685,32 @@ def test_真实样本_数量与款数语言数():
 
 @needs_samples
 def test_真实样本_香港单号落KHDDH而不是KHDH():
-    """香港单号 → KHDDH；KHDH（客户单号）在报价阶段是空的。
+    """香港单号 → KHDDH；KHDH（客户单号）附件里没有 → 落业务占位符 `NULL000`。
 
     2026-09-24 修正：这两个键只差一个字母，此前把附件里的「香港单号」
     写进了 KHDH，KHDDH 永远是空。4 份权威 ERP 导出：KHDDH=单号、KHDH 空。
+
+    2026-11-17 业务拍板（森西）**改了后半句**：`KHDH` 在字典里是
+    `required: error`，报价阶段客户普遍还没给单号 → 每单都红一次，
+    把「0 error」这道交付闸门变成噪声。所以空值统一填占位符 `NULL000`
+    （`customers/_defaults.yaml` 的 erp_defaults，只补空）。
+    香港单号照样落 KHDDH，不能因为有了占位符就串位。
     """
     for order in ("CU26051601-01", "CU26072301", "CU26072302"):
         pair = next(p for p in MANIFEST["pairs"] if p["order"] == order)
         result = _run(pair["attachment"])
         assert result["KHDDH"] == order, f"{order}: 香港单号必须落到 KHDDH"
-        assert result["KHDH"] == "", f"{order}: 客户单号附件里没有 → 必须留空"
+        assert result["KHDH"] == "NULL000", (
+            f"{order}: 客户单号附件里没有 → 必须落占位符 NULL000（业务 2026-11-17）"
+        )
 
     # ⚠️ CU26061701 的附件文件名与表内都没有单号 → 两个都空，
     #    必须由邮件标题/正文补（不能拿 our_ref PR-00081126 冒充）。
     o2 = next(p for p in MANIFEST["pairs"] if p["order"] == "CU26061701")["attachment"]
     result2 = _run(o2)
-    assert result2["KHDDH"] == "" and result2["KHDH"] == "", (
-        "这份附件里没有单号；不能拿 our_ref(PR-00081126) 冒充"
+    assert result2["KHDDH"] == "" and result2["KHDH"] == "NULL000", (
+        "这份附件里没有单号：KHDDH 留空，KHDH 落占位符 NULL000；"
+        "不能拿 our_ref(PR-00081126) 冒充"
     )
 
 

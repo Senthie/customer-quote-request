@@ -103,6 +103,9 @@ uv run ./scripts/customer_profile.py --detect "<某个 docx>"
 4. **数量口径 = 单款 × 款数。**
    产物 `CPSL1..10` 存**单款**，推送时 exporter 才 × `TZS`。若某单客户只给总合计，
    要拿 CPMS 里的箱数/总本数反算核对，别让「总合计」直接进 `CPSL1`（会成倍放大）。
+   2026-11-16 口径硬化：只给总合计时引擎按款数**均分**（`160000 ÷ 4 → 40000`）；
+   **除不尽就不均分**，保留总数并写 `_qty_conflict` → 输出阶段 WARN 进待确认。
+   不变式（回归测试钉住）：`CPSL1 × TZS == 客户总本数`。
 
 5. **日期语料 454/454 全空 → 档案口径不落库。**
    但 ERP 明细里 `delivery_date` / `expected_date` 是**强制必填**，推送时必须兜底：
@@ -123,9 +126,16 @@ uv run ./scripts/customer_profile.py --detect "<某个 docx>"
 | `chkBSYJZX` | false | 语料 454/454 false |
 
 **没有默认值**的（数据不支持，别为了「填满」去补）：
-`SHFS`（FOB 盐田 87%）、`TBLX`（不打卡板 29%）、`ZDFS`（快线BB书 21%）、
+`SHFS`（FOB 盐田 87%）、`TBLX`（不打卡板 29%）、
 `SFYPJ`（否 58%）、`Remark1` / `Remark3` / `Remark4`（每单不同）、
 `FSCMC` / `CPSX` / `CPLX`（语料全空 → 按原文判，判不出就留空 + 问业务）。
+
+> ⚠️ **`ZDFS` 已于 2026-11-16 由业务改口径 → 不再是「判不出就留空」**：
+> 客户**没提到**装订方式时一律落 **快线BB书**，唯一例外是类别/品名含「套装」→ 落「套装」。
+> 语料里「快线BB书 21%」只是历史分布，**不能**当成「该留空」的依据（旧写法已作废）。
+> 产物侧 `main.py::default_binding_for()`、推送侧 `erp_mcp_export.apply_defaults()` 双兜。
+> 客户**提到了**但 PSN22 档案没映射（如 `perfect binding` 之类）时，产物仍留空、
+> 只在推送那一刻兜成 快线BB书 —— 这种情况要在交付说明里点出来。
 
 ## 6. 交付检查清单
 

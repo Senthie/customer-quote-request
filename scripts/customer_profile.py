@@ -47,6 +47,13 @@ DEFAULTS_FILE = "_defaults.yaml"
 
 # ── 规范键（canonical keys）───────────────────────────────────────────────
 # 档案的 fields: 只能使用这里的键。新增规范键 = 同时改 main.py 的赋值逻辑。
+# 「外箱尺寸」标签绝不能被当成成品尺寸：Igloo 新版 QRF 的
+# `All Printer Costs!B7` = `Carton Size (mm) - H x W x L`，而裸别名 `Size`
+# 是整词包含匹配 → 一度把外箱 413×292×152 落进 CD/KD/GD（2026-11-17 两单实测）。
+CARTON_LABEL_RE = re.compile(r"carton|shipper|outer\s*box|外箱|外盒|装箱尺寸", re.I)
+# 受上面护栏保护的规范键（只有这两个是「成品尺寸」语义）
+SIZE_CANONICAL_KEYS = {"size", "size_actual"}
+
 CANONICAL_KEYS = {
     # 信息类
     "imprint", "complexity", "requested_by", "pub_month", "series_name",
@@ -294,12 +301,21 @@ class CustomerProfile:
         max_len = int(self.rule("layout.max_label_len", 60))
         if len(text) > max_len:
             return None
+        carton = bool(CARTON_LABEL_RE.search(text))
         for alias, canonical in self._alias_index:
             if text == alias:
+                # ★ 2026-11-17（Igloo 新版 QRF 两单实测）：`All Printer Costs!B7`
+                #   的 `Carton Size (mm) - H x W x L` 是**外箱尺寸**，而裸别名
+                #   `Size` 是整词包含匹配 → 会被当成成品尺寸，CD/KD/GD 落成
+                #   413/292/152，报价基数直接错。尺寸类规范键遇到「外箱」标签一律跳过。
+                if carton and canonical in SIZE_CANONICAL_KEYS:
+                    continue
                 return canonical
             if alias in text and re.search(
                 r"(?<![a-z0-9])" + re.escape(alias) + r"s?(?![a-z0-9])", text
             ):
+                if carton and canonical in SIZE_CANONICAL_KEYS:
+                    continue
                 return canonical
         return None
 

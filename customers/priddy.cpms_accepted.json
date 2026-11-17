@@ -1,0 +1,5 @@
+{
+  "_说明": "Priddy Books / Neon Squid：CPMS 业务口径白名单 —— 客户文件里**没有**、但业务已拍板要写的值。cpms_content_audit.py --accepted 用。每条必须写清依据；没依据的不许进这里（那是编数字）。",
+  "_用法": "uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <客户原始文件> --accepted customers/priddy.cpms_accepted.json",
+  "16": "套装实物件数。业务 2026-10-19 拍板：套装/多件概要行写「共【N】件」，N = 组成声明里每项数量之和（STF Flashcards：陈列盒 1 + 卡片 15 = 16）。客户原文只给了「15 cards」与「Box」，16 是规范要求的派生求和值，不是编的规格；cpms_lint CPMS011 会核对它与组成声明一致。"
+}

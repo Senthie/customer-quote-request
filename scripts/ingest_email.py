@@ -67,6 +67,14 @@ ZIP_QUARANTINE_DIRNAME = ".zip_quarantine"
 ZIP_MAX_FILES = 500
 ZIP_MAX_BYTES = 200 * 1024 * 1024
 
+# 嵌套邮件：客户把若干封询价邮件当附件转进来（`转发：附件 5 个询价邮件`）。
+# `.eml` 本来不是「附件白名单」里的类型（它是**入口**），旧代码直接 WARN 跳过 →
+# 5 封询价全丢，只剩封皮正文 → 抽出一张空单（2026-11-16 实测废掉 1 个任务）。
+# 处理口径：每封 `.eml` 自己就是一份独立询价（不需要猜分组），但没有客户档案时
+# 抽出来全是 generic 垃圾，所以照 zip 的做法**隔离 + 不自动入队**，等人确认档案再处理。
+NESTED_EML_SUFFIX = ".eml"
+EML_QUARANTINE_DIRNAME = ".eml_quarantine"
+
 
 # ── 邮件解析 ─────────────────────────────────────────────────────────────
 def html_to_text(html: str) -> str:
@@ -455,6 +463,64 @@ def quarantine_archives(archives: list, pending_dir: Path, subject: str,
     return {"root": str(root), "entries": entries}
 
 
+def quarantine_nested_emls(nested: list, pending_dir: Path, subject: str,
+                           eml_name: str = "", logger=None) -> dict:
+    """把「邮件里再套邮件」的附件落到 `pending/.eml_quarantine/<标题>_<时间戳>/`。
+
+    与 zip 的区别：**分组不用猜** —— 每封 `.eml` 就是一份独立询价。但仍然不自动入队，
+    因为这些嵌套邮件往往来自**还没有客户档案**的客户（2026-11-16 的 5 封 Fleurus /
+    Casterman 法文询价：generic 抽出来 0~7 个规范键、数量全 0），直接入队只会产出
+    一堆 `32.00;其他` 的空单，让 `cpms_todo` 每 5 分钟催一次不存在的欠账。
+
+    每封 `.eml` 连同从它的头部取到的**标题/发件人/子附件数**一起写进清单，
+    人一看就知道这是哪 5 家、该先给谁建档案。
+    """
+    root = Path(pending_dir) / EML_QUARANTINE_DIRNAME
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    slug = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", (subject or Path(eml_name).stem))[:60].strip("_") or "nested"
+    dest = _unique_dir(root, f"{slug}_{stamp}")
+    dest.mkdir(parents=True, exist_ok=True)
+
+    members: list[dict] = []
+    for name, payload in nested:
+        base = Path(name).name
+        target = _unique_path(dest, base)
+        with open(target, "wb") as f:
+            f.write(payload)
+        info = {"file": target.name, "bytes": len(payload),
+                "subject": "", "sender": "", "attachments": []}
+        try:
+            parsed = parse_eml(target)
+            info["subject"] = parsed.get("subject", "")
+            info["sender"] = parsed.get("sender", "")
+            info["attachments"] = [n for n, _ in parsed.get("attachments", [])]
+        except Exception as exc:                     # 假 .eml / 空文件：记账，不抛
+            info["note"] = f"解析失败: {exc}"
+        members.append(info)
+
+    manifest = {
+        "source": "email",
+        "kind": "nested_eml_quarantine",
+        "extracted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "eml_name": eml_name,
+        "subject": subject,
+        # ★ 语义与 zip 不同：这里**不用猜**，一封一封邮件
+        "grouping": "每封 .eml = 一份独立询价（未入队）",
+        "member_count": len(members),
+        "members": members,
+        "note": "确认客户档案（customers/<id>.yaml）后，把 .eml 逐个移到 pending/ 根下即可入队",
+        "dir": str(dest),
+    }
+    with open(dest / "_nested_eml_manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    if logger:
+        logger.warn(f"📨 邮件里套了 {len(members)} 封询价邮件 → 已隔离（未入队）: "
+                    f"{dest.relative_to(Path(pending_dir))}/")
+    return {"root": str(root), "entries": [
+        {"dir": str(dest), "members": len(members),
+         "subjects": [m.get("subject") for m in members]}]}
+
+
 def ingest(
     attachments: list,
     subject: str,
@@ -485,10 +551,14 @@ def ingest(
     skipped = []
     archives = []                                     # .zip → 隔离解开，不参与分组
     unhandled_archives = []                           # .rar/.7z → 解压器缺席，只报警
+    nested_emls = []                                  # .eml 附件 → 每封都是独立询价
     for name, payload in attachments:
         suffix = Path(name).suffix.lower()
         if suffix in ARCHIVE_SUFFIXES:
             archives.append((name, payload))
+            continue
+        if suffix == NESTED_EML_SUFFIX:
+            nested_emls.append((name, payload))
             continue
         if suffix in UNHANDLED_ARCHIVE_SUFFIXES:
             unhandled_archives.append(name)
@@ -522,6 +592,12 @@ def ingest(
     if archives:
         quarantined = quarantine_archives(archives, pending_dir, subject,
                                           eml_name=eml_name, logger=logger)
+
+    # 嵌套 .eml：一封一封独立询价，同样隔离、不进队列（2026-11-16 口径，见常量注释）。
+    nested_quarantined: dict = {"root": "", "entries": []}
+    if nested_emls:
+        nested_quarantined = quarantine_nested_emls(
+            nested_emls, pending_dir, subject, eml_name=eml_name, logger=logger)
 
     saved_paths = []
     for name, payload in usable:
@@ -560,8 +636,11 @@ def ingest(
     # 正文即任务：客户没附文件、规格全写在邮件里（NGV/KiK 这种 enquiry 邮件）
     # ★ 有 zip 时**不**落正文任务：封皮正文只有「附件是…」，落成任务只会产出空单
     #   （踩过：2026-11-13 三封 NGV 转发封皮全被抽成 CPMC=【中文品名待定】的空单）。
+    # ★ 有嵌套 .eml 时同理**不落**：封皮写着「附件 5 个询价邮件共你参考」，
+    #   真内容在那 5 封里（2026-11-16 就这么废掉一个任务）。
     body_task_path = None
-    if not saved_paths and body.strip() and body_as_task and not quarantined["entries"]:
+    if (not saved_paths and body.strip() and body_as_task
+            and not quarantined["entries"] and not nested_quarantined["entries"]):
         body_task_path, _ = write_body_task(pending_dir, body, common_meta)
         saved_paths.append(body_task_path)
         if logger:
@@ -635,6 +714,7 @@ def ingest(
             "attachments": [s["original_name"] for s in saved],
             "skipped_attachments": skipped,
             "quarantined_zips": quarantined["entries"],
+            "quarantined_emls": nested_quarantined["entries"],
             "unhandled_archives": unhandled_archives,
             "body_task": body_task_path.name if body_task_path else "",
             "body_is_task": bool(body_task_path),
@@ -651,6 +731,8 @@ def ingest(
         "skipped_attachments": skipped,
         # zip 解开但**未分组**：不进队列，等人决定拆几份（2026-11-13 业务口径）
         "quarantined_zips": quarantined["entries"],
+        # 嵌套 .eml：一封一份独立询价，同样不进队列（2026-11-16）
+        "quarantined_emls": nested_quarantined["entries"],
         "unhandled_archives": unhandled_archives,
         "body_task": body_task_path.name if body_task_path else "",
         "body_is_task": bool(body_task_path),
@@ -814,11 +896,19 @@ def main() -> int:
             print("    确认拆几份后，把要处理的文件/子目录移到 pending/ 根下即可入队")
         for name in result.get("unhandled_archives") or []:
             print(f"⚠️ 解不开的压缩包（本机没解压器）: {name} —— 需要人工处理")
+        emls = result.get("quarantined_emls") or []
+        if emls:
+            for e in emls:
+                print(f"📨 邮件里套了 {e['members']} 封询价邮件 → 已隔离（**不进队列**）: {e['dir']}")
+                for subj in (e.get("subjects") or [])[:10]:
+                    print(f"  - {subj}")
+            print("    清单见目录里的 _nested_eml_manifest.json；"
+                  "确认客户档案后把 .eml 移到 pending/ 根下即可入队")
         print(f"邮件记录: {result['email_record']}")
         print()
-        if zips and not result["attachments"]:
-            print("下一步: 人工确认压缩包怎么拆（上面那行目录），"
-                  "拆好移到 pending/ 根下后由定时扫描器接手")
+        if (zips or emls) and not result["attachments"]:
+            print("下一步: 先确认这批邮件/压缩包怎么处理（上面那行），"
+                  "确认后移到 pending/ 根下由定时扫描器接手")
             return 0
         if result.get("is_unit"):
             print(f"这封邮件的 {len(result['attachments'])} 个附件 = 同一份报价的参考文件")

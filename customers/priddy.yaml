@@ -76,6 +76,13 @@ fields:
   finishes:             ["Cover Finishes", "Finishes"]
 
 rules:
+  # ★ 2026-11-17：报价阶段客户不给单号 —— KHDH（客户单号）/ KHDDH（香港单号）本来就该空。
+  #   证据：ERP 语料 18476 份里 KHDH 有值 0 份（全空）；本客户语料同样全空
+  #   （PRD21 264 份 + PRD25 69 份）。ngv / psn22 早已按同一口径声明，这里补齐，免得每单都生成
+  #   一条卡交付的 Q_KHDH 欠账（2026-11-17 STF Flashcards 等 4 单实测踩到）。
+  #   客户邮件里真给了 PO / RFQ 号时 `email:` 段照常取号落 KHDH —— 这里只是
+  #   「取不到不算缺陷」，不是不取。
+  required_empty: [KHDH, KHDDH]
   unit:
     default: 本
     map:

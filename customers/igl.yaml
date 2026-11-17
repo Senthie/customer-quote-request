@@ -35,9 +35,21 @@ detect:
     - "Works References For all Titles"
     - "Safety Checks Req? (Y/N)"
     - "Extent (pp + cover)"
+    # ★ 2026-11-17：Igloo 换了**新版 QRF**（Quote Request Form，4 个工作表
+    #   `Sales Request Form` / `Printer Sheet` / `All Printer Costs` /
+    #   `Sales Returned infomation`）。老三条特征一条都不在里面 → 得分 0 →
+    #   落 generic（MBM Chunky T&F HB / HWH Best Ever Learning CB 两单实测）。
+    #   这四条是 QRF 独有的工作表名/表头，别的客户文件里不出现。
+    - "Qty Per Title"
+    - "All Printer Costs"
+    - "Sales Request Form"
+    - "Sales Returned infomation"
   min_signature_hits: 1
   # 发件人域名（可选，留空表示不按发件人判断）
-  sender_domains: []
+  # ★ 2026-11-17：Igloo 的询价常由香港代理 Golden House（ghouseproducts.com）
+  #   转发，原始买手是 igloobooks.com。域名命中 30 分 = 弱证据兜底，
+  #   打不过别家 100 分的特征标签命中，不会抢错客户。
+  sender_domains: [ghouseproducts.com, igloobooks.com]
   # 邮件主题关键词（可选）
   subject_keywords: []
 
@@ -59,8 +71,17 @@ fields:
   group_series_number:  ["Group/Series Number"]
   isbn:                 ["ISBNs of All Titles", "ISBNs", "ISBN"]
   project_description:  ["Project description", "Project Description"]
-  size:                 ["Size (tps) H x W x D mm", "Size"]
+  # ★ 2026-11-17：新版 QRF 的 `All Printer Costs!B7` 写作
+  #   `Carton Size (mm) - H x W x L`（**外箱**），裸别名 `Size` 会命中它 →
+  #   外箱 413×292×152 被当成成品。护栏放在引擎里
+  #   （`customer_profile.match_label`：尺寸类规范键跳过含 carton/外箱 的标签），
+  #   所以 `Size` 别名保留 —— 老形态的 `Size: 198 x 129` 照常能用。
+  size:                 ["Size (tps) H x W x D mm", "TPS height x width (mm)",
+                         "Product height x width (mm)", "Trim size", "Trimmed size",
+                         "Finished size", "Size"]
   format:               ["Format"]
+  # 交货期（新版 QRF `Required Ex-works`；只有 pub_month 缺失时才作为 JHRQ 来源）
+  delivery_date:        ["Required Ex-works", "Ex-works", "Ex works", "Ex-factory"]
   extent:               ["Extent (pp + cover)", "Extent"]
   text_printing_spec:   ["Text Printing Spec"]
   text_material:        ["Text Material"]
@@ -79,7 +100,14 @@ fields:
   binding:              ["Binding instructions", "Binding"]
   finishes:             ["Finishes"]
   # 数量档位行的标签（CPSL1~CPSL10 的来源）
-  quantity_tiers:       ["Total Costs", "Total Cost", "Cost", "Quantity", "数量"]
+  # ★ 2026-11-17：新版 QRF 把档位写成**一格文本** `Qty Per Title | 3k, 5k`，
+  #   不是老形态的「一行多格」→ 需要 quantity_tiers.label_fallback（见 rules）。
+  quantity_tiers:       ["Qty Per Title", "Total Costs", "Total Cost", "Cost",
+                         "Quantity", "数量"]
+  # 新版 QRF 的客户单号：`Quote Ref` = `QRF20220341`（业务 2026-11-17 拍板
+  # 「QRF 号可以直接当客户单号」）。表里共三处：Sales Request Form!T18、
+  # Printer Sheet!E6、All Printer Costs!C3 —— 抽到哪个都行。
+  khdh:                 ["Quote Ref"]
 
 # ── 2b. 已知的「非 ERP 字段」附加信息 ──────────────────────────
 # 这些栏位不进 ERP JSON（模板里没有对应字段），但**必须**体现在 CPMS 里。
@@ -197,6 +225,10 @@ rules:
     plain: true                               # 支持 3000
     plain_label_hint: "quantity|qty|total|cost|数量|印数"
     max_tiers: 10
+    # ★ 2026-11-17 新版 QRF：档位是**一格文本**（`Qty Per Title | 3k, 5k` /
+    #   `3000 per T = 6000 books = 300 SRP`），一行只有一个值，过不了
+    #   「一行 ≥2 格」的档位行判定 → 打开标签式兜底（parse_qty_cell）。
+    label_fallback: true
 
   # 材质 → 厚度表纸张类型（TODO「纸张类型映射表」的落地）
   materials:
@@ -281,8 +313,13 @@ rules:
   cplb:
     match_keys: [format, binding, finishes, project_description, series_name]
     map:
-      # 长正则在前（先到先得），限定「纸板书」类词以免 board 误命中
-      - { match: "board\\s*book|纸板书|厚纸板", node: "27.02" }
+      # 长正则在前（先到先得）。★ 2026-11-17 修正：BB 书树节点的判据是
+      # 「封面**有没有灰板**」（27.01 普通BB书=无 / 27.02 精装BB书=有），
+      # 而旧表把 `board book` 一律映射到 27.02 —— Igloo 新版 QRF 的
+      # `Board book binding`（250gsm C1S 卡纸，无灰板）被错判成精装BB书。
+      # 所以带灰板线索的先判 27.02，纯 `board book` 落 27.01。
+      - { match: "grey\\s*board|gray\\s*board|灰板|chipboard|board\\s*mounted|cased\\s*board|硬纸板", node: "27.02" }
+      - { match: "board\\s*book|纸板书|厚纸板", node: "27.01" }
       - { match: "lift[- ]the[- ]flap|翻翻|揭页", node: "27.05" }
       - { match: "pop[- ]?up", node: "28.01" }
       - { match: "wire[- ]?o|wiro|spiral|线圈|蛇圈", node: "26.01" }
@@ -303,8 +340,10 @@ rules:
     safety_true: ["y", "yes", "true", "是", "1", "✓"]
 
   # 日期字段
+  # ★ 2026-11-17 新版 QRF：`Required Pub Month` 常常空着，真正的交货日是
+  #   `Required Ex-works`（Sales Request Form!N11）→ from 改成取第一个有值的。
   dates:
-    JHRQ: { from: pub_month }
+    JHRQ: { from: [pub_month, delivery_date] }
     WCRQ: { mode: today_plus_days, days: 10 }
   # 书脊方向 Drop_SJFX（业务确认 2026-09-23：默认由 CD/KD 比较决定）
   # ERP 合法枚举（assets/erp_form_schema.yaml）：短书脊(0) / 长书脊(1) / 四边裁(2)
@@ -318,8 +357,10 @@ rules:
 # ── 5. 邮件规则 ────────────────────────────────────────────
 email:
   # 客户单号 KHDH：优先邮件标题/正文，其次附件列
+  # ★ 2026-11-17：新版 QRF 的客户单号在表里的 `Quote Ref`（QRFxxxxxxxx）——
+  #   规范键 `khdh` 由 fields.khdh 抽出，这里补进 attachment_keys。
   khdh:
-    attachment_keys: ["works_references"]
+    attachment_keys: ["works_references", "khdh"]
     # 标题里的单号：`PO 23992` / `Ref: 23992 / 23993` / 裸 5 位数
     subject_patterns:
       - '(?i)\b(?:p\.?o\.?|ref(?:erence)?|order)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{4,6}(?:\s*[/,&]\s*\d{4,6})*)'

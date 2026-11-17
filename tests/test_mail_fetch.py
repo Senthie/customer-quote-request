@@ -103,6 +103,25 @@ def test_主题命中跳过名单也不进(dirs):
     assert client.exported == []
 
 
+def test_腾讯企业邮转发通知不进流水线():
+    """2026-11-17 真实事故：`marketing@wafai.net` 的「已设置将邮件转发至您的邮箱」
+    是腾讯企业邮的**系统通知**，正文只有一句通知 + 腾讯页面链接，无附件、
+    无任何产品字段 → 抽出来是 `profile=generic` / `values={}` 的空单
+    （`831ab1c2…`，`CPMC=32.00;其他`、`CPSL1..10=0`）。
+
+    用**真实** `assets/mail.yaml` 校验（不是测试里另造的 CFG）—— 配置改坏了这里会红。
+    同时钉住边界：**同一个发件人**真发来的询价不能被顺手拦掉。
+    """
+    cfg = M.load_config(M.CONFIG_PATH)
+    notice = env(900, "Mark Lin已设置将邮件转发至您的邮箱",
+                 addr="marketing@wafai.net", name="Mark Lin")
+    assert "转发" in M.skip_reason(notice, cfg)
+
+    enquiry = env(901, "Preisanfrage Malbücher 2027",
+                  addr="marketing@wafai.net", name="Mark Lin")
+    assert M.skip_reason(enquiry, cfg) == ""
+
+
 # ── 去重 ──────────────────────────────────────────────────────────────
 
 def test_第二轮不再重复落盘(dirs):

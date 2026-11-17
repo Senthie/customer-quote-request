@@ -14,7 +14,22 @@ metadata:
 
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
-> **版本：** 1.0.82（2026-11-17 **三个新客户档案 + 装订口径变更 + 五项引擎修复**：
+> **版本：** 1.0.83（2026-11-17 晚 **Igloo 新 QRF 表 + 新客户自动建档 + NULL000 占位**：
+> ① **Igloo 换了新版 QRF 询价表**（`QRF20260342` 那种）：旧 `igl.yaml` 认不出 → 落 generic 空单，
+> 且 `Carton Size (mm) - H x W x L` 被当成成品尺寸（413×292×152 是**外箱**）。`igl.yaml` 加 QRF
+> 特征标签 + `sender_domains`（识别 0 → 100 分）；引擎级加**外箱尺寸护栏**（`carton|shipping carton|
+> CBM` 上下文的尺寸不许当成品尺寸）；`parse_qty_cell()` 认「一格多档」（`3k, 5k`、`3000 per T = 6000
+> books` → 取**单款**量）；`2T` 后缀 → `TZS`；`cplb.map` 按灰板拆 27.02/27.01；`Quote Ref` → `KHDH`。
+> ② **新客户自动建档**：`scripts/auto_profile.py`（已挂 `scan_pending.sh`）—— 产物落 generic 时按
+> 域名/签名字段自动建 `status: draft` 草稿档案，能猜的别名先补、猜不出的列清单，**绝不猜 `erp_khzl`**；
+> 域名命中已有档案则跳过并提示去 `calibrate_customer.py`。草稿不参与抽取，校准后手工置 `status: active`。
+> ③ **`KHDH` 为空填 `NULL000`**（`_defaults.yaml` 的 `erp_defaults`，只补空）：询价阶段客户普遍没给
+> 单号，而字典里它是 `required: error` → 每单都红一次，把「0 error」交付闸门变成噪声。
+> ④ `nosycrow` 补 ERP 代码 `NSC21`；⑤ 早期 28 份产物列进 `.erp_push_skip.json`（不推 ERP）；
+> ⑥ 清 `pending/` 根目录 94 个残留副档（`.meta.json`/`_email_*.json` 壳）。
+> 回归 +28（`tests/test_igl_qrf_form.py` 18 + `tests/test_auto_profile.py` 10），全量 **998 绿**。
+> 2 单 Igloo 真询价已重跑并入 ERP（`BJXQ261117003/004`））
+> —— 前序 1.0.82（2026-11-17 **三个新客户档案 + 装订口径变更 + 五项引擎修复**：
 > ① **新建 3 个客户档案**（各有子技能）：`ullmann`（Ullmann Medien，德文纯文本「款名表 + 七行规格」，
 > 语料 UMG19 787 份）、`priddy`（Priddy Books / Neon Squid，英文标签清单，语料 PRD21+PRD25 333 份）、
 > `nosycrow`（Nosy Crow，「分区 + 散文档」，**无语料** → 默认值全空是故意的）。建档依据是
@@ -2652,7 +2667,18 @@ uv run pytest tests/test_pipeline.py -v
 - ⚠️ **别把 ERP 导出的「多出的键」当字段用**：CU26072302 那份导出有 60 个键
   （多了个「产品备注」—— 业务 2026-09-24：先不需要），4 份都带 ERP 侧的 `KHCPMC` 键。
   差异核对时先按模板的 59 键对齐，再看多出来的键是什么。
-- **`Drop_SJFX` / `ZDFS` / `DWMC` 的合法取值已由 ERP 真表单确认**（1.0.14）：
+- ★ **`Drop_SJFX` 的 `cd_vs_kd` 比的是「先写的数 vs 后写的数」，不是长短边**（2026-11-17 实测）：
+  同一批 Priddy 询价里 `TPS: 215(w) x 280(h)` → `CD=215/KD=280` → 短书脊；
+  Nosy Crow `300mm(h) x 220mm(w)` → `CD=300/KD=220` → 长书脊。**两本都是竖版书**（书脊沿长边），
+  方向却相反 —— 因为 `CD/KD` 按客户书写顺序落（1.0.48 口径），而 `cd_vs_kd` 直接比这两个数。
+  竖版书（h > w）应统一为「长书脊」，横版（w > h）才是「短书脊」。改之前先核 `CD/KD` 是否
+  已按「长边→CD」归位；**别为了让 CPMS013 闭嘴去编方向**，字段疑义如实报给引擎侧。
+- ★ **`versions.title_pattern` 里的 `cards?` 会把「一盒 15 张卡」的件数当款数**（2026-11-17）：
+  priddy 档案 `(\d+)\s*(?:titles?|versions?|cards?)` 命中 `a set of 15 cards, in a box`
+  → `TZS=15`，而 `validation.json` 的 `products[].titles` 是 1。套装类只有**款数=1**，
+  15 是**实物件数**（进 CPMS「共【16】件」，含盒）。给套装型客户写 `title_pattern` 时
+  别把件数词（cards/sheets/pieces）算进款数。
+
   `短书脊`/`长书脊`/`四边裁`、`胶装/PAD书` 等 10 项、单位为 `本`。
   **`无线胶装` 不是合法值** —— 历史单据就填错了（正确是 `胶装/PAD书`）。
   改动这些枚举前先更新 `assets/erp_form_schema.yaml`，再跑 `uv run pytest`。

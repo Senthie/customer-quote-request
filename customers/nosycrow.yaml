@@ -37,7 +37,9 @@ name: Nosy Crow
 priority: 40
 status: calibrated
 # 新客户：ERP 语料里还没有这家的单据（见文件头）
-erp_khzl: []
+# ★ 2026-11-17 从 ERP 客户资料选择页补到代码：`NSC21` / 资料编号 `01.0517`
+#   / 简称 `Nosy Crow` / 联系人 Karina Stevens（业务 阮春亮）。
+erp_khzl: [NSC21]
 notes: >
   Nosy Crow（英国独立童书出版社）。联系人是项目/生产口（Anastasiia Smishchenko）。
   询价正文是英式「分区 + 散文」写法：Extent/Binding/Cover/Interiors 每段一大句，
@@ -70,6 +72,13 @@ fields:
   cover_material:       ["Cover Paper", "Cover Stock"]
 
 rules:
+  # ★ 2026-11-17：报价阶段客户不给单号 —— KHDH（客户单号）/ KHDDH（香港单号）本来就该空。
+  #   证据：ERP 语料 18476 份里 KHDH 有值 0 份（全空）；本客户语料同样全空
+  #   （无语料，按同口径（另三家：PRD21/PRD25/UMG19 全空））。ngv / psn22 早已按同一口径声明，这里补齐，免得每单都生成
+  #   一条卡交付的 Q_KHDH 欠账（2026-11-17 STF Flashcards 等 4 单实测踩到）。
+  #   客户邮件里真给了 PO / RFQ 号时 `email:` 段照常取号落 KHDH —— 这里只是
+  #   「取不到不算缺陷」，不是不取。
+  required_empty: [KHDH, KHDDH]
   unit:
     default: 本
     map:

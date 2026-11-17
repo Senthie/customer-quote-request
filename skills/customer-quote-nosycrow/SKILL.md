@@ -68,6 +68,14 @@ Wafer Seal - Paper wafer seal to affix sticker sheets to inside back cover.
 6. 这一家的产品经理常直接把英国客户的原始询价转发过来（发件人是我们同事），
    识别靠正文里的 `Nosy Crow` / `Preparation & Text` / `Fastenings` 等特征，
    以及正文里的客户域名。
+7. **推送会缺 `customer`**：`erp_khzl: []` → `export_calls(customer="")`，
+   `.erp-import.json` 里 `customer` 是空串（2026-11-17 实测 `Little Museum` 即如此）。
+   真实推送前必须拿到 ERP 客户资料代码（问业务 / 在客户资料页查），别拿别家代码凑。
+8. **`KHDH`/`KHDDH` 报价阶段恒空**：语料 18476 份 KHDH 有值 0 份 → 档案已声明
+   `rules.required_empty: [KHDH, KHDDH]`，不再生成卡交付的 `Q_KHDH`。
+   老产物里那条直接 `waived`（answer 写清「客户邮件无 PO/RFQ 号 + 语料依据」），**不编单号**。
+9. **改完 CPMS 要重导 `.erp-import.json` 侧档**（`product_desc` 是生成时的快照，不会自动跟）——
+   配方见总纲 `references/cpms-backhalf-cron.md` §2。
 
 ## 4. 交付检查清单
 
@@ -83,4 +91,7 @@ uv run ./scripts/cpms_content_audit.py --cpms <产物>.json --source <客户原�
 - [ ] `BZFS`/`SHFS`/`TBLX` 空着时，确认 `question_answers` 里有对应待确认项（别硬填）
 - [ ] CPMS 写了 `Interiors`（风琴折 9 面 / 4 张贴纸 / 口袋位置）与 `Fastenings`（封口贴）
 - [ ] `CPMC`/`CPMC_ZH` 是中文品名（agent 手写），`ECPMC` 照抄客户英文品名
+      —— ⚠️ 本档案**没有** `rules.ecpmc.source_keys`，引擎产物里 `ECPMC` 是空的，
+      交付时由 agent 手写补上（「引擎不产出」≠「这单不该有」；2026-11-17 实单
+      `Little Museum` 就是这么补的）
 - [ ] 这是新客户：**交付前确认业务要不要建档默认值**（语料为空，口径无从验证）

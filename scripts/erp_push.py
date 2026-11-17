@@ -248,6 +248,26 @@ def already_pushed(task_id: str) -> Optional[dict[str, Any]]:
     return None
 
 
+# ── 「不推 ERP」白名单（业务 2026-11-17 森西：早期产物不需要推送到 ERP）──────
+# 2026-10-30 / 11-10 那批是流水线搭起来时的历史产物：报价期早过、
+# 有些客户当时还没建档。业务口径是**留档不推**。
+# 用一份显式清单（带原因与日期）而不是「按时间一刀切」——
+# 时间会漂移，清单不会：以后哪份要补推，删掉那一行即可。
+SKIP_PATH = CUSTOMER_FILES / ".erp_push_skip.json"
+
+
+def skip_reason(task_id: str) -> Optional[dict[str, Any]]:
+    """这个 task 是否被业务标了「不推 ERP」。返回该条记录（含 reason）或 None。"""
+    if not task_id or not SKIP_PATH.exists():
+        return None
+    try:
+        data = json.loads(SKIP_PATH.read_text(encoding="utf-8"))
+    except Exception:                       # 清单写坏了不能拦住正常推送
+        return None
+    entry = (data.get("skip") or {}).get(task_id)
+    return entry if isinstance(entry, dict) else None
+
+
 def append_log(entry: dict[str, Any]) -> None:
     PUSH_LOG.parent.mkdir(parents=True, exist_ok=True)
     with PUSH_LOG.open("a", encoding="utf-8") as fh:
@@ -371,6 +391,15 @@ def push(
                 "task_id": task_id,
                 "bdbh": prev.get("bdbh"),
                 "log": str(PUSH_LOG),
+            }
+        # 业务标了「早期产物不推 ERP」→ 直接跳过（`--force` 仍可强推）
+        skipped = skip_reason(task_id)
+        if skipped:
+            return {
+                "status": "skipped",
+                "reason": f"业务标记「不推 ERP」：{skipped.get('reason') or '历史产物留档'}",
+                "task_id": task_id,
+                "skip_list": str(SKIP_PATH),
             }
 
     if is_mcp:
