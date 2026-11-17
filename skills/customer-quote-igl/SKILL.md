@@ -108,8 +108,11 @@ Sales Request Form / Printer Sheet / All Printer Costs / Sales Returned infomati
 `Qty Per Title` / `No. of Titles` / `Required Pub Month` / `Book Specification for Costing`
 这组标签、发件人 `ghouseproducts.com` 或 `igloobooks.com` → 是 Igloo 的 QRF，**不是新客户**。
 
-形态细节 / 逐字段错值 / 修的顺序 / 两单原文事实清单：
-`references/igloo-qrf-form.md`。落 `generic` 时**先读
+**★ 2026-11-17 晚已修好并入库**（引擎 1.0.83）：`detect` 命中 100、外箱尺寸不再冒充成品、
+一格多档能拆、`2T`→`TZS`、`Quote Ref`→`KHDH`。形态细节 / 当时的错值诊断 / 已落的修改 /
+两单原文事实清单 / **还没解决的 4 条残留**：`references/igloo-qrf-form.md`
+（下次碰到 QRF **先看那篇的第 0 节和第 6 节**）。
+落 `generic` 时**先读
 `references/generic-artifact-handling.md` 再动手**（不写 CPMS 的判据与隔离流程在那儿）。
 
 **反过来：确认不是 Igloo 的新客户**（正文字段 ≥3 个、又不命中任何档案）→
@@ -211,7 +214,7 @@ cd /home/claw/customer-quote-request
 uv run ./scripts/main.py "customer-files/pending/<附件>.xlsx" --customer igl
 
 # 全量测试（含 IGL 端到端逐字段基线）
-uv run pytest -q                              # 全量（2026-11 起 900+ 项；全绿才算过，「179」是旧数字）
+uv run pytest                                 # 全量（2026-11-17 起 998 项；全绿才算过，「179」是旧数字）
 uv run pytest tests/test_pipeline.py -v       # 只看 IGL 端到端
 
 # 只看抽取结果（调试用）
@@ -220,6 +223,13 @@ uv run ./scripts/extract_fields.py "customer-files/pending/<附件>.xlsx" --cust
 # 抽查某份产物的取值合法性
 uv run ./scripts/erp_schema.py --check <ERP JSON 路径>
 ```
+
+> ★ **要 commit / 森西说「提交改动」「版本记一下」→ 读
+> `customer-quote-request/references/repo-commit-and-versioning.md`**（类级内容，所有客户通用）：
+> 上面那个路径才是**真仓库**，skill 目录**不是** git 仓库（在那儿跑 `git status` 只会
+> `fatal: not a git repository`）；顺序 = 修红测试 → 全量 pytest → 升 `SKILL.md` 顶部版本块
+> → `git add -A` **之前**先给新状态文件补 `.gitignore` → commit → `pull --rebase origin main`
+> → 报「领先 origin/main N 个提交」，**push 必须等森西点头**（remote 是公开仓库）。
 
 **基线（`tests/test_pipeline.py::EXPECTED_VALUES`，改代码必须过）**：
 
