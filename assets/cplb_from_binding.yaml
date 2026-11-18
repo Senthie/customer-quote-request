@@ -1,0 +1,91 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# 由「装订/成品形态」推 ERP 产品类别（CPLB）—— 通用兜底层
+#
+# 为什么需要
+#   客户档案 customers/<id>.yaml 的 `cplb.map` 是**客户写法 → 树节点**的映射，
+#   写得再全也总有漏（2026-11-18 基线实测：30 份产物里 12 份回落到 `32.00;其他`，
+#   而 ERP 真值都是「无线胶装书 / 普通BB书 / 精装BB书 / 方脊精装书 / PAD头书 …」）。
+#   这一层不认客户写法，只认**成品形态的通用英文/德文词**（ERP 的类别定义本身
+#   就是按装订方式分的），所以放 assets 里共用，不必给每个客户重复写。
+#
+# 生效顺序（scripts/main.py resolve_cplb）
+#   ① customers/<id>.yaml rules.cplb.map（客户特定，先到先得）
+#   ② 本文件（通用形态推断，先到先得）
+#   ③ assets/product_categories.xlsx 查表（旧路径）
+#   ④ 档案 product_category.fallback（默认 32.00;其他）
+#
+# 规则字段
+#   match     —— 命中用正则（在 binding + binding_instructions + finishes + format
+#                + project_description + product_name + notes 拼起来的 blob 上搜）
+#   requires  —— 同一 blob 里还必须另有这条证据（可选；用来防止「冲形状」这类
+#                修饰词把整单吞掉）
+#   node      —— assets/cplb_tree.yaml 的编号（必须是 depth=2 的叶子）
+#   note      —— 给人看的判断依据
+#
+# ⚠️ 顺序即优先级：BB 先判（封面有没有灰板）、再判精装、再判胶装 —— 与 27/22/23
+#    三组的业务定义一致。新增规则请贴在该组末尾，别插到前面去。
+# ═══════════════════════════════════════════════════════════════════════════
+version: 1
+updated_at: '2026-11-18'
+field: CPLB
+blob_keys: [binding, binding_instructions, finishes, format, project_description, product_name, notes]
+
+rules:
+  # ── BB 书：先看封面有没有灰板 ─────────────────────────────────────────
+  - match: "(grey|gray)\\s*board|灰板|chipboard|board\\s*mounted|cased\\s*board"
+    requires: "board\\s*book|papp|BB"
+    node: "27.02"
+    note: "带灰板的 BB 书 = 精装BB书"
+  - match: "(cased|case[\\s-]*bound|hardcover|hard\\s*case).{0,40}board\\s*book"
+    node: "27.02"
+    note: "Cased board book = 精装BB书"
+  - match: "lift[\\s-]*the[\\s-]*flap|klappenbuch|揭页|翻翻"
+    requires: "board\\s*book|papp|BB|厚纸板"
+    node: "27.05"
+    note: "带揭页的 BB 书 = 普通揭页BB书"
+  - match: "board\\s*book|pappbilderbuch|pappband|纸板书|厚纸板|board\\s*book\\s*binding"
+    node: "27.01"
+    note: "纯 board book（无灰板）= 普通BB书"
+
+  # ── 立体书 ───────────────────────────────────────────────────────────
+  - match: "pop[\\s-]*up"
+    node: "28.01"
+    note: "POP UP = 普通POP UP书"
+
+  # ── 线圈 ─────────────────────────────────────────────────────────────
+  - match: "wire[\\s-]*o|wiro|spiral|双线圈|线圈书|蛇圈|YO\\s*(书|圈)"
+    node: "26.01"
+    note: "线圈装订 = 普通蛇圈书（精装/内藏等变体由客户档案细化）"
+
+  # ── 骑钉 / 车线 ──────────────────────────────────────────────────────
+  - match: "saddle[\\s-]*stitch|saddle\\s*staple|staple|骑马钉|骑钉|klett"
+    node: "24.01"
+    note: "骑马钉 = 普通骑钉书（冲形状/贴纸等变体由客户档案细化）"
+  - match: "cased|case[\\s-]*bound|hardcover|hard[\\s-]*back|hard[\\s-]*case|hardbound|精装"
+    node: "22.02"
+    note: "精装（封面有灰板皮壳）= 方脊精装书（圆脊/带机封由客户档案细化）"
+  - match: "thread[\\s-]*sew|section\\s*sewn|fadenheftung|车线"
+    node: "25.01"
+    note: "车线 = 普通车线书（有灰板时上面 22 组会先命中）"
+
+  # ── PAD ──────────────────────────────────────────────────────────────
+  - match: "pad\\s*(head|头)|PAD头|pad\\s*book"
+    node: "23.05"
+    note: "PAD 头书"
+
+  # ── 精装 / 胶装 ──────────────────────────────────────────────────────
+  - match: "锁线"
+    requires: "胶装|perfect"
+    node: "23.02"
+    note: "锁线胶装 = 锁线胶装书"
+  - match: "soft[\\s-]*cover.{0,30}sewn|limp,?\\s*sewn"
+    node: "23.02"
+    note: "软封面+锁线 = 锁线胶装书"
+  - match: "perfect[\\s-]*bind|soft[\\s-]*cover|softcover|paperback|paper[\\s-]*back|klebebindung|无线胶装|unsewn"
+    node: "23.01"
+    note: "无线胶装 / 软封面"
+
+  # ── 盒 / 套装（不成册）──────────────────────────────────────────────
+  - match: "set[\\s-]*up\\s*box|rigid\\s*box|slipcase|糊盒|cigarette\\s*box"
+    node: "30.01"
+    note: "硬盒 / 糊盒 = 糊盒"

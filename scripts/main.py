@@ -326,6 +326,65 @@ def _parse_date_value(date_str: str) -> Optional[datetime]:
     return None
 
 
+def _cplb_from_binding(customer_data: CustomerData, logger: Logger) -> tuple[str, str]:
+    """通用兜底：由「装订/成品形态」推断产品类别（assets/cplb_from_binding.yaml）。
+
+    为什么不写在客户档案里：ERP 的类别定义本身就是按**装订方式**分的
+    （精装/胶装/骑钉/车线/线圈/BB/PAD…），这层判断不依赖任何客户写法。
+    客户档案的 `cplb.map` 仍然优先 —— 这一层只接「档案没写全」的情况。
+
+    ★ 2026-11-18 基线实测：30 份产物有 12 份回落到 `32.00;其他`，而 ERP 真值
+      是无线胶装书/普通BB书/精装BB书/方脊精装书/PAD头书 —— 客户文件里
+      `Softcover` `Cased book` `Board book binding` 这些词都有，只是档案没映射。
+    """
+    rules = _cplb_binding_rules()
+    if not rules:
+        return "", ""
+    keys = _CPLB_BINDING_KEYS
+    blob = " ".join(str(customer_data.get(k) or "") for k in keys)
+    if not blob.strip():
+        return "", ""
+    for entry in rules:
+        pattern = str(entry.get("match") or "")
+        node = str(entry.get("node") or "").strip()
+        requires = str(entry.get("requires") or "")
+        if not pattern or not node:
+            continue
+        if requires and not re.search(requires, blob, re.IGNORECASE):
+            continue
+        if re.search(pattern, blob, re.IGNORECASE):
+            if not cplb_tree.exists(node):
+                logger.warn(f"  cplb_from_binding 命中 {node}，但该编号不在产品类别树里 → 跳过")
+                continue
+            label = cplb_tree.label_of(node)
+            logger.info(f"  类别推断: 命中 /{pattern}/ → {label}"
+                        + (f"（{entry.get('note')}）" if entry.get("note") else ""))
+            return label, f"通用形态推断（cplb_from_binding: /{pattern}/）"
+    return "", ""
+
+
+_CPLB_BINDING_KEYS = ("binding", "binding_instructions", "finishes", "format",
+                      "project_description", "product_name", "notes")
+_CPLB_BINDING_CACHE: dict[str, Any] = {}
+
+
+def _cplb_binding_rules() -> list[dict]:
+    """读 assets/cplb_from_binding.yaml（进程内缓存）。"""
+    if "rules" in _CPLB_BINDING_CACHE:
+        return _CPLB_BINDING_CACHE["rules"]
+    path = Path(__file__).resolve().parent.parent / "assets" / "cplb_from_binding.yaml"
+    rules: list[dict] = []
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        rules = list(data.get("rules") or [])
+    except Exception as exc:  # 文件缺失/语法错 → 不阻断主流程
+        rules = []
+        _CPLB_BINDING_CACHE["error"] = str(exc)
+    _CPLB_BINDING_CACHE["rules"] = rules
+    return rules
+
+
 def resolve_cplb(customer_data: CustomerData, profile: CustomerProfile,
                  logger: Logger) -> tuple[str, str]:
     """产品类别 CPLB：档案关键词映射 → 旧查表兜底 → 档案兜底值。
@@ -358,6 +417,11 @@ def resolve_cplb(customer_data: CustomerData, profile: CustomerProfile,
                             + f" → {label}")
                 return label, f"档案 cplb.map（命中 /{pattern}/）"
             logger.warn(f"  档案 cplb.map 命中 /{pattern}/，但编号 {code} 不在产品类别树里 → 忽略")
+
+    # 1.5) 通用形态推断（assets/cplb_from_binding.yaml）—— 接「档案没写全」
+    inferred, src = _cplb_from_binding(customer_data, logger)
+    if inferred:
+        return inferred, src
 
     # 2) 旧路径：产品类别映射表（assets/product_categories.xlsx 的 customer_product_categories 列）
     format_value = customer_data.get("format")
