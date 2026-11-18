@@ -481,7 +481,10 @@ rules:
     #   `8 versions: 6x version A, 2x version B`（不写 titles），旧正则只认 titles
     #   → TZS 落成默认 1（真值 8 款）。
     #   注意「6x version A」不会误命中：数字后面跟 `x` 再空格，不算 \s*。
-    title_pattern: "(\\d+)\\s*(?:titles?|versions?)"
+    # ★ 2026-11-18 补德文写法：NGV 的 VEMAG/Tedi 表把款数写成 `4 Titel`
+    #   （旧正则只认 titles/versions → TZS 落 1，实测 CU26092401 真值 4 款、
+    #    CU26082501 真值 4 款）。
+    title_pattern: "(\\d+)\\s*(?:titles?|versions?|titel)"
     language_pattern: "(\\d+)\\s*languages?"
     # 单语言不落库 —— 业务决定（2026-09-24）。
     # 依据：附件写 `4 titles, 1 language` 的两单（CU26072301 / CU26072302），

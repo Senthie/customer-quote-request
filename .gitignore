@@ -20,6 +20,8 @@ customer-files/pending/*
 !customer-files/pending/.gitkeep
 # 邮件原文（ingest_email 展开 .eml 后把原邮件归档到这里）—— 客户数据不进仓库
 customer-files/inbox/
+# 询价 eml × ERP 真值参考库（真实客户数据，不入库；口径见该目录 README.md）
+customer-files/reference-eml/
 # 定时扫描器的运行状态（flock 锁 + 重试计数）—— 机器本地的东西，不进仓库
 customer-files/.scan.lock
 customer-files/.scan_state.json
