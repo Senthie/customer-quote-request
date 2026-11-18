@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# 纯文本 / PDF 询价的「数量」兜底抽取
+#
+# 为什么需要（2026-11-18 基线）
+#   34 封参考 eml 里，文本类询价（Fleurus / Casterman / Tedi 文字件 …）的
+#   数量根本没进规范键 —— 它们不写 `Quantity:` 标签，而是散在正文里：
+#       `Bienvenue à Zinzinville ! - 3 000 ex. suédois + 2 000 ex. danois`
+#       `Auflage: 12.000 Stück` / `Print run 5000 copies`
+#   14 份产物因此数量全空，只能人工补。
+#
+# 用法（scripts/main.py `_quantity_from_text`）
+#   档案 `rules.quantity.mode: single` 且 layout 没取到 quantity 时，
+#   按下面的顺序在**客户文件正文**里跑，取第一个命中；解析仍交给
+#   `parse_single_quantity()`（德式千分位 / 空格千分位 / `N x M` 都认）。
+#
+# ⚠️ 只认「数字 + 明确单位」，绝不裸取数字 —— 报价文件里价格、页码、
+#    克重、尺寸都是数字，裸取比留空更糟。命中后会打 INFO 说明来源，
+#    CPMS 里仍要写清「数量取自邮件正文」，交业务复核。
+# ═══════════════════════════════════════════════════════════════════════════
+version: 1
+updated_at: '2026-11-18'
+
+patterns:
+  # ① 「标签 + 数字 + 单位」最可靠
+  - '(?im)^[^\n]{0,30}?\b(?:auflage|print\s*run|printrun|gesamtmenge|menge|quantity|qty|数量|数量总计)\b[^\n]{0,20}?[:=]?\s*(\d[\d.,\s]{1,12}?)\s*(?:cps|pcs|copies|exemplare|exemplaires|ex\.|st(?:ü|ue)ck|本|册)'
+  # ② 「数字 + 单位」（法文/英文询价标题里最常见：`3 000 ex.`）
+  - '(?i)(\d{1,3}(?:[ .,]\d{3})+|\d{4,8})\s*(?:cps|pcs|copies|exemplare|exemplaires|ex\.|st(?:ü|ue)ck)(?![A-Za-zÄÖÜäöüß])'
+  # ③ 中文「N本 / N册」
+  - '(?i)(\d{3,8})\s*(?:本|册)'

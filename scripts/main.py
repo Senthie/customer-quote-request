@@ -385,6 +385,64 @@ def _cplb_binding_rules() -> list[dict]:
     return rules
 
 
+def _quantity_from_text(customer_data: CustomerData, logger: Logger) -> Optional[int]:
+    """纯文本/PDF 询价的「数量」兜底（assets/quantity_from_text.yaml）。
+
+    ★ 2026-11-18：文本类询价不写 `Quantity:` 标签，数量散在正文里
+      （`3 000 ex. suédois` / `Auflage: 12.000 Stück`），layout 抽不到 → 14 份产物数量全空。
+      这里只认「数字 + 明确单位」，命中后打 INFO 说明来源，交业务复核。
+    """
+    blocks = list(getattr(customer_data, "text_blocks", None) or [])
+    if not blocks:
+        return None
+    layout = str(getattr(customer_data, "layout", "") or "")
+    if layout and not layout.startswith("text"):
+        return None          # 表格类不走这条（布局抽不到就别猜，免得拿价格/页码当数量）
+    haystack = "\n".join(str(b) for b in blocks)
+    found: list[tuple[int, str]] = []
+    for pattern in _quantity_text_patterns():
+        try:
+            for m in re.finditer(str(pattern), haystack, re.IGNORECASE):
+                raw = (m.group(1) if m.groups() else m.group(0)).strip()
+                value = parse_single_quantity(raw)
+                if value:
+                    found.append((value, m.group(0).strip().replace("\n", " ")[:40]))
+        except re.error:
+            continue
+    if not found:
+        return None
+    distinct = sorted({v for v, _s in found})
+    if len(distinct) > 1:
+        # 正文里出现多个不同数量（多语言/多版本各自的本数）—— **不猜**，交人工。
+        # 与 FSC「不唯一就留空」同一个口径：猜错比留空更贵。
+        snippets = "、".join(f"{v}({s})" for v, s in found[:4])
+        logger.warn(f"  数量: 正文里找到 {len(distinct)} 个不同数量 {distinct} —— 不猜，"
+                    f"CPSL 留空交人工。命中片段：{snippets}")
+        return None
+    value, snippet = found[0]
+    logger.info(f"  数量: layout 没取到 → 正文兜底命中 {snippet!r} → {value}"
+                f"（来源 assets/quantity_from_text.yaml，请业务复核）")
+    return value
+
+
+_QUANTITY_TEXT_CACHE: dict[str, Any] = {}
+
+
+def _quantity_text_patterns() -> list[str]:
+    if "patterns" in _QUANTITY_TEXT_CACHE:
+        return _QUANTITY_TEXT_CACHE["patterns"]
+    path = Path(__file__).resolve().parent.parent / "assets" / "quantity_from_text.yaml"
+    patterns: list[str] = []
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        patterns = [str(p) for p in (data.get("patterns") or []) if p]
+    except Exception as exc:
+        _QUANTITY_TEXT_CACHE["error"] = str(exc)
+    _QUANTITY_TEXT_CACHE["patterns"] = patterns
+    return patterns
+
+
 def resolve_cplb(customer_data: CustomerData, profile: CustomerProfile,
                  logger: Logger) -> tuple[str, str]:
     """产品类别 CPLB：档案关键词映射 → 旧查表兜底 → 档案兜底值。
@@ -585,6 +643,9 @@ def _de_number(text: str) -> Optional[float]:
     旧的 `^N x M$` 全串匹配失败后退回「取第一个数字」，静默算成 `3`（真值 21000）。
     单值和乘法分别处理见 `parse_single_quantity()`。
     """
+    # ★ 2026-11-18：法文/英文常把千分位写成**空格**（`3 000 ex.` / `12 000 copies`），
+    #   旧实现 `\d[\d.,]*` 只吃到 "3" → 解析成 3，比留空更糟。先做一遍归一。
+    text = re.sub(r"(?<=\d)[\u00a0\u202f ](?=\d{3}(?!\d))", "", str(text or ""))
     m = re.search(r"(\d[\d.,]*)", str(text or ""))
     if not m:
         return None
@@ -685,6 +746,9 @@ def parse_single_quantity(text: str, logger: Optional[Logger] = None) -> Optiona
     s = str(text or "").strip()
     if not s:
         return None
+    # ★ 2026-11-18：空格千分位（`3 000 ex.`）先归一成 `3000`，否则会被当成「两个数字」
+    #   而进不了 ③ 单值分支（宁可留空的保护会把这种正常写法也挡掉）。
+    s = re.sub(r"(?<=\d)[\u00a0\u202f ](?=\d{3}(?!\d))", "", s)
 
     # ① 显式总数：`= 21.000 cps` / `total: 21.000`
     # ★ 多个 `=` 时取**最后一个**（2026-11-13 实测 CU/新单 `New Soundbooks`）：
@@ -1341,6 +1405,9 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
     if qty_mode == "single":
         qty_text = str(customer_data.get("quantity") or "")
         qty = parse_single_quantity(qty_text, logger)
+        if qty is None:
+            # 纯文本/PDF 询价：数量散在正文里，没有挂标签 → 通用正文兜底
+            qty = _quantity_from_text(customer_data, logger)
         tzs_n = result.get("TZS") if isinstance(result.get("TZS"), int) else None
         # ★ 2026-11-16 森西口径：**CPSL 存「单款本数」**（旧口径存印刷总量，作废）。
         #   导出层 `erp_mcp_export` 会 × 款数 还原成 ERP 要的总量，所以两边必须一致：
@@ -1417,7 +1484,17 @@ def map_fields(customer_data: CustomerData, template: dict, profile: CustomerPro
             logger.info("  状态: 成功")
             success_count += len(tiers)
         else:
-            logger.warn("  来源: 未识别到数量档位行，CPSL1~CPSL10 全部保持默认值 0")
+            # ★ 2026-11-18：tiers 模式的客户（igl 等）碰上纯文本/PDF 询价时也常常
+            #   没有档位行 → 先用正文兜底取一个数量落 CPSL1，别整排留 0。
+            fallback_qty = _quantity_from_text(customer_data, logger)
+            if fallback_qty:
+                result["CPSL1"] = fallback_qty
+                assigned.append("CPSL1")
+                logger.info(f"  映射: CPSL1 = {fallback_qty}（正文兜底，单档）")
+                logger.info("  状态: 成功（数量来源为正文，请业务复核）")
+                success_count += 1
+            else:
+                logger.warn("  来源: 未识别到数量档位行，CPSL1~CPSL10 全部保持默认值 0")
             logger.info("  提示: 检查客户文件写法与档案 rules.quantity_tiers 的开关")
 
     # ── 6. 规格 CD / KD / GD ───────────────────────────────
