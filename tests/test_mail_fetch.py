@@ -272,3 +272,64 @@ def test_定时脚本先收信再扫描():
     assert script.index("mail_fetch.py") < script.index("scan_pending.py"), \
         "必须**先**收信再扫描，否则新邮件要等下一个 5 分钟周期"
     assert "2>>/tmp/cqr_scan.stderr" in script, "收信失败不能污染要发给人看的那段话"
+
+
+# ── 跳过规则接口：大小写 / 正则 / 真询价不误伤 ─────────────────────────
+#
+# 2026-11-18 换到 demochen@ghouseproducts.com（真人做单邮箱）后暴露的：
+# 最新 50 封里出现 Book Chain 物料回执、华辉考勤通告、德文自动回复，
+# 而当时只有「子串 + 区分大小写」这一种匹配方式，德文变体一律漏。
+
+def test_标题子串不分大小写():
+    cfg = dict(CFG, skip_subjects=["Out of Office"])
+    for subj in ("Re: OUT OF OFFICE", "AW: out of office", "Out of Office"):
+        e = env(1, subj, addr="someone@customer.com")
+        assert "主题命中跳过名单" in M.skip_reason(e, cfg), f"{subj} 应被拦"
+
+
+def test_德文自动回复的各种变体都被正则拦住():
+    """子串拦不住变体：德文客户端 + AW:/Re: 前缀 + 全角冒号。"""
+    cfg = M.load_config(M.CONFIG_PATH)
+    for subj in (
+        "Automatische Antwort: Follow-up: Project Feedback Status",
+        "AW: Automatische Antwort: Anfrage 16543",
+        "Abwesenheitsnotiz: Preisliste",
+        "Re: AW: Abwesenheit bis 24.11.",
+    ):
+        e = env(1, subj, addr="someone@customer.com")
+        assert "跳过正则" in M.skip_reason(e, cfg), f"{subj} 应被正则拦住"
+
+    # 中文「自动回复」走子串就会命中（先于正则），只要求被拦，不指定哪一层
+    for subj in ("自动回复: 我已休假", "回复：自动回复：报价单"):
+        e = env(1, subj, addr="someone@customer.com")
+        assert M.skip_reason(e, cfg), f"{subj} 应被拦住"
+
+
+def test_BOOK_CHAIN_物料回执与行政通告走真实配置被拦():
+    cfg = M.load_config(M.CONFIG_PATH)
+    bom = env(1, "Bill Of Materials Accepted", addr="info@bookchainproject.com")
+    assert "跳过名单" in M.skip_reason(bom, cfg) or "跳过正则" in M.skip_reason(bom, cfg)
+
+    hr = env(2, "关于违反公司考勤管理制度通告", addr="announcement@inklab.hk")
+    assert M.skip_reason(hr, cfg), "行政通告不该进流水线"
+
+
+def test_真询价标题不能被跳过规则误伤():
+    """宁漏勿误伤：demochen 邮箱最新 50 封里唯一那封真询价必须放行。"""
+    cfg = M.load_config(M.CONFIG_PATH)
+    for addr, subj in (
+        ("Faeller@vemag-medien.de", "AW: price enquiry. 84497 Die besten Fußballtricks"),
+        ("Yoshida-T19@mail.dnp.co.jp", 'Re: RFQ: Benesse "Papipupe Poppo" (Tentative title) CU26111201'),
+        ("someone@customer.com", "Preisanfrage Malbücher 2027"),
+        ("someone@customer.com", "Fw: WG: Anfrage -- Crime Mysteries und Rätseluniversum FJ27"),
+        ("someone@customer.com", "Re: Mechanical sound books CU26072402"),
+    ):
+        e = env(1, subj, addr=addr)
+        assert M.skip_reason(e, cfg) == "", f"真询价被误伤：{subj}"
+
+
+def test_正则写错不炸整轮收信(capsys):
+    cfg = dict(CFG, skip_subject_regex=["([unclosed"])
+    e = env(1, "Preisanfrage 2027", addr="someone@customer.com")
+    assert M.skip_reason(e, cfg) == "", "坏正则应被忽略，不能抛异常"
+    assert "正则无效" in capsys.readouterr().out

@@ -214,14 +214,39 @@ def fingerprint(env: Envelope) -> str:
 
 
 def skip_reason(env: Envelope, cfg: dict[str, Any]) -> str:
+    """纯信封阶段的跳过判定（不下载正文，只看 From / Subject）。
+
+    三类接口（都在 `assets/mail.yaml` 里配，改配置不需要动代码）：
+
+    | 键 | 匹配对象 | 方式 |
+    |---|---|---|
+    | `skip_senders` | 发件人地址 | 子串，**不分大小写** |
+    | `skip_subjects` | 标题 | 子串，**不分大小写**（2026-11-18 起；之前区分大小写） |
+    | `skip_subject_regex` | 标题 | 正则，`re.search` + `IGNORECASE` |
+
+    ★ 为什么加正则这一层：子串拦不住同一类通知的**变体**。腾讯企业邮/Outlook 的
+      自动回复在德文客户端里是 `Automatische Antwort:`／`Abwesenheitsnotiz:`，
+      在中文客户端里是 `自动回复:`，再叠上 `AW:` / `Re:` / `回复:` 前缀与全角冒号，
+      逐个堆子串会一直漏。正则一条就覆盖。
+    """
     addr = (env.sender_addr or "").lower()
     for pat in cfg.get("skip_senders") or []:
         if pat and str(pat).lower() in addr:
             return f"发件人命中跳过名单（{pat}）"
     subject = env.subject or ""
     for pat in cfg.get("skip_subjects") or []:
-        if pat and str(pat) in subject:
+        if pat and str(pat).lower() in subject.lower():
             return f"主题命中跳过名单（{pat}）"
+    for pat in cfg.get("skip_subject_regex") or []:
+        if not pat:
+            continue
+        try:
+            hit = re.search(str(pat), subject, re.IGNORECASE)
+        except re.error as exc:      # 配置写错不能让整轮收信挂掉
+            print(f"  ! 跳过规则正则无效，已忽略：{pat}（{exc}）")
+            continue
+        if hit:
+            return f"主题命中跳过正则（{pat}）"
     return ""
 
 
