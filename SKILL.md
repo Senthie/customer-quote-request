@@ -645,6 +645,8 @@ uv run ./scripts/main.py "customer-files/pending/QUOTE.xlsx" --customer auto
   （`32.00;其他` + 全 0 + `profile_id=generic`）才不写 CPMS —— 那是识别失败，不是重复单。
   参考：`3fdfd3e1520541b09968cdfee9aa4084`（Rossmann PO 15910 再版）、
   `cfa1d50f976d418fbcd8e5748a14f2ec`（PR-00078025 重开）。
+  ★ **「这封信到底算不算询价」不在这里判** —— 判据、四类非询价、隔离与汇报口径全部归
+  skill **`quote-inbox-triage`**（2026-11-18 起非询价笔记也统一收在该技能的 `references/`）。
 - **用户说「上传了」但 `pending/` 为空**：先搜全盘近几小时的 xlsx/xls/csv/pdf/docx/eml，
   确实没有就直说「没收到」并请对方重发或放进 `pending/`；**不要拿目录里的旧文件凑数，也不要猜**。
 
@@ -883,6 +885,12 @@ email:
 | IGL | **`customer-quote-igl`** | 平铺 + 横向键值对报价表 | `auto_pairs`（+ `column_pairs` / `shifted_pairs`） |
 | NGV | **`customer-quote-ngv`** | 德英双语 `enquiry` 分区表单（`A1:K32`：A 列分区 / B 列标签 / C 列起值） | `section_pairs` + 档案 `sections:` |
 | PSN22 | **`customer-quote-psn22`** | 无标签 docx（值成行，只有 `Text` / `Case` 两行有前缀）+ 刀模 PDF | `text_lines` + `fields` 别名 + `rules.scan` 正则 |
+| Ullmann | **`customer-quote-ullmann`** | 纯德文正文，无表格：「款名表 + 七行规格」 | `text_lines`（平铺 `标签: 值`） |
+| Priddy | **`customer-quote-priddy`** | 纯英文正文，标签 + 值（同行或下一行）；含区间报价 `1k-100k scales` | `auto_pairs` + `rules.scan` 正则 |
+| Nosy Crow | **`customer-quote-nosycrow`** | 纯英文正文，「分区标题 + 下一行是值」（值常是整段散文） | `auto_pairs`（默认主策略） |
+
+> 六家全部 ✅ calibrated。逐家细节（口径、坑、回归基线、交付清单）只在子技能里；
+> 每家一行 `customers/<id>.yaml` 才是唯一真源 —— 本表只做路由，不写口径。
 
 **处理一份文件的顺序**：读本总纲 → 看识别结果 → **加载对应子技能** → 按子技能里的
 口径 / 坑 / 交付检查清单干活。新增客户见 2.2，校准完同样给它写一份子技能（模板照现成的两份）。

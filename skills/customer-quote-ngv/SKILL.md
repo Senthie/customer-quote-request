@@ -1108,6 +1108,18 @@ uv run ./scripts/customer_profile.py --prefs ngv
   （后面直接换行接数量）就命中不了 → `TZS=1`，而 `1` 是合法值，四道门全绿。
   判别：正文逐行看有没有 `N titles` / `N Titel` 的独立行，与 `TZS` 对不上就是它。
   动作同下：按「字段 / 现值 / 客户原文 / 应然值」汇报，**不许自己改 `TZS`**。
+- ★ **表单 `versions` 格写德文 `4 Titel` 也提不到款数（2026-11-18 已修）**：
+  `customers/ngv.yaml` 的 `versions.title_pattern` 原来只认 `titles?|versions?`，
+  而 VEMAG/Tedi 的 `enquiry` 表 B6 写 **`4 Titel`**（德文）→ `TZS=1`。
+  现补成 `(?:\d+)\s*(?:titles?|versions?|titel)`。实测 `CU26092401` TZS 1→4
+  （`CPSL1 750 × 4 = 3000`，与 ERP 真值 12000/4 一致）、`CU26082501` TZS 1→4
+  （`40000×4 = 160000` ✓）。回归：`tests/test_versions_titel.py`。
+  ⚠️ **改 YAML 双引号里的正则时别手工叠转义**：文件里应写 `"(\\d+)\\s*…"`（YAML 解析后是 `\d`），
+  `patch`/`sed` 里再叠一层就成 `\\\\d` → 正则退化成「字面反斜杠 + d」，**静默全不命中**；
+  本次还顺手把另一条规则的 `title_pattern`（`IAN…Overview`）顶掉，YAML 结构当场崩。
+  正确做法：用 python 精确替换目标行 → 立刻回验
+  `python3 -c "import yaml,re; p=yaml.safe_load(open('customers/ngv.yaml'))['rules']['versions']['title_pattern']; print(re.search(p,'4 Titel',re.I))"`
+  → 再跑 `pytest tests/test_ngv_profile.py tests/test_versions_titel.py`。
 - ★ **`X cps each (= Y cps in total)` 这种「每款 + 合计」写法 → `CPSL1=0`**（同日同单）：
   `parse_single_quantity` 只认 `=` 后总数 / `N x M` / 全串单数字三种形态，`each` 这种不算。
   ★★ 而且**客户自己可能算错账**：本次 `12,500 × 2 = 25,000`，客户写 `= 25,600`（÷2 = 12,800）。
@@ -1266,8 +1278,8 @@ uv run ./scripts/customer_profile.py --prefs ngv
   正文只有「附件是…**供参考**」。这类**不报价**：是参考材料、其中 A00130 已处理过
   （`processed/9458bd4c…`）、DNP 无客户档案且附件加密。处置同下
   （`failed/_not_quote_20261116/`，README 记 6 个附件清单与恢复方式）。
-  通用判定 / README 模板 / 汇报口径：总纲
-  `customer-quote-request/references/non-quote-and-empty-extraction.md`。
+  通用判定 / README 模板 / 汇报口径：`quote-inbox-triage` 技能的
+  `references/non-quote-and-empty-extraction.md`（2026-11-18 起从总纲 references/ 移入该技能）。
   全案（10 个项目清单、三例判据、审计/恢复方式）：总纲
   `customer-quote-request/references/eml-zip-envelope-and-empty-products.md`。
 - ★ **`.xlsm` 附件会被静默跳过，正文单独成单 → 全字段落默认值**（2026-10-29 实单 IAN 574237/574239）：

@@ -241,3 +241,22 @@ def test_换行不许把上一段末位数字与下一段首位数字粘起来()
     # 反例：原文真没有的两位数仍要报（修复不能把边界检查一起废掉）
     r2 = A.audit("备注：数量阶梯末档 31000", text)
     assert any(t["num"] == "31000" for t in r2["untraced"]), r2["untraced"]
+
+
+def test_同一行数字之间的空白不许把印色与克重粘起来():
+    """`Case: 4/0 128gsm gloss art FSC`（2026-11-17 Bonnier 实测）：
+
+    印色槽与克重之间只隔一个空格，`normalize()` 删空白后粘成 `4/0128gsm`，
+    `128` 的前边界成了数字 `0` → `_has_number` 判「原文里没有 128」→
+    客户白纸黑字写的克重被报成「无出处」（逼人把正确材料删掉）。
+    同一行里数字与数字之间的空白必须先换成 `|` 再删空白 —— 与换行同理。
+    """
+    text = ("Case: 4/0 128gsm gloss art FSC over 3mm board\n"
+            "Text: 4/4 140gsm woodfree uncoated FSC\n")
+    r = A.audit("皮壳：128g光粉(FSC)+1800g灰板(FSC)，4C/0C\n"
+                "内文：140g书纸(FSC)，4C/4C", text)
+    assert r["summary"]["untraced"] == 0, r["untraced"]
+
+    # 反例：原文真没有的克重仍要报
+    r2 = A.audit("皮壳：130g光粉(FSC)，4C/0C", text)
+    assert any(t["num"] == "130" for t in r2["untraced"]), r2["untraced"]

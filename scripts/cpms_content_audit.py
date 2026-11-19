@@ -65,6 +65,11 @@ def normalize(text: str) -> str:
     s = text.lower()
     s = s.replace("×", "*").replace("x", "*").replace("＊", "*")
     s = re.sub(r"\r\n?|\n", "|", s)
+    # ★ 同一行里**数字与数字之间的空白**同样是分隔符（2026-11-17 Bonnier 实测）：
+    #   `Case: 4/0 128gsm gloss art FSC` 删空白后粘成 `4/0128gsm`，`128` 的前边界
+    #   成了数字 `0` → `_has_number` 判「原文没有 128」→ 客户白纸黑字写的克重被报成
+    #   无出处。`印色槽(4/0) + 空格 + 克重(128gsm)` 是英国出版社极常见的写法。
+    s = re.sub(r"(?<=\d)[ \t\u00a0\u3000]+(?=\d)", "|", s)
     s = re.sub(r"[ \t\u00a0\u3000]+", "", s)
     return s
 

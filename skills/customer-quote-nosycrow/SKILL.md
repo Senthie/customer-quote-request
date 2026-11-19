@@ -68,6 +68,14 @@ Wafer Seal - Paper wafer seal to affix sticker sheets to inside back cover.
 6. 这一家的产品经理常直接把英国客户的原始询价转发过来（发件人是我们同事），
    识别靠正文里的 `Nosy Crow` / `Preparation & Text` / `Fastenings` 等特征，
    以及正文里的客户域名。
+   ⚠️ **`detect.label_signatures` 里的 `cost request` 太宽**（2026-11-17 实测）：
+   一封 Bonnier Books UK 的 `URGENT Cost Request - New Title - …` 用
+   `customer_profile.py --detect` 判出 **nosycrow 100 分**（只命中 `cost request` 一个
+   特征标签，`min_signature_hits: 1` 就够），而正确结论是「新客户、没档案」。
+   英文出版社几乎人人写 “Cost Request”。**收窄方向**：要求同时命中
+   `Nosy Crow` / `nosycrow` / `nosy crow.com`（或 `sender_domains: nosycrow.com`），
+   把 `cost request` 降级成加分项而不是单独成立的签名 —— 改 `customers/nosycrow.yaml`，
+   改完用那封 Bonnier 邮件做一次 `--detect` 回归（应该不再判成 nosycrow）。
 7. **推送会缺 `customer`**：`erp_khzl: []` → `export_calls(customer="")`，
    `.erp-import.json` 里 `customer` 是空串（2026-11-17 实测 `Little Museum` 即如此）。
    真实推送前必须拿到 ERP 客户资料代码（问业务 / 在客户资料页查），别拿别家代码凑。
