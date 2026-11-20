@@ -17,3 +17,6 @@
 {"task_id": "85295461d4a14554826f081c43bb7d92", "record": 1, "bdbh": "BJXQ261117005", "status": "deleted", "at": "2026-11-17T09:08:03", "customer": "UMG19", "product": "犯罪谜案·谜题宇宙系列（已删）", "reason": "业务 2026-11-17 口径：这批询价不是需要处理的，整单作废"}
 {"task_id": "66a9631171a241cab7a7009778e735ad", "record": 1, "bdbh": "BJXQ261117006", "status": "deleted", "at": "2026-11-17T09:08:03", "customer": "PRD21", "product": "贴纸活动书", "reason": "业务 2026-11-17 口径：这批询价不是需要处理的，整单作废"}
 {"task_id": "aefbbe9af9c6491689d0dc11456601b5", "record": 1, "bdbh": "BJXQ261117007", "status": "deleted", "at": "2026-11-17T09:08:03", "customer": "NSC21", "product": "我的小博物馆·古希腊", "reason": "业务 2026-11-17 口径：这批询价不是需要处理的，整单作废"}
+{"task": "3aa098aa871049c4ac0e7094645b337b", "bdbh": "BJXQ261119001", "record_id": "74b6b756-168c-47f2-997f-07bd628f95bb", "status": "created", "at": "2026-11-19T09:58:11", "customer": "PSN22"}
+{"task": "3aa098aa871049c4ac0e7094645b337b", "bdbh": "BJXQ261119001", "record_id": "74b6b756-168c-47f2-997f-07bd628f95bb", "status": "deleted", "at": "2026-11-20T03:43:20", "customer": "PSN22", "reason": "CPMS 按业务口径修订后重建"}
+{"task": "3aa098aa871049c4ac0e7094645b337b", "bdbh": "BJXQ261120009", "record_id": "817fd919-230c-49a2-8311-f36aaad00d4d", "status": "created", "at": "2026-11-20T03:43:20", "customer": "PSN22", "khddh": "WY26112001"}

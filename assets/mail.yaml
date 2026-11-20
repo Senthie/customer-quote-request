@@ -10,6 +10,11 @@
 account: demochen        # himalaya 账户名；留空 = 用配置里的默认账户
 folder: INBOX
 
+# 定时任务的「本轮询价提取回执」发到哪（scripts/round_report_mail.py）。
+# 业务口径 2026-11-20：发回**收到询价邮件的这个邮箱**，一轮合成一封，没新询价就不发。
+# 留空 = 直接发给自己（account 对应的地址）。
+report_to: demochen@ghouseproducts.com
+
 page_size: 50            # 每轮看多少封信封（只是列表，不是下载）
 max_per_run: 5           # 每轮最多落盘几封：积压时不会一次把队列灌爆
 
@@ -43,6 +48,11 @@ skip_subjects:
   # （marketing@wafai.net 可能是真客户的联系人，将来仍可能发询价）。
   - "已设置将邮件转发"
   - "已设置自动转发"
+  # 我们自己发出去的「本轮录入回执」（demochen → demochen，见 scripts/round_report_mail.py）
+  # 会被做单邮箱再收回来：2026-11-20 实测第一轮就收了 2 封（正式回执 + 通道自测），
+  # 分拣侧判成 A 类归档 —— 判得对，但每轮白烧一次模型。标题是我们自己写死的，按标题拦安全。
+  - "【报价提取回执】"
+  - "【自测】报价提取回执"
 
 # 标题正则（re.search + IGNORECASE）：拦「同一类通知的各种变体」。
 # 子串拦不住变体是实测出来的 —— 德文客户端的自动回复叫 `Automatische Antwort:` /

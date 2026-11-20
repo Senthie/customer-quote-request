@@ -5,10 +5,23 @@
 set -u
 cd /home/claw/customer-quote-request || exit 0
 
-# ── 第 0 步：收信 ──────────────────────────────────────────────────────
-# 先把邮箱里的新询价信落成 pending/*.eml，同一轮里顺手抽掉（业务 2026-11-13：
-# 「收信接入流水线」）。失败**绝不**阻断扫描：错误只进 stderr 日志。
-if command -v himalaya >/dev/null 2>&1; then
+# ── 第 0 步之前的补发：上一轮的 ERP 录入回执 ───────────────────────────
+# 业务 2026-11-20：「提取任务最后把录入系统的询价结果发回收信邮箱」。
+# 主路径是 cron prompt 里最后一步跑 round_report_mail.py；这里只是**兜底**
+# （agent 那轮被中断也不会漏报）。台账去重，跑两次不会发两封；发失败不重发。
+export PATH=/home/claw/.local/bin:$PATH
+timeout 150 uv run ./scripts/round_report_mail.py --quiet \
+    2>>/tmp/cqr_scan.stderr >>/tmp/cqr_report.log
+
+# ── 第 0 步：收信（2026-11-19 起已移交「邮件分拣 agent」）────────────────
+# 分工：收信 + 「这封信算不算询价」由分拣 agent 负责（scripts/mail_agent_fetch.sh
+# → staging/ → mail_agent_route.py → 只把询价投进 pending/）。
+# 报价侧本脚本**不再收信**，只看 pending/ 里已经判成询价的信。
+#
+# 开关：customer-files/.mail_agent_active 存在 = 分拣侧已接管，跳过收信；
+# 该文件被删（分拣 agent 停摆、要临时回到单 agent 模式）→ 恢复旧行为自己收信。
+# 这样无论哪边在跑，pending/ 里都不会出现两套去重台账互相抢信的情况。
+if [ ! -f customer-files/.mail_agent_active ] && command -v himalaya >/dev/null 2>&1; then
     timeout 150 uv run ./scripts/mail_fetch.py 2>>/tmp/cqr_scan.stderr
 fi
 
@@ -21,6 +34,14 @@ fi
 # 输出只在真建了档案时才有内容 —— 平时对 stdout 没有贡献。
 auto_out=$(timeout 120 uv run ./scripts/auto_profile.py --from-generic-artifacts 2>>/tmp/cqr_scan.stderr)
 [ -n "$auto_out" ] && printf '%s\n' "$auto_out"
+
+# ── 第 1.8 步：多模态转文本（2026-11-19）──────────────────────────────
+# 客户会发图片（规格表截图/封面/刀线）和视频（翻样书看装订工艺）；main.py 只吃文本，
+# 所以先把它们转成 `<名>.vlm.txt`（模型只转录不推断，见 assets/vlm_prompts.yaml）。
+# pending 根下的媒体会被包成单元目录，这样扫描器能当一份报价处理。
+# 失败**不阻断**扫描：错误进 stderr，报告里只出「❌ 失败 N 份」。
+mm_out=$(timeout 240 uv run ./scripts/multimodal.py --prepass --limit 10 2>>/tmp/cqr_scan.stderr)
+[ -n "$mm_out" ] && printf '%s\n' "$mm_out"
 
 # uv / venv 的噪音进日志，别混进要发给人的那段话；
 # 真出事了去 /tmp/cqr_scan.stderr 看（不静默吞掉错误）。

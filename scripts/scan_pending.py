@@ -59,6 +59,12 @@ STATE_PATH = CUSTOMER_FILES / ".scan_state.json"
 
 MAIN_PY = SCRIPTS_DIR / "main.py"
 INGEST_EMAIL_PY = SCRIPTS_DIR / "ingest_email.py"
+MULTIMODAL_PY = SCRIPTS_DIR / "multimodal.py"
+
+# 媒体后缀：单元目录里有这些就先转文本（与 ingest_email.MEDIA_SUFFIXES 保持一致）
+MEDIA_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif",
+                  ".heic", ".heif", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm")
+MULTIMODAL_TIMEOUT = 300
 
 # main.py 直接能吃的后缀（表格 / 文本 / 压缩包）
 DIRECT_SUFFIXES = (".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt", ".zip")
@@ -188,6 +194,27 @@ def run_one(claimed: Path, main_py: Path, timeout: int = TIMEOUT_SECONDS,
     if code == 0 and not moved:
         reason = "退出码 0 但输入没被搬走（main.py 逻辑异常）"
     return False, reason
+
+
+def multimodal_dir(unit: Path, multimodal_py: Optional[Path] = None,
+                   timeout: int = MULTIMODAL_TIMEOUT) -> str:
+    """单元目录里有图片/视频 → 先转成 `.vlm.txt`，再让 main.py 一起抽。
+
+    为什么必须在这里做：媒体只在邮件展开之后才出现（在单元目录里），
+    `scan_pending.sh` 开头那次 prepass 看不到它们（那时还是 .eml）。
+    失败**不阻断**抽取：图片读不出来照样能用正文/表格建单，报告里点一句就行。
+    """
+    media = [p for p in unit.rglob("*")
+             if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES]
+    if not media:
+        return ""
+    script = Path(multimodal_py) if multimodal_py is not None else MULTIMODAL_PY
+    code, reason = _run_capture(
+        [sys.executable, str(script), "--prepass", "--no-wrap", "--pending", str(unit)],
+        timeout, "多模态识别")
+    if code != 0:
+        return f"🖼 图片/视频识别失败：{reason}"
+    return f"🖼 图片/视频 {len(media)} 份 → 转录文本"
 
 
 def _archive_eml(eml: Path, inbox: Path) -> Path:
@@ -331,6 +358,10 @@ def scan(limit: Optional[int] = None, dry_run: bool = False, verbose: bool = Fal
                 else:
                     note = "📧 邮件已展开（没有可抽的内容）"
                 for new_item in delivered:
+                    if new_item.is_dir():
+                        mm = multimodal_dir(new_item)
+                        if mm:
+                            note = (f"{note}｜{mm}" if note else mm)
                     if new_item.name in seen:
                         continue
                     seen.add(new_item.name)

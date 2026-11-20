@@ -69,7 +69,18 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 
 from erp_bundle import load_bundle  # noqa: E402
 
-DEFAULT_MCP_URL = "https://14.12.0.173:8443/mcp"
+# ⚠ ERP MCP 地址**不写死**（公开仓库，2026-11-20 森西要求外置）。
+# 解析顺序：env ERP_MCP_URL > assets/erp_endpoint.local.yaml > 空（空则启动时报错提示怎么配）。
+# 见 scripts/local_config.py。
+def _default_mcp_url() -> str:
+    try:
+        from local_config import resolve
+        return resolve("erp_endpoint", "url", "ERP_MCP_URL")
+    except ImportError:  # 单独拷脚本时退回环境变量
+        return os.environ.get("ERP_MCP_URL", "").strip()
+
+
+DEFAULT_MCP_URL = _default_mcp_url()
 # ★ 59 键 → MCP 入参 的映射**只有一处**：`erp_mcp_export.py`（导出那一步就用它）。
 #   这里只做 re-export，方便老代码/测试继续 `erp_push.PRODUCT_FIELD_MAP`，
 #   绝不再落地第二份字段名表 —— 2026-11-12 森西要求「字段名、格式一致，一份文件」。
@@ -96,10 +107,6 @@ from erp_mcp_export import (  # noqa: E402
 )
 
 
-# 兼容旧签名（`profile_id` 当年用来从客户档案补 erp_khzl）
-DEFAULT_MCP_URL = "https://14.12.0.173:8443/mcp"
-
-
 class McpError(RuntimeError):
     pass
 
@@ -113,6 +120,12 @@ class McpHttpClient:
 
     def __init__(self, url: str = DEFAULT_MCP_URL, token: str = "",
                  timeout: float = 180.0, verify_ssl: bool = False):
+        if not url:
+            raise McpError(
+                "没配 ERP MCP 地址 —— 三选一："
+                "① 设环境变量 ERP_MCP_URL；"
+                "② 写 assets/erp_endpoint.local.yaml（照 .local.example.yaml 复制，机器本地不入库）；"
+                "③ 调用时传 --url")
         self.url = url
         self.token = token
         self.timeout = timeout
@@ -120,7 +133,7 @@ class McpHttpClient:
         self._last_headers: dict[str, str] = {}
         self._id = 0
         self._ctx = ssl.create_default_context()
-        if not verify_ssl:  # 自签证书（SAN 里没有 14.12.0.173），同 Hermes MCP 配置
+        if not verify_ssl:  # 自签证书（SAN 里没有内网地址），同 Hermes MCP 配置
             self._ctx.check_hostname = False
             self._ctx.verify_mode = ssl.CERT_NONE
 

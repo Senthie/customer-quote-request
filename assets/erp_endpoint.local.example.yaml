@@ -1,0 +1,3 @@
+# 复制成 assets/erp_endpoint.local.yaml 后填本机真实值（.local.yaml 已 gitignore，不会入库）。
+# 也可以不用这个文件，改设环境变量 ERP_MCP_URL（或给脚本传 --url）。
+url: "https://<erp-mcp-host>:8443/mcp"

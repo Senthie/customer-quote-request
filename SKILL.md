@@ -12,6 +12,36 @@ metadata:
 
 # Customer Quote Request Parser（多客户版）
 
+> ## ⚠️ 本技能的起跑线变了（2026-11-19）
+> 「这封信算不算询价」**不再由本侧判断** —— 收信 + 分类是独立技能
+> `wf-customer-email-categories`（判据细节见 `quote-inbox-triage`）。
+> 本技能从 `customer-files/pending/` 开始：**里面每一份都已被判为询价**，直接抽字段 →
+> 写 CPMS → 过门禁 → 推 ERP。三分类闸门（A 系统通知 / B 第三方 / C 成交后 / D 物流文档）
+> 只在分拣侧用。发现分拣判错 → 按契约 §6「判错怎么退」汇报，**不要自行 mv 归档**。
+> 两边契约：`docs/mail-agent-handoff.md`。
+
+> ### 🖼 多模态输入（2026-11-19）
+> 客户会发**图片 / 扫描 PDF / 视频**。`scan_pending.sh` 已在扫描前跑
+> `scripts/multimodal.py --prepass`（Qwen3-VL-4B，只转录不推断），产出
+> `<附件>.vlm.txt` + `.vlm.json` 与原文同目录 —— 对抽取引擎它就是「客户原文的替身」。
+> **必读**：`docs/multimodal-intake.md`。
+> 两条硬规矩：
+> ① 跑 `cpms_content_audit.py` 时 **`.vlm.txt` 必须一起作为 `--source`**（只传原文不传识别文本
+>    → 从图片得来的尺寸/克重会被判「无出处」）；
+> ② 图片/视频里**没有原文引文支持的数字**，CPMS 一律写「待确认」并在汇报点名，
+>    不许把「模型看着像」写成事实（实测 4B 把 `43x31x26` 读成 `28`）。
+
+> ### ✉️ 本轮录入回执邮件（2026-11-20 业务新增）
+> 推完 ERP 后，最后一步跑 `uv run ./scripts/round_report_mail.py`：
+> 它读 `<产物>.erp-push.json` 回执，把**本轮所有**询价合成**一封**汇总邮件发到
+> `assets/mail.yaml` 的 `report_to`（= 收信邮箱 demochen@ghouseproducts.com）。
+> 表格三列：邮件标题 / ERP表单号 / 是否录入ERP；没录入成功的，原因写在「备注」。
+> 四条口径（森西 2026-11-20）：一轮一封 ｜ 失败写原因 ｜ 本轮没新询价就不发 ｜ 发送失败不重发。
+> 台账 `customer-files/logs/round_report_sent.jsonl`（已汇报的回执，机器本地、不进仓库）——
+> **不许手改台账补发历史单**。`scan_pending.sh` 每轮开头也会兜底跑一次（agent 那轮被中断也不漏报）。
+> 通道自测：`uv run ./scripts/round_report_mail.py --selftest`；
+> 想看将发的信：`--dry-run`。
+
 > **仓库路径：** `/home/claw/customer-quote-request/`
 > 所有命令在仓库根目录执行（或写绝对路径）。
 > **版本：** 1.0.83（2026-11-17 晚 **Igloo 新 QRF 表 + 新客户自动建档 + NULL000 占位**：

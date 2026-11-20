@@ -57,6 +57,17 @@ PENDING_DIR = REPO_ROOT / "customer-files" / "pending"
 META_SUFFIX = ".meta.json"
 SUPPORTED_ATTACHMENTS = (".xlsx", ".xlsm", ".xls", ".csv", ".pdf", ".docx", ".txt")
 
+# 媒体附件（2026-11-19）：客户会把**样书照片 / 规格截图**直接发进来。
+# 它们不能进 main.py（只吃文本），但要交给 multimodal.py 转成 `<名>.vlm.txt` 再抽。
+# 内嵌图片（没有 Content-Disposition: attachment、直接粘在正文里）也收，但只收够大的：
+# 实测 Macmillan 那封带 30 个 0–3 KB 的签名图标 + 3 张 185–901 KB 的实拍照片，
+# 阈值卡在 50 KB 正好把图标全滤掉。
+MEDIA_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif",
+                  ".heic", ".heif", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm")
+SUPPORTED_ATTACHMENTS = SUPPORTED_ATTACHMENTS + MEDIA_SUFFIXES
+INLINE_MIN_BYTES = 50_000      # 内嵌图片小于这个 → 签名图标，不收
+INLINE_MAX_COUNT = 12          # 一封邮件的内嵌照片最多收几张（防炸）
+
 # 压缩包：业务 2026-11-13 口径「解压落 pending，**不自动分组**」。
 # NGV 常发转发封皮 + 一个 zip（里面 5~10 个独立询价），按「≥2 附件 = 一份报价」并
 # 会把这些并成一份，所以 zip 单独隔离到 pending/.zip_quarantine/ 下（点开头 =
@@ -120,24 +131,31 @@ def parse_eml(path: Path) -> dict:
     plain_parts: list[str] = []
     html_parts: list[str] = []
     attachments = []
+    inline_images: list[tuple[str, bytes]] = []
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
             continue
         disposition = str(part.get("Content-Disposition") or "").lower()
         filename = part.get_filename()
-        if "attachment" in disposition or (filename and not disposition):
-            # inline 图片（logo、签名图）不是报价材料，跳过
-            if "inline" in disposition and part.get_content_maintype() == "image":
-                continue
+        if "attachment" in disposition or (filename and not disposition and "inline" not in disposition):
             if not filename:
                 continue
             payload = part.get_payload(decode=True) or b""
             attachments.append((filename, payload))
             continue
+        # 内嵌图片（客户把样书照片粘进正文，没有 attachment 头）：够大的当真附件带走，
+        # 小的（logo / 签名 / 分隔线）跳过。2026-11-19 Macmillan 那封就是这种形态。
+        if part.get_content_maintype() == "image" and filename:
+            payload = part.get_payload(decode=True) or b""
+            if len(payload) >= INLINE_MIN_BYTES and len(inline_images) < INLINE_MAX_COUNT:
+                inline_images.append((f"inline_{filename}", payload))
+            continue
         if part.get_content_type() == "text/plain":
             plain_parts.append(part.get_content())
         elif part.get_content_type() == "text/html":
             html_parts.append(part.get_content())
+
+    attachments.extend(inline_images)
 
     plain = "\n".join(p for p in plain_parts if p).strip()
     html_raw = "\n".join(html_parts)
@@ -577,8 +595,11 @@ def ingest(
     #   不能拆成多个任务（那样会变成 N 份报价），要把它们投递成一个**单元目录**，
     #   main.py 把目录当一份报价处理（见 scripts/input_unit.py）。
     #   只有 1 个附件时保持老行为（单文件 + 副档），不制造多余的目录。
+    #   ★ 例外（2026-11-19）：只要有**媒体附件**（图片/视频），一律进单元目录 ——
+    #     媒体本身 main.py 不认，必须在目录里等 multimodal 产 `.vlm.txt` 才能一起抽。
+    has_media = any(Path(n).suffix.lower() in MEDIA_SUFFIXES for n, _ in usable)
     unit_dir = None
-    if len(usable) >= 2:
+    if len(usable) >= 2 or has_media:
         unit_dir = _unique_dir(pending_dir, _unit_dir_name(subject, eml_name))
         delivery_dir = unit_dir
         if logger:
@@ -645,6 +666,17 @@ def ingest(
         saved_paths.append(body_task_path)
         if logger:
             logger.info(f"邮件无可用附件 —— 正文已落为任务: {body_task_path.name}")
+
+    # ★ 只有媒体附件的单元目录（2026-11-19）：附件全是图片/视频时，main.py 眼里
+    #   这个目录「没有可处理的文件」→ 必须把正文也落成 .txt 放进目录里，
+    #   否则情报全在 _email.meta.json 里，抽取器读不到（实测 Macmillan 那封就炸在这里）。
+    if unit_dir is not None and saved_paths:
+        has_text_member = any(Path(p).suffix.lower() not in MEDIA_SUFFIXES for p in saved_paths)
+        if not has_text_member and body.strip():
+            body_task_path, _ = write_body_task(unit_dir, body, common_meta)
+            saved_paths.append(body_task_path)
+            if logger:
+                logger.info(f"媒体单元没有文本附件 —— 正文已落进单元目录: {body_task_path.name}")
 
     saved = []
     unit_meta_path = None

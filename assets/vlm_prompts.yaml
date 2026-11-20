@@ -1,0 +1,84 @@
+# 多模态识别（图片 / 扫描 PDF / 视频抽帧）的模型端点与提示词
+#
+# 2026-11-19 森西提供：vLLM 部署的 Qwen3-VL-4B-Instruct。
+# 口径：模型只做「转录员」—— 只写看得见的文字与事实，看不到就 null，绝不推断。
+# 改提示词只改这里；解析逻辑在 scripts/multimodal.py。
+
+# ⚠ 端点与模型名**不写在这里**（本仓库是公开仓库，2026-11-20 森西要求把内网地址外置）。
+# 解析顺序见 scripts/local_config.py：
+#   env CQR_VLM_ENDPOINT / CQR_VLM_MODEL
+#   > assets/vlm_endpoint.local.yaml（机器本地，照 vlm_endpoint.local.example.yaml 复制；已 .gitignore）
+#   > 本文件里的同名键（默认留空）
+endpoint: ""
+model: ""
+timeout: 90          # 单次请求超时（秒）
+retries: 2
+concurrency: 2       # 同时最多几个请求（4B + 单卡，再多没收益）
+max_edge_px: 1600    # 图片长边压到这个尺寸，省 token
+max_pdf_pages: 6     # 扫描 PDF 最多转几页
+max_video_frames: 12 # 视频最多抽几帧
+video_short_side: 480
+min_image_bytes: 12000  # 小于这个的图片基本是签名图标/分隔线（实测一封客户信带 30 个 0–3KB png），不送模型
+
+system: |
+  你是书刊印厂的「图纸转录员」。只转录图片/视频帧上看得见的文字与事实；
+  不推断、不补全、不美化。看不到就写 null，看不清的字符写「?」。
+  德文 / 英文 / 日文原文照抄，不翻译。
+
+# ── P1：图片（规格表 / 封面 / 内页 / 刀线 / 装箱示意）─────────────────
+image_user: |
+  这是客户询价邮件的附件图片。返回严格 JSON（不要 markdown 代码块外的任何文字）：
+  {
+   "doc_type": "spec_table|cover_art|interior_spread|die_line|packing_photo|logo_banner|other",
+   "titles": [],
+   "specs": {
+     "finished_size_mm": null,
+     "extent_pp": null,
+     "paper_gsm": [],
+     "print_colors": [],
+     "binding": null,
+     "finish": [],
+     "special": []
+   },
+   "quantities": [],
+   "languages": [],
+   "raw_text": [],
+   "evidence": [{"field": "paper_gsm", "quote": "原文那一句", "where": "表格第3行"}],
+   "unknowns": [],
+   "conflicts": []
+  }
+  规则：
+  ① 只有图上有证据才填字段，其余 null / 空数组；
+  ② 数字带单位，克重写成「170 g/m²」；
+  ③ 图注含 carton / shipping / Verpackung / Karton 的尺寸只进 raw_text，不当成品尺寸；
+  ④ 不认识的缩写原样保留，不要猜；
+  ⑤ raw_text 逐行转录，包含表头；
+  ⑥ **邮件签名 logo、公司徽标、活动横幅、纯装饰图 → doc_type 填 "logo_banner"，
+     titles / specs / quantities / languages 全部留空**，raw_text 只列图上可见的字。
+     这类图没有报价信息，下游不该拿它抽字段。
+
+# ── P2：视频抽帧（样书翻页 / 装订与工艺展示，时序理解）───────────────
+video_user: |
+  以下是同一段视频按时间顺序抽取的帧（第 1 张最早）。做「时序理解」，不要逐帧复述。
+  返回严格 JSON：
+  {
+   "summary": "一句话说这段视频在演示什么",
+   "sequence": [{"frame": 1, "what_changed": "相对上一帧发生了什么"}],
+   "binding": {"value": null, "frame": null, "why": "哪一帧看到书脊/订口/订线"},
+   "craft": [],
+   "page_guess": {"value": null, "basis": "数折手/看页码的方式；没有依据就 null"},
+   "size_guess": {"value": null, "basis": "有参照物才估，否则 null"},
+   "texts": [],
+   "unknowns": []
+  }
+  规则：
+  ① 装订方式只认书脊/订口/订线出现的帧；看不清就 null；
+  ② 不许把拍摄透视、手的大小当成尺寸依据；没有标尺→ size_guess 全 null；
+  ③ 页数只能靠可见页码/折手推断，做不到就 null；
+  ④ 视频帧有运动模糊/虚焦的地方写进 unknowns。
+
+# ── P3：对抗式复核（对 P1/P2 结果的二次请求，砍幻觉）────────────────
+verify_user: |
+  下面是上一轮从画面得出的字段清单。对每一条回答：画面哪一行/哪个区域支持它？
+  给不出具体引文的，把该条删掉。只返回保留项，格式：
+  {"kept": [{"field": "...", "quote": "...", "where": "..."}], "dropped": ["field"]}

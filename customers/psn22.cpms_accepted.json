@@ -1,0 +1,7 @@
+{
+ "_说明": "PSN22（Magic Cat / Macmillan 系）：CPMS 业务口径白名单 —— 客户文件里没有、但业务已拍板要写的值。cpms_content_audit.py --accepted 用。每条必须写清依据。",
+ "_用法": "uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <单元目录> --accepted customers/psn22.cpms_accepted.json",
+ "210g单粉": "★2026-11-19 森西拍板：客户 Sleuth and Clue docx 写 `190gsm C1S artboard`，但我厂**没有 190g单粉**，按 210g 报价。依据：`uv run ./scripts/paper_weight.py --parse \"190g单粉\"` → 自动建议 210g单粉（差 +20g，厚度 0.26mm 一致），并给出「我们用210g单粉报价，因为客户询价的190g单粉不常用」这句备注。同类换算进 S3.1.1 规范。",
+ "1200g": "★2026-11-19 森西拍板：精装书必须有灰板，常用 1200g / 1800g，按便宜的报 → 1200g（2.0mm）。客户 docx 只写 `Case bound`、未给灰板克重，属加工必需件，不是编数字。",
+ "100": "★2026-11-19 森西拍板：这家客户的图稿基本是 100% 烫金/局部UV/击凸（不是 90% 局部），报价先按 100% 全额报（贵的口径）。客户文件只写 `90% foil…/90% spot uv…/90% emboss…` 是上一轮询价的旧口径。"
+}

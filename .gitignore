@@ -28,6 +28,18 @@ customer-files/.scan_state.json
 # 收信台账/锁（scripts/mail_fetch.py；每台机器各自一份，不进仓库）
 customer-files/.mail_fetch.lock
 customer-files/.mail_fetch_state.json
+# 邮件分拣 agent：暂存区 / 去重台账 / 投递台账（2026-11-19 起收信与分类归它）
+customer-files/staging/
+customer-files/.mail_agent_state.json
+customer-files/.mail_agent_state.lock
+customer-files/.mail_agent_active
+customer-files/logs/mail_agent_ledger.jsonl
+# 汇总回执的发送台账（已汇报过哪些 ERP 回执；机器本地，不进仓库）
+customer-files/logs/round_report_sent.jsonl
+# 内网端点（ERP MCP / VLM）—— 公开仓库不放这些地址；照 *.local.example.yaml 复制
+assets/*.local.yaml
+# 多模态识别缓存（同一张图不重复烧模型；机器本地）
+customer-files/.vlm_cache/
 # 自动建档去重状态 + 「不推 ERP」豁免清单（机器本地的东西，不进仓库）
 customer-files/.auto_profile_state.json
 customer-files/.erp_push_skip.json
