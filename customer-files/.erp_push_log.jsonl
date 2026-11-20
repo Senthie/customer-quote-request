@@ -20,3 +20,5 @@
 {"task": "3aa098aa871049c4ac0e7094645b337b", "bdbh": "BJXQ261119001", "record_id": "74b6b756-168c-47f2-997f-07bd628f95bb", "status": "created", "at": "2026-11-19T09:58:11", "customer": "PSN22"}
 {"task": "3aa098aa871049c4ac0e7094645b337b", "bdbh": "BJXQ261119001", "record_id": "74b6b756-168c-47f2-997f-07bd628f95bb", "status": "deleted", "at": "2026-11-20T03:43:20", "customer": "PSN22", "reason": "CPMS 按业务口径修订后重建"}
 {"task": "3aa098aa871049c4ac0e7094645b337b", "bdbh": "BJXQ261120009", "record_id": "817fd919-230c-49a2-8311-f36aaad00d4d", "status": "created", "at": "2026-11-20T03:43:20", "customer": "PSN22", "khddh": "WY26112001"}
+{"task": "c63d2c197c2c47ffabf2255fdf0e85b7", "bdbh": "BJXQ261120010", "record_id": "304742c3-53ab-4ccd-9114-b1908c13e96f", "status": "deleted", "at": "2026-11-20T07:33:28", "customer": "NGV10", "reason": "CPLX 判错（应为半返单旧产品），删单重建"}
+{"task": "c63d2c197c2c47ffabf2255fdf0e85b7", "bdbh": "BJXQ261120012", "record_id": "7d80c412-3de6-48f9-9885-7b4e21dcca11", "status": "created", "at": "2026-11-20T07:33:28", "customer": "NGV10", "khddh": "CU26112001", "product_type": "半返单旧产品"}
