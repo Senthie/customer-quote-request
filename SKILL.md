@@ -571,12 +571,41 @@ erp_quote_create(confirm=False, customer="NGV10", remark="LG26090401 / …",
 `SHDQ`、`ECPMC`、`BZ`）—— 这些控件展示态是禁用/只读，渲染不出值，**不代表没落库**。
 `erp_quote_list(key=…)` 才是权威口径。
 
-**通道**：推单走 MCP 工具 `erp_quote_create`。`scripts/erp_push.py` 需要 `ERP_MCP_TOKEN`
-（`--token` 或环境变量，仓库和 profile 里**都没落盘**）→ 直跑 `HTTP 401 missing_bearer`，
-须先 `POST /v1/auth/login` 换 key；拿到 token 前别在脚本上浪费轮次。
+**通道**：推单走 MCP 工具 `erp_quote_create`。`scripts/erp_push.py` 也能用，但要有 token：
+2026-11-20 起 token 落在**机器本地** `assets/erp_endpoint.local.yaml`（`token:`，已 gitignore，
+不入库）→ `erp_push.py` 与 `product_type.py --lookup` 都能直连；换机器照
+`assets/erp_endpoint.local.example.yaml` 复制一份并填 token（或设 `ERP_MCP_TOKEN`）。
+没有 token 时直跑会 `HTTP 401 missing_bearer`（须先 `POST /v1/auth/login` 换 key）。
 
 **`CPMC` 会被 ERP 追加 FSC 后缀**：`冬季找找图画书` → `冬季找找图画书(FSC Mix)`。
 这是 ERP 行为，不是写错，别去"修"。
+
+### 产品类型 `CPLX`（2026-11-20 新增；业务给了判据原文）
+
+**必读 `docs/产品类型判定.md`**（森西 2026-11-20 上传的《客户订单/客户报价需求单的产品类别方式》原文 +
+落库口径）。五个合法值：`新产品` / `返单产品` / `半返单旧产品` / `半返单新产品` / `特殊新产品`。
+
+一句话：**第一次做货 → 新产品（有特殊工艺 → 特殊新产品）；做过的货 → 看这次和上次差什么：
+只差文件/装箱/贴纸 → 半返单旧产品；差刀线/形状/部件/用料/工艺 → 半返单新产品；一模一样 → 返单产品。
+NGV 系没明说「文件跟上次一模一样」→ 半返单旧产品。**
+
+```bash
+# 判 CPLX（推荐；--lookup 会去 ERP 客户订单找历史单当证据）
+uv run ./scripts/product_type.py --text customer-files/processed/<task> \
+    --customer NGV10 --english-name "<产品英文名/系列名>" --lookup
+# 输出：建议档位 + 置信度 + 依据 + 命中的历史单（表单编号/制单日期/该单产品类型）
+```
+
+三条硬规矩：
+
+1. **返单要查历史单**，不是凭「Reprint」这个词落档：先查 `客户单号`（有 PO 号就用 PO），
+   再查 `产品英文名`，再查 `规格`；都查不到 → `新产品`（NGV 系且客户称返单 → 按 NGV 默认
+   `半返单旧产品`，汇报里点名请业务确认）。
+   ⚠ 实测：`erp_sales_order_list(field="产品名称")` 中文关键字**检索不到**（返回 total 有、records 空），
+   用 `field="产品英文名"` 或 `客户单号`；且必须显式给 `from_date`（往前 1–2 年），否则查不到往年单。
+2. **多款组合取最高档**：`特殊新产品` > `新产品` > `半返单新产品` > `半返单旧产品` > `返单产品`。
+3. **NGV 默认档写在档案里**（`customers/ngv.yaml` 的 `rules.product_type.default`），
+   `product_type.py` 直接读它 —— 改口径改档案，不要在提示词里另抄一份。
 
 ### 客户给的是邮件（.eml）时
 
@@ -3720,7 +3749,8 @@ v1 的 40 字段中 13 个已删除：`id` `create_by` `has_safety_checks` `targ
       再加「取信 → 落 `.eml` → 调 `ingest_email.py`」的适配层。
       ⚠️ NGV 实测暴露出**非做不可**的理由：CU26061701 的客户单号在附件里完全不存在
       （文件名与表内都没有），只能从邮件标题/正文取
-- [ ] `CPLX` 产品类型（新产品 / 返单产品 / …）需对接历史订单系统
+- [x] `CPLX` 产品类型（新产品 / 返单产品 / …）—— 2026-11-20 接入：`scripts/product_type.py`
+      + `erp_sales_order_list`（列表-客户订单）查历史单，判据见 `docs/产品类型判定.md`
 - [ ] `ECPMC` 产品英文名（可直接取 `series_name`；NGV 可取 `product_name`）
 - [ ] **`YSLX` 运输类型** —— 业务 2026-09-24：**默认留空**，长期客户的实际口径写进档案
       「客户偏好表」（`preferences`，见 2.7）。要做到自动取还需邮件入口

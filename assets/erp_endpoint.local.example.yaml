@@ -1,3 +1,5 @@
 # 复制成 assets/erp_endpoint.local.yaml 后填本机真实值（.local.yaml 已 gitignore，不会入库）。
-# 也可以不用这个文件，改设环境变量 ERP_MCP_URL（或给脚本传 --url）。
+# 不用这个文件也行：改设环境变量 ERP_MCP_URL / ERP_MCP_TOKEN（或给脚本传 --url / --token）。
 url: "https://<erp-mcp-host>:8443/mcp"
+# api-key；换机器时用 `hermes mcp list` 里的 Authorization 头，或 POST /v1/auth/login 换一份
+token: "<api-key>"

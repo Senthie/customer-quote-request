@@ -388,6 +388,17 @@ rules:
   #   机制本身保留（erp_schema.declared_exceptions + validate_result(allow_values=)），
   #   将来若真出现「业务要用枚举外的字符串值」，在这里加 {field, value, reason} 即可。
   enum_exceptions: []
+  # ── 产品类型（CPLX）默认档 ───────────────────────────────────────────
+  # 业务口径 2026-11-20（森西上传《产品类别方式》原文）：
+  #   「一般 NGV 客户如果没有在邮件里面说书本印刷文件跟上次订单一模一样，我们都是录
+  #     『半返单旧产品』，因为 NGV 客户很少会有全返单，他通常每次订单都会修改一下封面文件。」
+  # 只有**查到历史订单**（客户单号 / 产品英文名 / 规格）才可能是返单三档；
+  # 查不到历史单且客户没说返单 → 新产品（有特殊工艺 → 特殊新产品）。
+  # 判定工具：`uv run ./scripts/product_type.py --text <任务目录> --customer <代号> --lookup`
+  # 详见 docs/产品类型判定.md。
+  product_type:
+    default: 半返单旧产品          # 返单/查得到历史单时的默认档
+    new_when_no_history: 新产品    # 客户没提返单、ERP 也查不到 → 新产品
   layout:
     # NGV 只用 section_pairs。**不要**加 auto_pairs —— NGV 表里 `paper`
     # 这类标签在 B 列反复出现，平铺策略会抓出一堆错值（校准前实测：

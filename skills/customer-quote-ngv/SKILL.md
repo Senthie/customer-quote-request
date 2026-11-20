@@ -1304,6 +1304,26 @@ uv run ./scripts/customer_profile.py --prefs ngv
   只搬文件、不搬 `<附件>.meta.json`，而这两个字段在 `required_empty` 里 → **四道门全绿也看不出来**。
   判别：`pending/` 里还躺着 `<附件>.meta.json`、任务目录里没有。**不要自己改这两个键**，
   按「字段/现值/原文/应然值」汇报给引擎侧（修法见总纲 `references/cpms-backfill-cron-notes.md` §8）。
+- ★ **`erp_push.py` 拿不到 `ERP_MCP_TOKEN` 时，改用 MCP 工具 + 手写回执**（2026-11-20 实单
+  `16258-01` / `BJXQ261120010`）：会话里的 ERP MCP 工具已鉴权 → `erp_quote_create(confirm=false)`
+  干跑 → 同 payload `confirm=true` → `erp_quote_list(key=…)` 回读。**关键第四步**：按 `erp_push`
+  的 report 格式手写 `<产物>.erp-push.json`（`status/bdbh/record_id/at/task_id/results/verify`），
+  否则 `round_report_mail.py` 的 `rglob("*.erp-push.json")` 看不到这单 → 回执邮件不发。
+  NGV 还有两个必填缺口要在 `.erp-import.json` 里兜（**不写回 59 键产物**）：
+  `languages=1`（`YYS` 按档案「单语言留空」）、`delivery_date`/`expected_date`（CRD / 订单确认日）。
+- ★ **「spec same as PO#xxxx」返单：CPMS 四段写「待确认」+ 认下 CPMS013 warn。**
+  这类单没有任何规格（`CD/KD/GD=0`、`CPLB` 落 `32.00;其他`），但因 `ZDFS` 有占位值算 `book_like`
+  → 封面/内文/装订/装箱 四段缺一段就 CPMS040 error；正确写法是四段「待确认（客户仅注明规格同 PO#…）」+
+  一条 `field=CPMS` 的 open 条目（CPMS080）+ `备注` 里出现「无法判断」（CPMS081）。
+  没有尺寸也没有装订边时**不许编书籍方向**，那条 CPMS013 warn 是已知例外。
+- ★ **推送前必算 `CPSL1 × TZS == 客户总本数`，线程里边改量边报价时最容易翻车**：本单旧数
+  `QTY: 5000 cps` 与改量后 `10.000 + 10.000 = Means 20K total` 并存，引擎按旧数÷款数落
+  `CPSL1=2500`（×2 = 5,000，差 4 倍）。按原文改成单款本数再推，并在汇报里给「现值/原文/应然值」。
+- ★ **线程里含我方上一轮报价会污染 `BZ`**：本单落「欧元」是因为我们的报价写 `€1.204/ pc`，
+  而 `BZ` 是「客户目标价币种」→ 客户 `target price … US$ 1.25/pc` 时应是 **美元** 且 `KHMBDJ=1.25`
+  （客户明说了价却落 0 = 字段缺口）。这两项 ERP 推送写不进（not_writable），更要写对产物 + 点名。
+  📎 全案（可照抄回执 JSON、CPMS 骨架、audit「未写」来自别的 PO 的处置）：
+  `references/erp-push-reprint-and-mcp-receipt.md`。
 
 ---
 
