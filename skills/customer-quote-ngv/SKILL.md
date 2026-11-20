@@ -1324,6 +1324,24 @@ uv run ./scripts/customer_profile.py --prefs ngv
   （客户明说了价却落 0 = 字段缺口）。这两项 ERP 推送写不进（not_writable），更要写对产物 + 点名。
   📎 全案（可照抄回执 JSON、CPMS 骨架、audit「未写」来自别的 PO 的处置）：
   `references/erp-push-reprint-and-mcp-receipt.md`。
+- ★ **产品类型 `CPLX`（2026-11-20 业务给了判据原文）**：NGV 系返单，邮件里**没明说**「书本印刷文件跟上次订单一模一样」
+  → 一律 `半返单旧产品`（NGV 极少全返单，每单都会改封面文件）。判据原文 + 术语→ERP 值映射在总纲
+  `docs/产品类型判定.md`；工具：`scripts/product_type.py --text <task> --customer NGV10 --english-name "<系列名>" --lookup`。
+  - 查历史单走 MCP **`erp_sales_order_list`（列表-客户订单）**：有 PO 号**先查 `客户单号`**（原文口径「查订单→取属性→
+    复制生成新单」），再查 `产品英文名`，再查 `规格`；都查不到且客户没提返单 → `新产品`（有特殊工艺 → `特殊新产品`）。
+    多款组合取最高档：特殊新产品 > 新产品 > 半返单新产品 > 半返单旧产品 > 返单产品。
+  - 坑① `field="产品名称"` 的中文关键字**检索不到**（`total` 有值、`records` 空）→ 用 `客户单号` 或 `产品英文名`。
+  - 坑② 必须显式给 `from_date`（往前 1–2 年），默认日期区间查不到往年返单。
+  - 坑③ 一行 = 一个订单产品行；**PO 命中的那行要排最前**，别被更近的同系列老单顶掉（实测 MOP17 的 2026-08 单
+    顶掉过真正的 PO#16258-01 单）。
+  - **`CPLX` 改不了，只能删单重建**（`erp_quote_update_product` 只支持 名称/规格/数量）。顺序必须：
+    `erp_quote_create(confirm=false)` 干跑新载荷 → `ok` 了再 `erp_quote_delete(confirm=true)` → 再
+    `create(confirm=true)`，最后 `erp_quote_list` 回读。实例：BJXQ261120010（新产品）→ 删 → BJXQ261120012
+    （半返单旧产品，数量/款数/语言数/目标价/交货/包装逐项一致）。
+  - 载荷只认白名单字段：**别塞自造键**（如 `product_type_source`），干跑会直接报「字段不认识；相近字段…」；
+    依据写在仓库文档/回执里，不进 ERP。
+  - MCP 新工具怎么确认/怎么在当前会话里直连调用（含 token 位置、SSE 解析、`records` 字段名）见
+    总纲 references：`customer-quote-request/references/erp-mcp-tool-refresh.md`。
 
 ---
 

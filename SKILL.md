@@ -606,6 +606,9 @@ uv run ./scripts/product_type.py --text customer-files/processed/<task> \
 2. **多款组合取最高档**：`特殊新产品` > `新产品` > `半返单新产品` > `半返单旧产品` > `返单产品`。
 3. **NGV 默认档写在档案里**（`customers/ngv.yaml` 的 `rules.product_type.default`），
    `product_type.py` 直接读它 —— 改口径改档案，不要在提示词里另抄一份。
+4. **判错要改，就地改、别重建**：2026-11-20 起 `erp_quote_update_product` 支持
+   `fields={"product_type": "…"}`（以及 `product_desc` 改明细 CPMS、`fields` 改装订/尺寸/检测等），
+   保存后工具会回读复核。只有主表字段才走 `erp_quote_update`。
 
 ### 客户给的是邮件（.eml）时
 
