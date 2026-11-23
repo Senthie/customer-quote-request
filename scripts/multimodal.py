@@ -70,7 +70,7 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
 MEDIA_SUFFIXES = IMAGE_SUFFIXES | VIDEO_SUFFIXES
 SIDECAR_TXT = ".vlm.txt"
 SIDECAR_JSON = ".vlm.json"
-MAX_TOKENS = 1200
+MAX_TOKENS = 2400
 
 
 class MMError(RuntimeError):
@@ -152,22 +152,116 @@ class VLMClient:
         raise MMError(f"VLM 调用失败（{self.endpoint}）：{last}")
 
 
+def _repair_truncated_json(chunk: str) -> Optional[dict[str, Any]]:
+    """把被 max_tokens 截断的 JSON 尽量救回来。
+
+    2026-11-23 实测：components 加进来后，单张封面就能把 1200 tokens 用尽，
+    回复停在 `"count": nul`。策略是从后往前砍掉不完整的部分，同时闭合括号：
+    先按逗号切、再按行切，每砍一刀就补齐 ```
+    ``` 试着 json.loads，成功即返回。
+    """
+    if not chunk.strip():
+        return None
+    # 去掉最后一个不完整的 token（如 `nul`、`"abc`）
+    attempts = [chunk]
+    for cut in range(len(chunk), 0, -1):
+        if chunk[cut - 1] in ",{[":
+            attempts.append(chunk[:cut])
+            break
+    # 从末尾逐步退，找到最后一个能闭合的位置
+    for base in list(attempts):
+        t = base.rstrip().rstrip(",")
+        # 统计还差几个括号
+        stack: list[str] = []
+        in_str = esc = False
+        for ch in t:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]":
+                if stack:
+                    stack.pop()
+        if in_str:
+            t += '"'
+        fixed = t + "".join(reversed(stack))
+        try:
+            data = json.loads(fixed)
+            if isinstance(data, dict):
+                data.setdefault("_meta", {})
+                data["_meta"]["repaired"] = True
+                return data
+        except json.JSONDecodeError:
+            continue
+    # 最后一招：按逗号边界逐段回退
+    t = chunk
+    for _ in range(60):
+        t = t[: t.rfind(",")] if "," in t else t
+        cand = t.rstrip().rstrip(",")
+        stack2: list[str] = []
+        in_str = esc = False
+        for ch in cand:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack2.append("}" if ch == "{" else "]")
+            elif ch in "}]":
+                if stack2:
+                    stack2.pop()
+        if in_str:
+            cand += '"'
+        try:
+            data = json.loads(cand + "".join(reversed(stack2)))
+            if isinstance(data, dict):
+                data.setdefault("_meta", {})
+                data["_meta"]["repaired"] = True
+                return data
+        except json.JSONDecodeError:
+            if not cand:
+                break
+    return None
+
+
 def parse_json_reply(text: str) -> Optional[dict[str, Any]]:
-    """剥掉代码栅栏 → 取第一个 { 到最后一个 } → json.loads。失败返回 None。"""
+    """剥掉代码栅栏 → 取第一个 { 到最后一个 } → json.loads。
+
+    解析失败时先试截断修复（模型常被 max_tokens 切断），救不回来才返回 None。
+    """
     if not text:
         return None
     t = text.strip()
     fence = re.search(r"```(?:json)?\s*(.+?)\s*```", t, re.S)
     if fence:
         t = fence.group(1)
-    i, j = t.find("{"), t.rfind("}")
-    if i < 0 or j <= i:
+    i = t.find("{")
+    if i < 0:
         return None
-    try:
-        data = json.loads(t[i:j + 1])
-        return data if isinstance(data, dict) else None
-    except json.JSONDecodeError:
-        return None
+    j = t.rfind("}")
+    if j > i:
+        try:
+            data = json.loads(t[i:j + 1])
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    # 走到这里 = 没有闭合的 } 或整体不合法 → 截断修复
+    return _repair_truncated_json(t[i:])
 
 
 # ── 预处理 ────────────────────────────────────────────────────────────
@@ -315,6 +409,40 @@ def build_transcript(payload: dict[str, Any], src: Path, kind: str,
                 continue
             shown = "、".join(str(v) for v in val) if isinstance(val, list) else str(val)
             lines.append(f"  {zh}: {shown}" + (_quote(ev[key]) if key in ev else "（无引文，需复核）"))
+        # ── 结构部件（2026-11-23）：玩具/发声器/灯光/电池，抽取引擎靠这段填「配件描述」
+        comp = payload.get("components") or {}
+        if isinstance(comp, dict) and any(comp.values()):
+            rows = []
+            for key, zh, extra in (
+                ("sound_module", "发声模块", (("keys", "键数"), ("key_shape", "按键形状"),
+                                              ("speaker_holes", "出音孔"))),
+                ("lights", "灯光", (("type", "类型"), ("count", "数量"), ("trigger", "触发"))),
+                ("battery", "电池", (("cell_type", "型号"), ("cell_count", "节数"),
+                                     ("compartment", "仓位"))),
+            ):
+                item = comp.get(key)
+                if not isinstance(item, dict) or not any(item.values()):
+                    continue
+                state = str(item.get("state") or "").strip()
+                bits = [f"{label}={item.get(k)}" for k, label in extra if item.get(k)]
+                ev = str(item.get("evidence") or "").strip()
+                if not state and not bits:      # 既没判断也没细节 → 这张图就是没信息，别刷行
+                    continue
+                line = f"  {zh}: state={state or 'null'}"
+                if bits:
+                    line += "｜" + "、".join(bits)
+                if ev:
+                    line += f" ← 「{ev}」"
+                rows.append(line)
+            for key, zh in (("interactive", "互动结构"), ("toys_included", "随书玩具"),
+                            ("box_contents", "盒内物")):
+                val = comp.get(key)
+                if isinstance(val, list) and any(str(x).strip() for x in val):
+                    rows.append(f"  {zh}: " + "、".join(str(x) for x in val))
+            if rows:
+                lines.append("──── 结构部件（可见）────")
+                lines.append("  state: real=看得见实物结构 / printed=只是印刷图案 / unclear=分不清 / null=本图无信息")
+                lines += rows
         for key, zh in (("quantities", "印数/档位"), ("languages", "语言")):
             val = payload.get(key)
             if val:
@@ -357,6 +485,15 @@ def has_quote_info(payload: dict[str, Any]) -> bool:
     specs = payload.get("specs") or {}
     if any(v for v in specs.values() if v):
         return True
+    # 部件扫查（2026-11-23）：只看得到耳朵/电池仓/按键背面的特写图，也是有效询价信息
+    comp = payload.get("components") or {}
+    if isinstance(comp, dict):
+        for v in comp.values():
+            if isinstance(v, dict):
+                if v.get("state") or v.get("keys") or v.get("type") or v.get("cell_type"):
+                    return True
+            elif isinstance(v, list) and any(str(x).strip() for x in v):
+                return True
     if payload.get("quantities") or payload.get("languages") or payload.get("titles"):
         return True
     # 视频的形状不一样：没有 specs，判据是「有没有装订/页数/尺寸结论」
@@ -371,6 +508,64 @@ def has_quote_info(payload: dict[str, Any]) -> bool:
         return len([t for t in (payload.get("texts") or []) if str(t).strip()]) >= 3
     raw = [str(r) for r in (payload.get("raw_text") or []) if str(r).strip()]
     return len(raw) >= 6 and any(ch.isdigit() for ch in "".join(raw))
+
+
+
+# ── 部件字段的确定性护栏（2026-11-23）────────────────────────────────
+_COMP_ZH = {"sound_module": "发声模块", "lights": "灯光", "battery": "电池"}
+_COMP_DETAIL = ("keys", "key_shape", "speaker_holes", "type", "count",
+                "trigger", "cell_type", "cell_count", "compartment")
+# 只有 evidence 里出现这些词，才承认「印刷图案」这个判断
+_PRINT_WORDS = ("印刷", "图案", "插画", "插图", "印着", "写着", "字样", "装饰",
+                "printed", "illustration", "logo")
+
+
+def normalize_components(payload: dict[str, Any]) -> dict[str, Any]:
+    """把模型给的 components 收敛成可用的三态，并保证审计留痕。
+
+    4B 模型在细粒度上不稳（实测把 "Made in China" 当电池证据、把出音孔说成印刷），
+    所以这里做确定性兜底：
+      1. state 只留 real / printed / unclear / null，true→real、false→null；
+      2. 说 "printed" 但 evidence 里没有任何「印刷类」字样 → 降级 unclear；
+      3. 非 real 的，细节字段（键数/型号/数量…）一律清空 —— 图案上的数字不是真部件数字；
+      4. 非 real 的，自动往 unknowns 补一条「需客户确认」（模型常忘写）。
+    """
+    comp = payload.get("components")
+    if not isinstance(comp, dict):
+        return payload
+    unk = payload.get("unknowns")
+    if not isinstance(unk, list):
+        unk = []
+    for key, zh in _COMP_ZH.items():
+        item = comp.get(key)
+        if not isinstance(item, dict):
+            continue
+        st = item.get("state")
+        if isinstance(st, bool):
+            st = "real" if st else None
+        st = str(st).strip().lower() if st else None
+        if st in ("true", "yes"):
+            st = "real"
+        elif st in ("false", "no", ""):
+            st = None
+        if st not in ("real", "printed", "unclear"):
+            st = None
+        ev = str(item.get("evidence") or "").strip()
+        if not ev and not any(item.get(f) for f in _COMP_DETAIL):
+            st = None            # 既没证据也没细节 = 这张图就是没信息，别刷 noise 行
+        if st == "printed" and not any(w in ev.lower() for w in _PRINT_WORDS):
+            st = "unclear"       # 说不出是印刷还是实物 → 不敢断言
+        if st == "unclear" and not ev:
+            st = None
+        if st in ("printed", "unclear"):
+            for f in _COMP_DETAIL:
+                if item.get(f):
+                    item[f] = None
+            if not any(zh in str(u) and "客户确认" in str(u) for u in unk):
+                unk.append(f"{zh} state={st}，真实部件需客户确认")
+        item["state"] = st
+    payload["unknowns"] = unk
+    return payload
 
 
 def process_file(path: Path, cfg: dict[str, Any], client: Any,
@@ -393,6 +588,23 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
         payload = parse_json_reply(reply["text"]) or {}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    if kind != "video":
+        payload = normalize_components(payload)
+
+    # raw_text 硬上限（2026-11-23 森西拍板）：提示词里已要求 ≤40 行，
+    # 但 4B 模型不总听话，这里兜底截断，超出的写进 unknowns，避免长文本撑爆 JSON。
+    _lim = cfg.get("max_raw_text_lines")
+    if kind != "video" and _lim:
+        raw_lines = payload.get("raw_text") or []
+        if isinstance(raw_lines, list) and len(raw_lines) > int(_lim):
+            extra = len(raw_lines) - int(_lim)
+            payload["raw_text"] = raw_lines[: int(_lim)]
+            unk = payload.get("unknowns")
+            if not isinstance(unk, list):
+                unk = []
+            unk.append(f"原文还有约 {extra} 行未转录（超出 {int(_lim)} 行上限）")
+            payload["unknowns"] = unk
 
     payload.setdefault("_meta", {})
     payload["_meta"].update({"file": path.name, "kind": kind, "model": client.model,

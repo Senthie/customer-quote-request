@@ -3,6 +3,11 @@
 # 2026-11-19 森西提供：vLLM 部署的 Qwen3-VL-4B-Instruct。
 # 口径：模型只做「转录员」—— 只写看得见的文字与事实，看不到就 null，绝不推断。
 # 改提示词只改这里；解析逻辑在 scripts/multimodal.py。
+#
+# 2026-11-23 改版（森西拍板 4 条）：客户样书照片里的**玩具/发声器/灯光/电池**等部件
+# 之前完全没被看见（A/B 实测：旧提示词对夜灯封面输出空的 specs.special）。
+# 现在 image_user 多了 components 六项扫查，且用 real/printed/unclear 三态区分
+# 「真部件」与「印在封面上的图案」—— 4B 模型会把插画里的灯泡当成真 LED。
 
 # ⚠ 端点与模型名**不写在这里**（本仓库是公开仓库，2026-11-20 森西要求把内网地址外置）。
 # 解析顺序见 scripts/local_config.py：
@@ -11,12 +16,14 @@
 #   > 本文件里的同名键（默认留空）
 endpoint: ""
 model: ""
-timeout: 90          # 单次请求超时（秒）
+timeout: 120          # 单次请求超时（秒）；2048px + 部件扫查后单图更慢，90→120
 retries: 2
-concurrency: 2       # 同时最多几个请求（4B + 单卡，再多没收益）
-max_edge_px: 1600    # 图片长边压到这个尺寸，省 token
-max_pdf_pages: 6     # 扫描 PDF 最多转几页
-max_video_frames: 12 # 视频最多抽几帧
+concurrency: 2        # 同时最多几个请求（4B + 单卡，再多没收益）
+max_tokens: 2400      # 响应上限；旧值 1200 会被 components 撑爆（实测截断在 "count": nul）
+max_edge_px: 2048     # 图片长边压到这个尺寸；1600 看不清按键形状/出音孔/仓盖卡扣，2026-11-23 提高
+max_raw_text_lines: 40  # raw_text 最多抄几行，超出部分进 unknowns（保 JSON 完整）
+max_pdf_pages: 6      # 扫描 PDF 最多转几页
+max_video_frames: 12  # 视频最多抽几帧
 video_short_side: 480
 min_image_bytes: 12000  # 小于这个的图片基本是签名图标/分隔线（实测一封客户信带 30 个 0–3KB png），不送模型
 
@@ -25,11 +32,12 @@ system: |
   不推断、不补全、不美化。看不到就写 null，看不清的字符写「?」。
   德文 / 英文 / 日文原文照抄，不翻译。
 
-# ── P1：图片（规格表 / 封面 / 内页 / 刀线 / 装箱示意）─────────────────
+# ── P1：图片（规格表 / 封面 / 内页 / 刀线 / 装箱示意 / 部件特写）─────────
 image_user: |
-  这是客户询价邮件的附件图片。返回严格 JSON（不要 markdown 代码块外的任何文字）：
+  这是客户询价邮件的附件图片（样书照片：封面 / 内页 / 封底 / 刀线 / 装箱 / 部件特写）。
+  返回严格 JSON（不要 markdown 代码块外的任何文字）：
   {
-   "doc_type": "spec_table|cover_art|interior_spread|die_line|packing_photo|logo_banner|other",
+   "doc_type": "spec_table|cover_art|interior_spread|die_line|packing_photo|component_closeup|logo_banner|other",
    "titles": [],
    "specs": {
      "finished_size_mm": null,
@@ -40,10 +48,18 @@ image_user: |
      "finish": [],
      "special": []
    },
+   "components": {
+     "sound_module":  {"state": null, "keys": null, "key_shape": null, "speaker_holes": null, "evidence": null},
+     "lights":        {"state": null, "type": null, "count": null, "trigger": null, "evidence": null},
+     "battery":       {"state": null, "cell_type": null, "cell_count": null, "compartment": null, "evidence": null},
+     "interactive":   [],
+     "toys_included": [],
+     "box_contents":  []
+   },
    "quantities": [],
    "languages": [],
    "raw_text": [],
-   "evidence": [{"field": "paper_gsm", "quote": "原文那一句", "where": "表格第3行"}],
+   "evidence": [{"field": "components.lights.state", "quote": "原文支持这一条的句子或可见结构", "where": "封底左下/表格第3行"}],
    "unknowns": [],
    "conflicts": []
   }
@@ -51,11 +67,45 @@ image_user: |
   ① 只有图上有证据才填字段，其余 null / 空数组；
   ② 数字带单位，克重写成「170 g/m²」；
   ③ 图注含 carton / shipping / Verpackung / Karton 的尺寸只进 raw_text，不当成品尺寸；
-  ④ 不认识的缩写原样保留，不要猜；
-  ⑤ raw_text 逐行转录，包含表头；
-  ⑥ **邮件签名 logo、公司徽标、活动横幅、纯装饰图 → doc_type 填 "logo_banner"，
-     titles / specs / quantities / languages 全部留空**，raw_text 只列图上可见的字。
+  ④ 不认识的缩写原样保留，不要猜；德文/英文/日文原文照抄，不翻译；
+  ⑤ **raw_text 逐行转录（含表头），最多 40 行**；超出 40 行的，第 41 行起不再抄，
+     在 unknowns 里写「原文还有约 N 行未转录（超出上限）」；
+  ⑥ **邮件签名 logo、公司徽标、活动横幅、纯装饰图 → doc_type 填 "logo_banner"**，
+     titles / specs / components / quantities / languages 全部留空，raw_text 只列图上可见的字。
      这类图没有报价信息，下游不该拿它抽字段。
+  ⑦ **部件扫查（重点，别漏）**：逐项判断下列部件**是否真的出现在画面上**，
+     每项填 state 与 evidence（依据是文字或可见结构）：
+     - sound_module：发声按键数量、按键形状（圆键 / 方键 / 硅胶软键 / 金属弹片 / 触摸感应片）、
+       喇叭出音孔是否可见（孔阵列 / 格栅 / 背面开孔）
+     - lights：灯光类型（LED / 光纤 / 泡壳夜灯 / 投影灯）、数量、触发方式（按键 / 触摸 / 定时 / 光敏）
+     - battery：电池型号（AAA / AA / 纽扣 CR2032 / 内置锂电）、节数、
+       电池仓位置（封底 / 内页 / 书脊 / 侧面）、是否有仓盖螺丝或卡扣
+     - interactive：推拉滑块、翻翻页、洞洞、转盘、磁铁、触摸感应区、滑轨、立体弹起
+     - toys_included：随书玩偶、积木、拼图、贴纸、发声棒 / 魔法棒、卡片
+     - box_contents：外盒、泡壳、绑带、说明书、电池是否预装
+  ⑧ **state 只取三值之一，不要写 true/false**：
+     - "real"    = 能看到**实物结构证据**：明显厚度 / 阴影 / 高光、与纸面的缝隙、开孔、
+                   仓盖卡扣或螺丝、导线、按键按下的凹陷、塑料或硅胶反光、出音孔阵列；
+     - "printed" = 只是**平面印刷的图案或文字暗示**（画出来的按钮、写着 "press here"、
+                   插画里的灯泡、印上去的孔）；
+     - "unclear" = 看不出属于哪种，或只露出一部分被遮挡；
+     - null      = 这张图根本没有该部件的信息。
+     ⚠ 只要不是 "real"，keys / count / type / cell_type / cell_count 等**细节字段一律留 null**——
+     图案上的数量不是真实部件数量，只写进 raw_text。
+     ⚠ 不是 "real" 的，必须在 unknowns 里写一句「XX 疑似印刷图案 / 看不清，真实部件需客户确认」。
+     ⚠ **反向纠错（同样重要）**：如果你的 evidence 里已经描述了下面任意一项，
+       那 state 就**必须**是 "real"，不许因为「某个细节看不清」降级成 printed：
+       出音孔 / 格栅 / 开孔阵列、按键凹陷或明显凸起、仓盖卡扣或螺丝、导线、
+       部件与纸面之间的缝隙、明显的塑料或硅胶反光、能看出厚度；
+       这些就是实物结构证据本身。看不清数量时：state 仍写 "real"，数量留 null 并进 unknowns。
+  ⑨ 数不清数量写「约N」，并同时记进 unknowns。
+  ⑨-b **电池的证据门槛最高**：只能依据「电池仓 / 仓盖 / 电池实物 / 型号标签」判断；
+     产品上印的 "Made in China"、CE 标志、材质说明、警告语等文字**都不算电池证据** → state 必须 null。
+     同理：灯光只有看到「发光体本身 / LED 颗位 / 光纤 / 灯罩 / 触发开关」才算，看到 "night light" 字样本身只算 printed。
+  ⑩ 图里有**前后封摊开的实物照**（能看到书脊厚度/内页边沿）时，doc_type 记 "cover_art"，
+     evidence 里写清看到的是哪一面；刀线图 / 展开图记 "die_line"；
+     单独的电池仓、按键背面、喇叭特写记 "component_closeup"。
+  ⑪ unknowns 必须列出：本图判断不出、但报价需要的信息（含第⑦⑧条的未定项）。
 
 # ── P2：视频抽帧（样书翻页 / 装订与工艺展示，时序理解）───────────────
 video_user: |
@@ -66,6 +116,13 @@ video_user: |
    "sequence": [{"frame": 1, "what_changed": "相对上一帧发生了什么"}],
    "binding": {"value": null, "frame": null, "why": "哪一帧看到书脊/订口/订线"},
    "craft": [],
+   "components": {
+     "sound_module": {"state": null, "keys": null, "key_shape": null, "evidence": null},
+     "lights": {"state": null, "type": null, "count": null, "evidence": null},
+     "battery": {"state": null, "cell_type": null, "cell_count": null, "compartment": null, "evidence": null},
+     "interactive": [],
+     "toys_included": []
+   },
    "page_guess": {"value": null, "basis": "数折手/看页码的方式；没有依据就 null"},
    "size_guess": {"value": null, "basis": "有参照物才估，否则 null"},
    "texts": [],
@@ -75,10 +132,20 @@ video_user: |
   ① 装订方式只认书脊/订口/订线出现的帧；看不清就 null；
   ② 不许把拍摄透视、手的大小当成尺寸依据；没有标尺→ size_guess 全 null；
   ③ 页数只能靠可见页码/折手推断，做不到就 null；
-  ④ 视频帧有运动模糊/虚焦的地方写进 unknowns。
+  ④ 视频帧有运动模糊/虚焦的地方写进 unknowns；
+  ⑤ components 的 state 同样只取 real / printed / unclear / null：
+     只有**手指按压后画面有反应**（发声嘴型、灯亮、页面弹起）才算 real，并写清第几帧；
+     单纯看到印着的按钮图案算 "printed"；拿不准写 "unclear" 并列进 unknowns。
 
 # ── P3：对抗式复核（对 P1/P2 结果的二次请求，砍幻觉）────────────────
 verify_user: |
-  下面是上一轮从画面得出的字段清单。对每一条回答：画面哪一行/哪个区域支持它？
-  给不出具体引文的，把该条删掉。只返回保留项，格式：
-  {"kept": [{"field": "...", "quote": "...", "where": "..."}], "dropped": ["field"]}
+  下面是上一轮从画面得出的字段清单（含 specs 与 components）。对每一条回答：
+  画面哪一行 / 哪个区域 / 哪个可见结构支持它？给不出具体引文的，把该条删掉。
+  另外重点复核 components 的 state：
+  - 标了 "real" 的，必须能说出**实物结构**（厚度/缝隙/开孔/卡扣/导线/凹陷）在哪一处；
+    说不出的一律降级为 "printed" 或 "unclear"。
+  - 标了 "printed" 却连图案位置都指不出的，直接删掉。
+  只返回保留项，格式：
+  {"kept": [{"field": "...", "quote": "...", "where": "..."}],
+   "downgraded": [{"field": "...", "from": "real", "to": "printed", "why": "..."}],
+   "dropped": ["field"]}

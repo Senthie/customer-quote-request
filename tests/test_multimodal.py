@@ -209,3 +209,77 @@ def test_logo_banner_writes_json_but_no_transcript(tmp_path, monkeypatch):
 
 def test_has_quote_info_true_for_spec_table():
     assert MM.has_quote_info(FAKE_PAYLOAD) is True
+
+
+# ── 2026-11-23 部件扫查改版：截断修复 / 三态护栏 / 转录渲染 ─────────────
+def test_parse_json_reply_repairs_truncated_reply():
+    """components 加进来后单图就可能撞 max_tokens，截断的要能救回前半段。"""
+    trunc = ('{"doc_type":"cover_art","specs":{"special":[]},'
+             '"components":{"lights":{"state":"real","count":nul')
+    data = MM.parse_json_reply(trunc)
+    assert data and data["doc_type"] == "cover_art"
+    assert data["components"]["lights"]["state"] == "real"
+    assert data.get("_meta", {}).get("repaired") is True
+
+
+def test_normalize_components_downgrades_unjustified_printed():
+    """说 printed 但 evidence 里没有任何「印刷」字样 → 降级 unclear，细节字段清空。"""
+    payload = {"components": {"battery": {"state": "printed", "cell_type": "CR2032",
+                                          "cell_count": 3, "evidence": "Made in China"}},
+               "unknowns": []}
+    out = MM.normalize_components(payload)
+    bat = out["components"]["battery"]
+    assert bat["state"] == "unclear"
+    assert bat["cell_type"] is None and bat["cell_count"] is None
+    assert any("电池" in u and "客户确认" in u for u in out["unknowns"])
+
+
+def test_normalize_components_keeps_real_and_true_alias():
+    payload = {"components": {"sound_module": {"state": True, "keys": 6,
+                                              "key_shape": "圆键",
+                                              "evidence": "底部有格栅出音孔"}},
+               "unknowns": []}
+    out = MM.normalize_components(payload)
+    sm = out["components"]["sound_module"]
+    assert sm["state"] == "real" and sm["keys"] == 6      # real 的细节字段保留
+
+
+def test_build_transcript_renders_components_section():
+    payload = {"doc_type": "cover_art", "titles": [], "specs": {}, "raw_text": ["abc"],
+               "components": {"sound_module": {"state": "real", "keys": 6,
+                                               "key_shape": "圆键",
+                                               "evidence": "底部格栅出音孔"},
+                              "lights": {"state": "printed", "type": None,
+                                         "evidence": "插图中金色灯饰"}},
+               "unknowns": [], "conflicts": []}
+    txt = MM.build_transcript(payload, Path("a.jpg"), "image", "M", 1.0)
+    assert "结构部件" in txt
+    assert "发声模块: state=real" in txt and "键数=6" in txt
+    assert "灯光: state=printed" in txt
+
+
+def test_has_quote_info_true_for_component_only_photo():
+    """只有电池仓/按键背面的特写，也算有效询价信息，别当 logo 丢掉。"""
+    payload = {"doc_type": "component_closeup", "specs": {},
+               "components": {"battery": {"state": "real", "cell_type": "AAA"}},
+               "raw_text": []}
+    assert MM.has_quote_info(payload) is True
+
+
+def test_raw_text_line_cap_enforced(tmp_path, monkeypatch):
+    """提示词要求 ≤40 行，模型不听话时代码兜底截断并记 unknowns。"""
+    from PIL import Image
+    monkeypatch.setattr(MM, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(MM, "LOG_DIR", tmp_path / "logs")
+    img = tmp_path / "page.jpg"
+    Image.new("RGB", (200, 100), "white").save(img)
+    reply = json.dumps({"doc_type": "cover_art", "titles": [],
+                        "specs": {"binding": "Klebebindung"},
+                        "components": {}, "raw_text": [f"line{i}" for i in range(10)],
+                        "unknowns": [], "conflicts": [], "quantities": [], "languages": []})
+    cfg = {**CFG, "max_raw_text_lines": 3}
+    out = MM.process_file(img, cfg, FakeClient(reply=reply), force=True)
+    assert out["status"] == "ok"
+    payload = json.loads((tmp_path / "page.jpg.vlm.json").read_text(encoding="utf-8"))
+    assert len(payload["raw_text"]) == 3
+    assert any("未转录" in u for u in payload["unknowns"])
