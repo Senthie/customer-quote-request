@@ -347,6 +347,24 @@ CPMS=''（必须为空，交给 agent）
 通用坑（audit 不收 `.eml`、`GD` 必然无出处、档位写 `3k`、CPMS013↔011 死锁、重复上传、
 一文件多组规格）见 `customer-quote-request/references/cpms-backfill-gotchas.md`。
 
+> ★ **类级作业手册已独立成 skill `customer-quote-cpms-push`**（后半段全流程：CPMS 骨架 /
+> 三内部字段 / `CPLX` 判定 / 门禁 / 推 ERP / 回执邮件；坑清单在它的
+> `references/cpms-write-and-push-gotchas.md`）。本节只保留 IGL 专属注意事项。
+> 三个最容易翻车的工具坑（2026-11-21 实测）：
+> ① `cpms_content_audit.py --source` 是 `nargs="+"` —— **重复写两个 `--source` 只有最后一个生效**
+>   （正确写法 `--source A B`；症状是「一半数字能溯源一半不能」）；
+> ② audit 不收 `.json`，邮件正文要先在单元目录落 `_email_body.txt` 再当 `--source`；
+> ③ `erp_push.py` 的 token 解析链是 `--token` → `$ERP_MCP_TOKEN` →
+>   `assets/erp_endpoint.local.yaml` 的 `token`（2026-11-21 补齐；此前只认前两个，
+>   与 SKILL/docs 写的「local.yaml 有 token 就能直连」不一致 → 每轮白撞 401
+>   `missing_bearer`）。仍是 401 就说明机器上那份 local.yaml 没 `token:` 或值失效。
+>
+> ★ **字段被落错、但 `profile_id` 是具体客户（不是 `generic`）时**：既**不要**按
+> `references/generic-artifact-handling.md` 隔离，也**不要**为了让 lint 变绿把概要行写成
+> `0*0*0` / 不写「共N款」（那是掩盖）。正确姿势：CPMS 按原文写真实尺寸/款数，让 `CPMS011`
+> 逐条点名错字段；在 `question_answers` 登记 `blocking=true` 的卡交付项；`qty=0` 不推 ERP；
+> 汇报逐条给「现值 / 原文 / 应然值」。完整口径见 `customer-quote-cpms-push` §4。
+
 IGL 专属七条：
 
 1. **`CPMC`/`CPMC_ZH` 写中文品名**（同值、反映产品实质、不带业务员/品牌/类别/FSC），

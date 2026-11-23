@@ -74,9 +74,14 @@ RE_DIE_OR_SHAPE = re.compile(
     r"die[- ]?line|new die|stanzform|tooling|"
     r"window|shape change|cut ?out|"
     r"窗口|形状|刀线|刀模|开版|模切|小部件|部件|转轮|机构|mechanism|wheel", re.I)
+# ★ 裸 `gsm` 不能算「用料变更」（2026-11-20 实测 TEV21 Kleines Stickerbuch）：
+#   任何规格都会写 `250 gsm C1S`，把单位当变更信号 → 同一系列同规格的续报被判成
+#   「半返单新产品」。只认「克重真的变了」的说法。
 RE_MATERIAL = re.compile(
     r"material change|change (the )?material|reduce cost|cost down|cheaper|lighter|"
-    r"gsm|克重|用料|换料|减成本|降本|改纸|纸质", re.I)
+    r"(?:higher|lower|increase[d]?|reduce[d]?)\s*(?:gsm|paper weight)|"
+    r"gsm (?:change|changed|increase|reduction)|克重(?:变更|增加|调整|改变)|"
+    r"用料变更|换料|减成本|降本|改纸|纸质变更", re.I)
 RE_PROCESS_OPT = re.compile(
     r"optimi[sz]|improve(ment)?|optimier|verbessert|工艺优化|优化|改善|做法更改", re.I)
 RE_NEW_PROJECT = re.compile(

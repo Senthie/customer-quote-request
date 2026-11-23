@@ -1324,6 +1324,23 @@ uv run ./scripts/customer_profile.py --prefs ngv
   （客户明说了价却落 0 = 字段缺口）。这两项 ERP 推送写不进（not_writable），更要写对产物 + 点名。
   📎 全案（可照抄回执 JSON、CPMS 骨架、audit「未写」来自别的 PO 的处置）：
   `references/erp-push-reprint-and-mcp-receipt.md`。
+- ★ **「spec same as PO#xxxx」不是只判档位，是「抄整张旧单属性」（业务 2026-11-20 当场纠正）**：
+  `erp_sales_order_list(key="<PO>", field="客户单号", from_date="<往前2年>")` → `erp_sales_order_detail(record_id)`
+  → 把 产品描述（封面/衬纸/内文/PET/装订/包装/装箱）、规格、包装要求、特殊要求 逐段抄进 CPMS 与
+  `spec` / `length-mm` / `binding`，注明「按 PO#… 原单复制」；再把详情摘录成任务目录的
+  `_source_ERP_<单号>.txt` 供 `cpms_content_audit --source` 溯源，**不要留「待确认」**。
+- ★ **改字段就地改，绝不删单重建**：`erp_quote_update_product(product_desc=…, spec=…,
+  fields={"product_type":…, "binding":…, "length_mm":…, "width_mm":…, "height_mm":…})`，
+  干跑看 `changes` 里的控件名（txtCPLX/txtCPMS/txtGG/txtCD…）→ `confirm=true` → 回读 `mismatched=[]`。
+  2026-11-20 我按「只能改名称/规格/数量」的旧记忆把 `BJXQ261120010` 删了重建（010→012），
+  事后发现新版工具早就能改 CPMS/CPLX —— **先 `hermes mcp test erp` 探能力，再决定要不要动刀**。
+  配方全文：skill `customer-quote-request` 的 `references/erp-inplace-edit-and-product-type.md`。
+- ★ **NGV 返单默认 `半返单旧产品`**：客户没写「文件跟上次订单一模一样」就不落 `返单产品`；
+  判档用 `scripts/product_type.py --text <task> --customer NGVxx --lookup`，默认档读
+  `customers/ngv.yaml` 的 `rules.product_type.default`。
+- ★ **客户订单检索坑**：`erp_sales_order_list(field="产品名称")` 中文关键字检索不到（total 有、records 空）
+  → 用 `客户单号` 或 `产品英文名`；必须显式给 `from_date`；一行 = 一个订单产品行，取最近制单日期，
+  但 **PO 命中的要排最前**（只按日期排会被更近的同类老单顶掉）。
 - ★ **产品类型 `CPLX`（2026-11-20 业务给了判据原文）**：NGV 系返单，邮件里**没明说**「书本印刷文件跟上次订单一模一样」
   → 一律 `半返单旧产品`（NGV 极少全返单，每单都会改封面文件）。判据原文 + 术语→ERP 值映射在总纲
   `docs/产品类型判定.md`；工具：`scripts/product_type.py --text <task> --customer NGV10 --english-name "<系列名>" --lookup`。
