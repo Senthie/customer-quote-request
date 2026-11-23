@@ -45,4 +45,18 @@ mm_out=$(timeout 240 uv run ./scripts/multimodal.py --prepass --limit 10 2>>/tmp
 
 # uv / venv 的噪音进日志，别混进要发给人的那段话；
 # 真出事了去 /tmp/cqr_scan.stderr 看（不静默吞掉错误）。
-exec uv run ./scripts/scan_pending.py "$@" 2>>/tmp/cqr_scan.stderr
+uv run ./scripts/scan_pending.py "$@" 2>>/tmp/cqr_scan.stderr
+scan_rc=$?
+
+# ── 第 3 步：询价 zip 附件兜底（业务规则 2026-11-23 森西）──────────────
+# 「抽完 → 压图打 zip → 建单 → 挂附件」里的最后一环。
+#   主路径：erp_push.py --confirm 建单成功后会自己调 quote_attachment 挂钩（同进程）。
+#   这里兜的是漏网的：① agent 直接调 MCP 工具建单、绕过了 erp_push.py；
+#                     ② 上轮附件失败 / 服务端当时 413；③ 附件被人在 ERP 里删了。
+# 幂等：附件名称以「询价原始件」开头的已存在就跳过（一个单只需一份）。
+# 输出：只有真挂了或真失败才有一行，平时完全安静（符合本脚本「没内容不打扰」）。
+att_out=$(timeout 240 uv run ./scripts/quote_attachment.py --backfill --confirm --quiet \
+          2>>/tmp/cqr_scan.stderr)
+[ -n "$att_out" ] && printf '%s\n' "$att_out"
+
+exit $scan_rc

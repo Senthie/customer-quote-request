@@ -501,7 +501,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--date", dest="default_date", default="",
                     help="JHRQ/WCRQ 缺值时的兜底日期（ERP 必填），形如 2027-03-15")
     ap.add_argument("--force", action="store_true", help="同一 task 已推过也再推一次")
-    ap.add_argument("--token", default="", help="MCP token（默认 $ERP_MCP_TOKEN）")
+    ap.add_argument("--no-attachment", action="store_true",
+                    help="建单后不自动挂询价 zip 附件（默认挂，见 quote_attachment.py）")
+    ap.add_argument("--token", default="",
+                    help="MCP token（默认 $ERP_MCP_TOKEN 或 assets/erp_endpoint.local.yaml 的 token）")
     ap.add_argument("--url", default=DEFAULT_MCP_URL)
     args = ap.parse_args(argv)
 
@@ -510,6 +513,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"找不到产物：{path}", file=sys.stderr)
         return 2
     token = args.token or os.environ.get("ERP_MCP_TOKEN", "")
+    if not token:
+        # 与 product_type.py 同一条解析链：机器本地的 assets/erp_endpoint.local.yaml
+        # （gitignore，不入库）。此前这里只认 --token/$ERP_MCP_TOKEN，而 SKILL 与
+        # docs 都写着「local.yaml 里有 token 就能直连」→ 每轮 cron 都白撞一次
+        # HTTP 401 missing_bearer（2026-11-20 实测）。
+        try:
+            from local_config import resolve
+            token = resolve("erp_endpoint", "token", "ERP_MCP_TOKEN")
+        except ImportError:
+            token = ""
 
     client = McpHttpClient(url=args.url, token=token)
     try:
@@ -522,6 +535,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                   confirm=args.confirm, force=args.force,
                   default_date=args.default_date)
     report["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    # ── 建单成功后自动挂询价 zip 附件（业务规则 2026-11-23）─────────────
+    # 失败不阻断推送结果，只把 attachment 状态写进回执，scan_pending 兜底会重试。
+    if args.confirm and not args.no_attachment and report.get("status") in ("created", "partial"):
+        try:
+            import quote_attachment as _qa
+            report["attachment"] = _qa.attach_for_report(path, report, client=client, confirm=True)
+        except Exception as exc:  # noqa: BLE001 - 附件失败绝不能吞掉主推送结果
+            report["attachment"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
     sidecar = sidecar_path(path)
     sidecar.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
