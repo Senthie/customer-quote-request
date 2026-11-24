@@ -190,8 +190,58 @@ def test_复读护栏_连续相同页合并并记unknown(monkeypatch, tmp_path):
     data = json.loads((tmp_path / "a.mp4.vlm.json").read_text(encoding="utf-8"))
     assert len(data["pages"]) == 2          # 3 条复读合成 1 条 + 树林页
     assert data["pages"][0]["frames"] == [8, 9, 10]
+    assert [p["no"] for p in data["pages"]] == [1, 2]   # 合并后重新编号，不留洞
     assert any("复读" in u for u in data["unknowns"])
     assert out["status"] == "ok"
+
+
+def test_merge_page_runs_两遍都有的页采信():
+    a = [{"no": 1, "kind": "spread", "frames": [2], "left": "彩色怪兽立体件弹出", "right": "女孩插图",
+          "text": ["Este es el monstruo"], "popup": {"state": "real", "subject": "怪兽", "type": "立体弹起"}}]
+    b = [{"no": 1, "kind": "spread", "frames": [3], "left": "彩色怪兽弹出", "right": "女孩插图",
+          "text": ["Este es el monstruo"], "popup": {"state": "printed", "subject": None}}]
+    merged, single = MM.merge_page_runs(a, b, 0.4)
+    assert len(merged) == 1 and not single
+    assert merged[0]["frames"] == [2, 3]            # 帧号合并
+    assert merged[0]["popup"]["state"] == "real"    # real 优先
+
+
+def test_merge_page_runs_只出现一遍的页不进采信():
+    a = [{"no": 1, "left": "树林与猫头鹰", "right": "吊床"},
+         {"no": 2, "left": "云朵与雨滴", "right": "纸船"}]
+    b = [{"no": 1, "left": "树林与猫头鹰", "right": "吊床"}]
+    merged, single = MM.merge_page_runs(a, b, 0.4)
+    assert len(merged) == 1 and len(single) == 1
+    assert "云朵" in single[0]["left"]
+
+
+def test_merge_page_runs_换句说法也能对上():
+    a = [{"no": 1, "left": "一个立体的玻璃瓶和彩色山丘结构", "right": "卡通女孩"}]
+    b = [{"no": 1, "left": "立体的玻璃瓶与彩色山丘", "right": "卡通女孩站在旁边"}]
+    merged, _ = MM.merge_page_runs(a, b, 0.55)
+    assert len(merged) == 1 and merged[0]["consensus"] >= 0.55
+
+
+def test_merge_page_runs_完全不相关则不匹配():
+    a = [{"no": 1, "left": "树林与猫头鹰", "right": "吊床与青蛙"}]
+    b = [{"no": 1, "left": "玻璃瓶", "right": "山丘"}]
+    merged, single = MM.merge_page_runs(a, b, 0.55)
+    assert not merged and len(single) == 2
+
+
+def test_merge_page_runs_合并后重新编号():
+    a = [{"no": 5, "left": "甲页", "right": "乙"}, {"no": 9, "left": "丙页", "right": "丁"}]
+    b = [{"no": 1, "left": "甲页", "right": "乙"}, {"no": 2, "left": "丙页", "right": "丁"}]
+    merged, _ = MM.merge_page_runs(a, b, 0.55)
+    assert [m["no"] for m in merged] == [1, 2]
+
+
+def test_build_transcript_渲染只出现一遍段():
+    payload = {"pages": [{"no": 1, "kind": "spread", "frames": [1], "left": "甲页", "right": "乙"}],
+               "pages_single_run": [{"left": "丙页", "right": "丁", "frames": [7]}],
+               "unknowns": []}
+    txt = MM.build_transcript(payload, Path("a.mp4"), "video", "M", 1.0)
+    assert "只出现一遍" in txt and "丙页" in txt
 
 
 # ── PDF 判别 ──────────────────────────────────────────────────────────

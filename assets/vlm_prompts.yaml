@@ -26,6 +26,8 @@ max_pdf_pages: 6      # 扫描 PDF 最多转几页
 max_video_frames: 16  # 视频最多送几帧（实测 28 帧时 4B 会复读同一页描述：28→16）
 video_frame_interval: 3.0  # 采样间隔下限（秒）；时长/上限 比它大时按上限均分
 video_hash_threshold: 2    # 相邻帧 dHash 距离 ≤2 才算真重复（视频卡住/重复帧），其余全留
+video_page_consensus: true       # 逐页清单跑两遍取交集（4B 页数波动 ±60%，代价：视频耗时 ×2）
+video_page_consensus_threshold: 0.55  # 两遍的页描述相似度（difflib 字符级 LCS 比例）≥ 此值才算同一页
 video_short_side: 480
 min_image_bytes: 12000  # 小于这个的图片基本是签名图标/分隔线（实测一封客户信带 30 个 0–3KB png），不送模型
 

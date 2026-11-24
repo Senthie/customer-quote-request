@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import difflib
 import hashlib
 import json
 import re
@@ -511,6 +512,17 @@ def build_transcript(payload: dict[str, Any], src: Path, kind: str,
                 note = str(pg.get("note") or "").strip()
                 if note:
                     lines.append(f"    ⚠ {note}")
+            single = payload.get("pages_single_run")
+            if isinstance(single, list) and single:
+                lines.append("  ── 只出现一遍（未采信，需人工对照视频）──")
+                for pg in single:
+                    if not isinstance(pg, dict):
+                        continue
+                    desc = "｜".join(x for x in (str(pg.get("left") or "").strip(),
+                                                 str(pg.get("right") or "").strip()) if x)
+                    fr = pg.get("frames")
+                    fr_s = ("（帧" + "/".join(str(x) for x in fr) + "）") if isinstance(fr, list) and fr else ""
+                    lines.append(f"    P? {fr_s}{desc or '（描述为空）'}")
         for step in payload.get("sequence") or []:
             if isinstance(step, dict):
                 lines.append(f"帧{step.get('frame', '?')}: {step.get('what_changed', '')}")
@@ -830,6 +842,88 @@ def normalize_crafts(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+# ── 逐页清单「两遍取交集」（2026-11-24）──────────────────────────────
+# 同一段视频、同一组帧跑两遍，4B 给出的页数会大幅波动（实测同配置 15 页 vs 6 页，±60%）。
+# 两遍都描述到的页才算「采信」；只出现一遍的单独列出来交人工核 —— 不静默丢，也不静默采。
+def _page_blob(pg: dict[str, Any]) -> str:
+    parts = [str(pg.get("left") or ""), str(pg.get("right") or ""),
+             " ".join(str(t) for t in (pg.get("text") or []))]
+    pop = pg.get("popup")
+    if isinstance(pop, dict):
+        parts += [str(pop.get("subject") or ""), str(pop.get("type") or "")]
+    return " ".join(x.strip() for x in parts if str(x).strip())
+
+
+def _page_similarity(a: str, b: str) -> float:
+    """序列相似度（difflib 的字符级 LCS 比例）。
+
+    试过二元组 Jaccard：中文换句说法时掉到 0.41（「一个立体的玻璃瓶和彩色山丘结构」
+    vs「立体的玻璃瓶与彩色山丘」），把同一页判成两页 —— 太严。LCS 比例对增删字更宽容，
+    同一段话换说法约 0.6-0.7，不相关页 <0.1，界线清楚。
+    """
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _combine_pages(pa: dict[str, Any], pb: dict[str, Any], score: float) -> dict[str, Any]:
+    """两遍都认到的同一页：字段取更完整的那一份，popup 的 real 优先。"""
+    def _longer(x: Any, y: Any) -> Any:
+        return x if len(str(x or "")) >= len(str(y or "")) else y
+
+    frames = sorted(set(list(pa.get("frames") or []) + list(pb.get("frames") or [])))
+    ta = [str(t) for t in (pa.get("text") or []) if str(t).strip()]
+    tb = [str(t) for t in (pb.get("text") or []) if str(t).strip()]
+    pop_a, pop_b = pa.get("popup"), pb.get("popup")
+    pop = pop_a if isinstance(pop_a, dict) else {}
+    if isinstance(pop_b, dict):
+        if str(pop_b.get("state") or "") == "real" and str(pop.get("state") or "") != "real":
+            pop = pop_b
+        elif not any(pop.get(k) for k in ("subject", "type")) and any(pop_b.get(k) for k in ("subject", "type")):
+            pop = pop_b
+    notes = [n for n in {str(pa.get("note") or "").strip(), str(pb.get("note") or "").strip()} if n]
+    return {
+        "no": 0,
+        "kind": _longer(pa.get("kind"), pb.get("kind")),
+        "frames": frames,
+        "left": _longer(pa.get("left"), pb.get("left")),
+        "right": _longer(pa.get("right"), pb.get("right")),
+        "text": ta if len("".join(ta)) >= len("".join(tb)) else tb,
+        "popup": pop or None,
+        "note": "；".join(notes) if notes else None,
+        "consensus": round(score, 2),
+    }
+
+
+def merge_page_runs(run_a: Any, run_b: Any, threshold: float = 0.55) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """两遍的 pages 取交集。返回 (采信页, 只出现一遍的页)。"""
+    a = [p for p in (run_a or []) if isinstance(p, dict) and _page_blob(p)]
+    b = [p for p in (run_b or []) if isinstance(p, dict) and _page_blob(p)]
+    used: set[int] = set()
+    merged: list[dict[str, Any]] = []
+    single: list[dict[str, Any]] = []
+    for pa in a:
+        blob = _page_blob(pa)
+        best_j, best_s = None, 0.0
+        for j, pb in enumerate(b):
+            if j in used:
+                continue
+            sc = _page_similarity(blob, _page_blob(pb))
+            if sc > best_s:
+                best_s, best_j = sc, j
+        if best_j is not None and best_s >= threshold:
+            used.add(best_j)
+            merged.append(_combine_pages(pa, b[best_j], best_s))
+        else:
+            single.append(pa)
+    for j, pb in enumerate(b):
+        if j not in used:
+            single.append(pb)
+    for i, pg in enumerate(merged, start=1):
+        pg["no"] = i
+    return merged, single
+
+
 def process_file(path: Path, cfg: dict[str, Any], client: Any,
                  force: bool = False, dry_run: bool = False) -> dict[str, Any]:
     """把一份媒体文件转成 `<名>.vlm.txt` + `.vlm.json`。返回结果摘要。"""
@@ -849,6 +943,28 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
         prompt = str(prompt).replace("{FRAME_COUNT}", str(len(images)))
         reply = client.chat(images, prompt)
         payload = parse_json_reply(reply["text"]) or {}
+        # 逐页清单跑两遍取交集（2026-11-24）：4B 页数波动 ±60%，两遍都认到的页才采信
+        if kind == "video" and cfg.get("video_page_consensus", True):
+            reply2 = client.chat(images, prompt)
+            payload2 = parse_json_reply(reply2["text"]) or {}
+            th = float(cfg.get("video_page_consensus_threshold") or 0.55)
+            merged, single = merge_page_runs(payload.get("pages"), payload2.get("pages"), th)
+            n_a = len([x for x in (payload.get("pages") or []) if isinstance(x, dict)])
+            n_b = len([x for x in (payload2.get("pages") or []) if isinstance(x, dict)])
+            if merged:
+                payload["pages"] = merged
+                if single:
+                    payload["pages_single_run"] = single
+                payload.setdefault("unknowns", []).append(
+                    f"逐页清单跑了两遍取交集（第一遍 {n_a} 页 / 第二遍 {n_b} 页）："
+                    f"两遍都描述到的 {len(merged)} 页已采信，"
+                    f"只在其中一遍出现的 {len(single)} 页未采信（见「只出现一遍」段），需人工核")
+            elif single:
+                payload["pages"] = payload.get("pages") or []
+                payload.setdefault("unknowns", []).append(
+                    f"两遍逐页清单没有共同页（{n_a} 页 vs {n_b} 页），交集为空 —— 退回单遍结果，必须人工对照视频")
+            reply = {"text": reply["text"], "latency_s": reply["latency_s"] + reply2["latency_s"],
+                     "usage": reply.get("usage")}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -878,6 +994,8 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
                     continue
             merged.append(pg)
         if dropped:
+            for i, pg in enumerate(merged, start=1):
+                pg["no"] = i
             payload["pages"] = merged
             payload.setdefault("unknowns", []).append(
                 f"模型输出里有 {dropped} 条页描述与上一条完全相同（复读），已合并；"
@@ -944,8 +1062,13 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
     payload["_meta"].update({"file": path.name, "kind": kind, "model": client.model,
                              "latency_s": reply["latency_s"], "frames": len(images),
                              "usage": reply.get("usage"), "raw_reply": reply["text"][:2000]})
-    usable = has_quote_info(payload)
-    transcript = build_transcript(payload, path, kind, client.model, reply["latency_s"]) if usable else ""
+    # 逐页清单条数 ≈ 帧数 → 多半是按帧记而不是按页归并，必须说出来
+    if kind == "video" and isinstance(payload.get("pages"), list) and images:
+        n_pages = len([p for p in payload["pages"] if isinstance(p, dict)])
+        if n_pages >= max(3, int(len(images) * 0.9)):
+            payload.setdefault("unknowns", []).append(
+                f"逐页清单 {n_pages} 条 ≈ 帧数 {len(images)}，可能按帧分页而非按页归并"
+                f"（一本 10 跨页的书通常少于帧数），页数需人工归并")
 
     # 视频太长、帧数打了上限 → 未必每页都有帧，必须说出来
     if kind == "video" and len(images) >= int(cfg.get("max_video_frames") or 28):
@@ -954,6 +1077,9 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
         if gap > float(cfg.get("video_frame_interval") or 3.0) + 0.5:
             payload.setdefault("unknowns", []).append(
                 f"视频 {dur:.0f}s，只抽到 {len(images)} 帧（约 {gap:.1f}s 一帧），可能有页没拍到")
+
+    usable = has_quote_info(payload)
+    transcript = build_transcript(payload, path, kind, client.model, reply["latency_s"]) if usable else ""
 
     if not dry_run:
         json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
