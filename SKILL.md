@@ -1233,7 +1233,7 @@ uv run ./scripts/ingest_email.py --subject "..." --body "..." --attach-dir /path
 | **5b** | **按 ERP 表单权威字典归一化 + 校验取值**（`assets/erp_form_schema.yaml`） | `[归一化]`、`[ERP字典] ERROR/WARN`、`校验通过` |
 | 6 | 输出：CSV / 抽取明细 / ERP JSON / **校验报告** / 原始文件归档 | **59 键断言** |
 | 7 | ★ **CPMS 由 agent 亲自撰写**（脚本之外，必做） | 脚本会打印提醒与产物路径 |
-| **7b** | ★ **中文用词先查内部单词表**（`docs/华辉内部中英单词表.txt`，业务 2026-11-10 上传）：`CPMC` 中文译名、`CPMS` 里的材料/装订/工艺词，能查到的一律照词表写 | `uv run ./scripts/glossary.py --lookup "perfect binding"`；`--check "<CPMS 正文>"` 报告词表外写法（0 条才干净）。两套词表冲突（内部表 vs `cpms_spec.yaml` 闭集）、实测映射表、三种收录档：`references/internal-glossary.md` |
+| **7b** | ★ **中文用词先查内部单词表**（`docs/华辉内部中英单词表.txt`，业务 2026-11-10 上传）：`CPMC` 中文译名、`CPMS` 里的材料/装订/工艺词，能查到的一律照词表写 | `uv run ./scripts/glossary.py --lookup "perfect binding"`；`--check "<CPMS 正文>"` 报告词表外写法（0 条才干净）。两套词表冲突（内部表 vs `cpms_spec.yaml` 闭集）、实测映射表、三种收录档：`references/internal-glossary.md`。★ **客户英文原文 ↔ 内部用词 ↔ 常见误译** 的三方对照（含出处、ERP 字段判定映射如 `portrait→长书脊`、品名三段式、配件固定写「自厂购」）：`docs/内部用词对照表.md` —— 写 CPMS/起品名/填判定字段前先查这张，别照字面译 |
 | **7c** | ★ **克重先对 `page_thickness`**（业务 2026-11-10）：客户给的克重我们不常用时（例 `310g单粉`），**取最近常用克重**（→ 300g），并在 CPMS **备注**里向客户说明「我们用 300g单粉报价，因为 310g单粉不常用」 | `uv run ./scripts/paper_weight.py --parse "310g单粉"`；`--check-json <ERP_JSON>` 逐条体检（换算/未收录都非零）。连同 `cpms_accepted.json` 白名单怎么写：`references/paper-weight-substitution.md` |
 | 8 | ★ **交付前过交付闸门**（1.0.25）：`CPMS` 非空 + `CPMC_ZH` 不含 `【中文品名待定】` | `uv run python -m CQR_Web --no-open`（带「未完成」红徽章的就是没补完） |
 

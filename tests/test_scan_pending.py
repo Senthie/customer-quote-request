@@ -291,6 +291,25 @@ def test_eml_is_expanded_then_extracted_in_the_same_round(env, capsys):
     assert (env["processed"] / "task_stub" / "CU26072301 price enquiry-body.txt").exists()
 
 
+def test_email_record_is_archived_with_the_original_mail(env, capsys):
+    """`_email_<ts>.json` 不参与抽取，但要跟原邮件一起进 inbox（2026-11-24 森西）。
+
+    原先它只写不搬 —— 每展开一封 .eml 就有一个留在 `pending/` 根下，越积越多。
+    """
+    (env["pending"] / "CU26072301 price enquiry.eml").write_bytes(b"Subject: x\n\nbody")
+    ingest = ingest_stub(env)
+    stub = make_stub(env, STUB_OK)
+
+    run(env, main_py=stub, ingest_py=ingest)
+    out = capsys.readouterr().out
+
+    assert "✅ _email_" not in out, "邮件记录副档不是报价，不能进队列抽"
+    assert not (env["pending"] / "_email_20260101_000000.json").exists(), \
+        "邮件记录不该留在 pending 根下堆积"
+    archived = list((env["root"] / "inbox").glob("*/_email_20260101_000000.json"))
+    assert archived, "邮件记录要跟原邮件一起归档到 inbox/<日>/"
+
+
 def test_eml_never_reaches_main_py_directly(env, capsys):
     """main.py 吃不了 .eml：桩 main 一见到 .eml 就报错，跑通了说明它没被直接喂。"""
     (env["pending"] / "mail.eml").write_bytes(b"Subject: x")

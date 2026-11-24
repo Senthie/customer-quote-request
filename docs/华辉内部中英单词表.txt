@@ -613,3 +613,33 @@ Adjunct	辅料﹐配件﹐附属物
 Bead	小珠子,珠子
 Bow	蝴蝶结
 bowknot	蝴蝶结
+
+# ===== 2026-11-24 补充：CARLSEN / 精装 / 活动眼书 询价用词 =====
+googly eye	活动眼(眼仔)
+googly eyes	活动眼/眼仔
+slipcase	书套盒
+rounded corner	圆角
+rounded edge	圆角边
+head and tail band	书头布
+head and tail bands	书头布
+tail band	书尾布
+artboard	粉咭
+text paper	内文纸
+jobbing paper	书纸/工作纸
+creamy	米色/奶白
+Munken	蒙肯纸
+extent	页数/P数
+bill of material	物料清单(BOM)
+BOS	物料清单(BOS)
+hidden 2-sided color	隐藏双面印色
+waterbased varnish	水油(过水油)
+matt lamination	哑胶
+gloss lamination	光胶
+hot foil stamping	烫金/烫色
+gold-edged pages	书口滚金边
+die-cut the opposite pages	对页啤穿
+self-purchased	自厂购
+spine: straight	方脊
+scratch-resistant	防刮
+gilt edge	书口滚金边
+gilt edges	书口三边滚金边

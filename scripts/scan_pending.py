@@ -20,7 +20,10 @@ CQR_Web 只管上传，抽取一概由本脚本负责 —— 于是 Web 那边�
 上传口也收 `.eml`，但 `main.py` 吃不了它，所以本脚本多一道展开：认领后调
 `ingest_email.py --eml …`，把邮件变成 pending 里的正文 `.txt` / 附件 /（≥2 个附件时的）
 单元目录，**同一轮**接着抽掉；原邮件归档到 `customer-files/inbox/<YYYYMMDD>/`。
-展开出来的副档（`*.meta.json` / `_email_<ts>.json`）不进队列 —— 它们不是报价。
+展开出来的副档（`*.meta.json` / `_email_<ts>.json`）**不进队列** —— 它们不是报价，
+靠后缀过滤挡住（`DIRECT_SUFFIXES` 里没有 `.json`；`_` 只是命名约定，不是过滤条件）。
+其中 `_email_<ts>.json`（邮件记录：正文/单号/附件清单）跟着原邮件一起归档到同一个
+`inbox/<YYYYMMDD>/`，不再留在 `pending/` 根下堆积。
 
 认领
 ----
@@ -231,6 +234,32 @@ def _archive_eml(eml: Path, inbox: Path) -> Path:
     return target
 
 
+def _archive_email_records(records: list[Path], inbox: Path) -> int:
+    """`_email_<ts>.json` 邮件记录 → 跟 `.eml` 一起进 `inbox/<YYYYMMDD>/`。
+
+    这些副档由 `ingest_email.py` 写（正文/发件人/单号/附件清单），**不参与抽取**
+    （`.json` 不在 `DIRECT_SUFFIXES`），纯人类追溯用。原先只写不搬，
+    `pending/` 根下越积越多（2026-11-24 森西：「为什么 pending 会有 _email_*.json」）。
+
+    归档失败不该让已经展开的任务白做，所以单个失败只跳过、不抛。
+    """
+    if not records:
+        return 0
+    bucket = inbox / f"{datetime.now():%Y%m%d}"
+    bucket.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for rec in records:
+        target = bucket / rec.name
+        if target.exists():
+            target = bucket / f"{rec.stem}_{datetime.now():%H%M%S%f}{rec.suffix}"
+        try:
+            os.replace(rec, target)
+            moved += 1
+        except OSError:
+            pass
+    return moved
+
+
 def _parse_quarantined(stdout: str) -> list[dict]:
     """`ingest_email.py` 的 stdout 是一份 JSON 汇总 —— 取出被隔离的 zip 清单。
 
@@ -282,10 +311,14 @@ def ingest_one(claimed: Path, pending: Path, inbox: Optional[Path] = None,
         return False, reason, [], []
 
     delivered = [p for p in pending_items(pending) if p.name not in before]
+    # 邮件记录副档（`_email_<ts>.json`）：不参与抽取，但要跟原邮件一起归档 —
+    # 只写不搬会让 pending 根下越积越多（2026-11-24 森西）。
+    email_records = [p for p in pending.glob("_email_*.json") if p.name not in before]
     # zip 会被解到 pending/.zip_quarantine/（点开头，pending_items 不认）——
     # 单独带回摘要，否则这封信在 cron 眼里等于「什么都没发生」。
     quarantined = _parse_quarantined(reason)
     _archive_eml(claimed, inbox_dir)
+    _archive_email_records(email_records, inbox_dir)
     return True, "", delivered, quarantined
 
 

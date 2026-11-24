@@ -1,0 +1,10 @@
+{
+  "_说明": "PMZ26（PT. Mizan Bunaya Kreativa / Unit Pelangi Mizan，印尼）：CPMS 业务口径白名单 —— 客户文件里**没有原文**、但属规范换算或厂内已核定的结构值。每条必须写清依据，没依据的不许进这里（那是编数字）。",
+  "_用法": "uv run ./scripts/cpms_content_audit.py --cpms <ERP.json> --source <单元目录> --accepted customers/pmz26.cpms_accepted.json",
+  "10PP": "客户 PDF 原文 `Pages 10 pages (5 Spreads)`。CPMS 规范的内文页数单位是 PP（docs/CPMS_写作规范.md §3.3 闭集内文写法），10PP = 客户原话 10 pages，是**单位换算**不是新数值。",
+  "12PP": "客户 PDF 原文 `Pages 12 pages (6 Spreads)`。同上，12PP = 12 pages 的规范单位写法。",
+  "150": "Hijaiyahku 内文宽度 150mm。客户 PDF 只给整书 `Size 23 x 23 cm`，没有内文尺寸。依据两条：①业务单 BJXQ260914001 CPMS 原文「内文：10pp，150x230mm」；②参考图测量——发声器条宽 145px、整书含条 547px，条占约 26%，230−75=155，与 150 吻合。内文不可能是整幅 230，否则发声器无处安放。",
+  "75": "发声器胶壳宽度 75mm。依据业务单 BJXQ260914001 CPMS 原文「胶壳预计尺寸是宽75mmx长230mmx厚14.5mm」，客户 PDF 未给发声器任何尺寸。",
+  "14.5mm": "发声器胶壳厚度 14.5mm，同上一处业务单原文。",
+  "3列": "发声器按键排布为 3 列。客户只写 `Sound Button: 30 buttons`，未给排布。依据参考图圆检测：检出 30 个圆、聚类得 10 行 × 3 列，与 30 buttons 数量一致。"
+}
