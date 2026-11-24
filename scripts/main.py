@@ -2554,16 +2554,11 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
     try:
         from spacer_calc import decide as _spacer_decide
 
-        def _mm_from_value(_v):
-            if _v is None or str(_v).strip() == "":
-                return None
-            _m = re.search(r"(\d+(?:[.,]\d+)?)", str(_v))
-            return float(_m.group(1).replace(",", ".")) if _m else None
-
+        # 书脊厚度原文交给 spacer_calc.parse_spine_mm 解析（它会优先取「总厚度」写法，
+        # 如 `15mm book + 3mm backing board totalling 18mm` → 18）。
         _spine_raw = customer_data.get("spine_width")
         _full_text = "\n".join(str(b) for b in (customer_data.text_blocks or []))
-        spacer_info = _spacer_decide(spine_mm=_mm_from_value(_spine_raw),
-                                     text=_full_text)
+        spacer_info = _spacer_decide(spine_raw=_spine_raw, text=_full_text)
         spacer_info["spine_width_raw"] = str(_spine_raw or "")
         spacer_info["customer"] = profile.id
 

@@ -66,18 +66,53 @@ UNIT = 100               # 厚度精度：1/100 mm
 # 客户明确要「加纸/夹层」的写法（中/英/德）。命中即情况 1。
 SPACER_REQUEST_PATTERNS = (
     r"加纸", r"夹纸", r"夹层", r"插纸", r"裱厚", r"加厚纸板", r"内文加厚",
-    r"(?i)\bspacer\b", r"(?i)added\s+board", r"(?i)extra\s+board",
+    r"(?i)\bspacers?\b", r"(?i)bulk\s+up\s+the\s+spine",
+    r"(?i)added\s+board", r"(?i)extra\s+board",
     r"(?i)add(?:ed|ing)?\s+(?:a\s+)?(?:grey\s*)?board",
-    r"(?i)auf(?:ge)?doppl\w*", r"(?i)verst(?:ä|a)rk\w*\s+(?:den\s+)?(?:r(?:ü|u)cken|buchblock)",
+    r"(?i)auf(?:ge)?dopp\w*", r"(?i)verst(?:ä|a)rk\w*\s+(?:den\s+)?(?:r(?:ü|u)cken|buchblock)",
 )
 # 书脊厚度的写法及其后的数值（mm）。值在下面用独立正则抓。
-SPINE_THICKNESS_PATTERNS = (
+# ⚠ 顺序有意义：「总厚度」写法必须排在前面 —— 客户会写
+#   `15mm book + 3mm backing board totalling 18mm`，目标是 18（与模块齐平），不是 15。
+_TOTAL_MM_FIRST = (
+    r"(?i)(?:totall?ing|in\s+total|overall|achiev\w*|to\s+reach)\s*"
+    r"(?:of\s*)?(\d+(?:[.,]\d+)?)\s*mm",
+)
+SPINE_THICKNESS_PATTERNS = _TOTAL_MM_FIRST + (
     r"(?i)spine\s*(?:width|thickness|depth|\bapprox\.?)?\s*[:=]?\s*"
     r"(?:approx\.?|ca\.?|about|~)?\s*(\d+(?:[.,]\d+)?)\s*mm",
     r"(?i)r(?:ü|u)ckenst(?:ä|a)rke\s*[:=]?\s*(?:ca\.?|approx\.?)?\s*(\d+(?:[.,]\d+)?)\s*mm",
     r"(?i)buchr(?:ü|u)cken\s*[:=]?\s*(?:ca\.?|approx\.?)?\s*(\d+(?:[.,]\d+)?)\s*mm",
     r"书脊(?:厚度|宽|宽厚)\s*[:：=]?\s*(?:约)?\s*(\d+(?:\.\d+)?)\s*mm?",
 )
+
+
+def parse_spine_mm(raw: str) -> float | None:
+    """从客户的书脊厚度文本/数值里取「目标总厚度」。
+
+    优先「总厚度」写法（totalling / overall / achieve / to reach 后那个数），
+    其次「spine width / Rückenstärke / 书脊厚度」后的第一个数。
+    例：`15mm book + 3mm backing board totalling 18mm` → 18.0
+    """
+    import re as _re
+
+    if raw is None:
+        return None
+    s = str(raw)
+    if not s.strip():
+        return None
+    for pat in SPINE_THICKNESS_PATTERNS:
+        m = _re.search(pat, s)
+        if m:
+            try:
+                return float(m.group(1).replace(",", "."))
+            except (TypeError, ValueError):
+                continue
+    m = _re.search(r"(\d+(?:[.,]\d+)?)\s*mm", s)
+    if m:
+        return float(m.group(1).replace(",", "."))
+    m = _re.search(r"(\d+(?:[.,]\d+)?)", s)
+    return float(m.group(1).replace(",", ".")) if m else None
 
 
 def detect_signals(text: str) -> dict:
@@ -120,17 +155,25 @@ def detect_signals(text: str) -> dict:
     return {"spacer_requested": requested, "spine_mm": spine_mm, "evidence": uniq}
 
 
-def decide(*, spine_mm=None, spacer_requested=False,
+def decide(*, spine_mm=None, spine_raw=None, spacer_requested=False,
            device_mm=None, target_mm=None, text: str = "") -> dict:
     """「要不要加纸」判定（森西 2026-11-24 口径）。不落库，只给结论。
 
     顺序：客户给的厚度 > 原文检测到的厚度 > 提到加纸但没厚度(pending) > 不插纸。
+    spine_raw 是客户原文/抽取到的书脊厚度文本，交给 parse_spine_mm 取「总厚度」。
     """
     sig = detect_signals(text) if text else {"spacer_requested": False,
                                              "spine_mm": None, "evidence": []}
     requested = bool(spacer_requested or sig["spacer_requested"])
-    spine = target_mm if target_mm is not None else (
-        spine_mm if spine_mm is not None else sig["spine_mm"])
+
+    if target_mm is not None:
+        spine = float(target_mm)
+    elif spine_mm is not None:
+        spine = float(spine_mm)
+    elif spine_raw is not None and str(spine_raw).strip():
+        spine = parse_spine_mm(spine_raw)
+    else:
+        spine = sig["spine_mm"]
 
     if spine is not None:
         return {

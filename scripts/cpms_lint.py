@@ -130,12 +130,11 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
         add("CPMS040", 0, "CPMS 只有空白字符")
         return out
 
-    # ── 概要行 ──
+    # ── 概要行（★ 不写：ERP 保存时按 书籍方向/产品规格/款数 自己渲染，见 cpms_spec header.write）
+    #   历史产物带着概要行 → 照旧校验格式/一致性；不带 → 正常，不报错。
     head_idx = next((i for i, l in enumerate(lines) if l.strip().startswith(("书籍方向：", "产品规格："))), None)
     comp_pieces = _composition_pieces(text)
-    if head_idx is None:
-        add("CPMS010", 1, "缺少概要行「书籍方向：【X】产品规格：【a*b*c】共【N】款」")
-    else:
+    if head_idx is not None:
         m = spec.header_re.match(lines[head_idx].strip())
         if not m:
             add("CPMS011", head_idx + 1, "概要行格式不合规范（应为 书籍方向：【长书脊】产品规格：【CD*KD*GD】共【N】款/件）")
@@ -393,23 +392,43 @@ def _check_value(label: str, value: str, line: int, spec: Spec, add) -> None:
 
 
 def _check_required(lines: list[str], blocks, spec: Spec, record: Optional[dict], add) -> None:
+    """必填段落的**存在性**检查（森西 2026-11-24：「不该出现不填写」）。
+
+    规范 `required.*` 三段：always / 书本类 / 发声书 / 多件套装。
+    没有信息不是省略的理由 —— 该行必须存在，值写「无」（`required.none_value`）。
+    唯一例外：「皮壳」是精装书的封面构造，可替代「封面」行。
+    """
     labels = [n for b in blocks for (_, n, _) in b]
     if "装箱" not in labels:
-        add("CPMS040", 0, "缺少「装箱」段 —— 装箱数量与纸板要求必须写")
-    # 书本类（CPLB 顶层 22~28）必须有正文部件与装订
+        add("CPMS040", 0, "缺少「装箱」段 —— 装箱数量与纸板要求必须写（推不出就写「装箱：无」）")
+    # 书本类（CPLB 顶层 22~28 或 ZDFS≠套装）
     top = ""
     if record:
         cplb = str(record.get("CPLB") or "")
         top = cplb.split(";")[0].split(".")[0]
-    book_like = top in {"22", "23", "24", "25", "26", "27", "28"} or (record and record.get("ZDFS") not in (None, "", "套装"))
+    book_like = top in {"22", "23", "24", "25", "26", "27", "28"} or bool(record and record.get("ZDFS") not in (None, "", "套装"))
     if book_like:
-        body = {"皮壳", "封面", "前封面", "封面连内文"}
-        if not (body & set(labels)):
-            add("CPMS040", 0, "缺少封面/皮壳段 —— 书本类必须写封面材料与印刷")
-        if "内文" not in labels and "封面连内文" not in labels and "内文连衬纸" not in labels:
-            add("CPMS040", 0, "缺少「内文」段 —— 页数、纸张、印色必须写")
+        if not ({"皮壳", "封面", "前封面"} & set(labels)):
+            add("CPMS040", 0, "缺少「封面」段 —— 书本类必须有封面行（没有就写「封面：无」）")
+        if "内文" not in labels:
+            add("CPMS040", 0, "缺少「内文」段 —— 不许用「封面连内文」合并代替，拆成封面/内文两行（没有就写「内文：无」）")
         if "装订" not in labels:
-            add("CPMS040", 0, "缺少「装订」段")
+            add("CPMS040", 0, "缺少「装订」段 —— 装订方式必须写（推不出就写「装订：无」）")
+    # 发声书：发声器是主体部件，不能省
+    text = "\n".join(lines)
+    cplb = str((record or {}).get("CPLB") or "")
+    sound_like = (top == "27" and cplb[:5] in {"27.16", "27.17", "27.18", "27.19"}) \
+        or bool(re.search(r"sound|music|发声|音乐|发声器|模块", text, re.I))
+    if sound_like and "发声器" not in labels and "客供配件" not in labels:
+        add("CPMS040", 0, "缺少「发声器」段 —— 发声书必须写发声器规格（客供才可写「客供配件」）")
+    # 多件/套装：装配行
+    tzs = 0
+    try:
+        tzs = int(record.get("TZS") or 0) if record else 0
+    except (TypeError, ValueError):
+        tzs = 0
+    if record and str(record.get("ZDFS") or "") == "套装" and "装配" not in labels:
+        add("CPMS040", 0, "缺少「装配」段 —— 套装必须写组成（没有就写「装配：无」）")
     # 商务要求必须在装箱之后（按行位置，不是 order 值 —— 两条规则说的是两件事）
     rows = [(l, n) for b in blocks for (l, n, _) in b]
     pack_line = next((l for l, n in rows if n == "装箱"), None)

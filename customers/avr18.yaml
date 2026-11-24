@@ -72,8 +72,15 @@ rules:
   binding:
     enabled: true
     default: "精装书"                   # 兜底也必须是 erp_form_schema 的合法值
+    # ⚠️ 引擎是**字面子串**匹配（`key.lower() in text.lower()`），不是正则 —— 不能写 `a|b`
     map:
-      "cased|hardback|hardcover|case ?bound|grey ?board|灰板|精装": 精装书
+      "cased": 精装书
+      "hardback": 精装书
+      "hardcover": 精装书
+      "case bound": 精装书
+      "grey board": 精装书
+      "灰板": 精装书
+      "精装": 精装书
   # 产品类别：正文出现发声/音乐/模块 → 方脊精装音乐书(线路) 22.06
   cplb:
     match_keys: [format, binding, project_description, series_name]

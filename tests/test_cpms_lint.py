@@ -18,9 +18,8 @@ import cpms_lint as L
 SPEC = L.load_spec()
 
 # 一份合规样例：书本类，封面/内文/装订/装箱齐全，多款结构
-GOOD = """书籍方向：【长书脊】产品规格：【228.6*254*0】共【2】款
-
-1. 普通BB书
+# ★ 2026-11-24 起概要行（书籍方向/产品规格）不写 —— ERP 保存时自己渲染，见 cpms_spec header.write
+GOOD = """1. 普通BB书
   封面：300g单粉(FSC)，4C+哑胶+局部UV(30%)/0C，圆角
   内文：24PP，350g单粉(FSC)对裱，4C/4C
   夹层：12张，350g单粉(FSC)，0C/0C
@@ -37,6 +36,10 @@ GOOD = """书籍方向：【长书脊】产品规格：【228.6*254*0】共【2�
 """.strip()
 
 
+# 历史产物里带概要行的样本（新口径下不再写，这里只用于测「带了也照旧校验」）
+HEADER = "书籍方向：【长书脊】产品规格：【228.6*254*0】共【2】款"
+
+
 def codes(findings: list[L.Finding], level: str | None = None) -> set[str]:
     return {f.code for f in findings if level is None or f.level == level}
 
@@ -44,6 +47,19 @@ def codes(findings: list[L.Finding], level: str | None = None) -> set[str]:
 # ── 1. 规范样例自证 ──────────────────────────────────────────
 def test_合规样例零违规():
     assert L.lint_text(GOOD, SPEC) == []
+
+
+def test_不带概要行是合规的_带了也照旧校验():
+    """2026-11-24 森西口径：概要行 ERP 自己生成，CPMS 不写。
+
+    · 不写 → 0 违规（旧版会报 CPMS010）
+    · 历史产物带着 → 仍然校验格式（格式对 = 0 违规，格式错 = CPMS011）
+    """
+    header = "书籍方向：【长书脊】产品规格：【228.6*254*0】共【2】款"
+    assert L.lint_text(GOOD, SPEC) == []
+    assert L.lint_text(header + "\n" + GOOD, SPEC) == []
+    bad = L.lint_text("书籍方向：【长书脊】产品规格：【228.6x254】\n" + GOOD, SPEC)
+    assert "CPMS011" in codes(bad)
 
 
 def test_规范自身完整():
@@ -79,8 +95,7 @@ def test_词表覆盖历史高频标签():
         (GOOD.replace("装配：", "=======\n装配："), "CPMS006"),
         (GOOD.replace("装配：", "【黄秋芬   032524】产品补充描述\n装配："), "CPMS007"),
         (GOOD.replace("装箱：20本/箱", "装箱: 20本/箱"), "CPMS008"),
-        (GOOD.split("\n", 1)[1], "CPMS010"),
-        (GOOD.replace("装配：", "书籍方向：【长书脊】产品规格：【228.6*254*0】共【2】款\n装配："), "CPMS012"),
+        (GOOD.replace("装配：", "书籍方向：【长书脊】产品规格：【228.6*254*0】共【2】款\n书籍方向：【长书脊】产品规格：【228.6*254*0】共【2】款\n装配："), "CPMS012"),
         (GOOD.replace("  内文：", "  内文页："), "CPMS020"),
         (GOOD.replace("  内文：", "  内页："), "CPMS021"),
         (GOOD.replace("  内文：24PP", "  内文：\n24PP"), "CPMS022"),
@@ -122,22 +137,22 @@ def test_概要行与字段一致才通过():
 
 def test_概要行方向不一致要报错():
     rec = {"Drop_SJFX": "短书脊", "CD": 228.6, "KD": 254, "GD": 0, "TZS": 2}
-    assert "CPMS011" in codes(L.lint_text(GOOD, SPEC, rec))
+    assert "CPMS011" in codes(L.lint_text(HEADER + "\n" + GOOD, SPEC, rec))
 
 
 def test_尺寸差超过阈值要报错():
     rec = {"Drop_SJFX": "长书脊", "CD": 260, "KD": 254, "GD": 0, "TZS": 2}
-    assert "CPMS011" in codes(L.lint_text(GOOD, SPEC, rec))
+    assert "CPMS011" in codes(L.lint_text(HEADER + "\n" + GOOD, SPEC, rec))
 
 
 def test_TZS大于1必须写款数():
     rec = {"Drop_SJFX": "长书脊", "CD": 228.6, "KD": 254, "GD": 0, "TZS": 4}
-    assert "CPMS011" in codes(L.lint_text(GOOD, SPEC, rec))
+    assert "CPMS011" in codes(L.lint_text(HEADER + "\n" + GOOD, SPEC, rec))
 
 
 def test_语言数大于1必须写每款语言():
     rec = {"Drop_SJFX": "长书脊", "CD": 228.6, "KD": 254, "GD": 0, "TZS": 2, "YYS": 3}
-    assert "CPMS011" in codes(L.lint_text(GOOD, SPEC, rec))
+    assert "CPMS011" in codes(L.lint_text(HEADER + "\n" + GOOD, SPEC, rec))
 
 
 # ── 4. --fix 做机械修复（含部件行整槽补印色 C）────────────────
@@ -218,7 +233,7 @@ def test_套装多件漏写件数要报错():
 def test_书本类不许写件():
     rec = {"Drop_SJFX": "长书脊", "CD": 228.6, "KD": 254, "GD": 0, "TZS": 2,
            "CPLB": "23.01;无线胶装书"}
-    text = GOOD.replace("共【2】款", "共【2】件")
+    text = (HEADER + "\n" + GOOD).replace("共【2】款", "共【2】件")
     assert "CPMS011" in codes(L.lint_text(text, SPEC, rec))
 
 
