@@ -2545,6 +2545,54 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
     except Exception as exc:  # noqa: BLE001 - 副本失败不该毁掉主产物
         logger.warn(f"  ⚠ ERP 导出副本生成失败：{type(exc).__name__}: {exc}")
 
+    # 3c. 夹层判定（2026-11-24 森西口径）
+    #     提「加纸」→ 加；给了书脊厚度 → 加到该厚度；都没提 → 不插纸（做薄款）。
+    #     ★ ERP 59 字段里没有夹层字段，所以只落成独立产物 + 提醒，不进 ERP JSON。
+    logger.info("")
+    logger.info("[文件 3c/5] 夹层判定")
+    spacer_info: dict = {}
+    try:
+        from spacer_calc import decide as _spacer_decide
+
+        def _mm_from_value(_v):
+            if _v is None or str(_v).strip() == "":
+                return None
+            _m = re.search(r"(\d+(?:[.,]\d+)?)", str(_v))
+            return float(_m.group(1).replace(",", ".")) if _m else None
+
+        _spine_raw = customer_data.get("spine_width")
+        _full_text = "\n".join(str(b) for b in (customer_data.text_blocks or []))
+        spacer_info = _spacer_decide(spine_mm=_mm_from_value(_spine_raw),
+                                     text=_full_text)
+        spacer_info["spine_width_raw"] = str(_spine_raw or "")
+        spacer_info["customer"] = profile.id
+
+        spacer_path = task_dir / f"{stem}.spacer.json"
+        with open(spacer_path, "w", encoding="utf-8") as f:
+            json.dump(spacer_info, f, ensure_ascii=False, indent=2)
+        output_files.append(spacer_path)
+
+        _verdict = spacer_info["spacer_needed"]
+        if _verdict == "yes":
+            logger.info(f"  结论: 加纸，目标厚度 {spacer_info['target_mm']}mm"
+                        f"（{spacer_info['source']}）")
+            logger.info("  → 已有层厚度未知，补厚方案待 agent 用 "
+                        "scripts/spacer_calc.py --target 计算")
+        elif _verdict == "pending":
+            logger.info(f"  结论: 要加纸，但目标厚度待定 —— {spacer_info['reason']}")
+            reminders.append({
+                "kind": "spacer_thickness_missing",
+                "message": ("询价提到要加纸但没给书脊厚度 → 夹层目标厚度待业务/客户确认，"
+                            "确认前夹层按 0 计价"),
+            })
+        else:
+            logger.info(f"  结论: 不插纸（薄款）—— {spacer_info['reason']}")
+        for _e in spacer_info.get("evidence", [])[:2]:
+            logger.info(f"    证据: …{_e[:100]}…")
+        logger.info(f"  输出: {spacer_path.name}")
+    except Exception as exc:  # noqa: BLE001 - 判定失败不该毁掉主产物
+        logger.warn(f"  ⚠ 夹层判定失败：{type(exc).__name__}: {exc}")
+
     # 4. ERP 取值校验报告（按 assets/erp_form_schema.yaml 的合法枚举核对）
     logger.info("")
     logger.info("[文件 4/5] ERP 取值校验报告")
