@@ -313,3 +313,55 @@ def test_没有record时CPMS090不判():
     text = "书籍方向：【长书脊】产品规格：【228.6*254*0】\n包装：纸箱包装\n"
     codes = {f.code for f in L.lint_text(text, SPEC)}
     assert "CPMS090" not in codes and "CPMS100" not in codes
+
+
+# ── 4. 条件必填行（依据：18476 份历史单 CPMS 覆盖率实测 2026-11-24）──────
+#   夹层：拉卡机关80.2%/毛毡77.9%/冲形72.2%/揭页55.8%
+#   衬纸：方脊精装59.6%   贴纸：贴纸骑钉41.0%
+_NO_LAYER = GOOD.replace("  夹层：12张，350g单粉(FSC)，0C/0C\n", "")
+
+
+def test_条件行_机关BB书缺夹层报CCPMS040():
+    fs = [f for f in L.lint_text(_NO_LAYER, SPEC, {"CPLB": "27.03;普通拉卡机关BB书"})
+          if f.code == "CPMS040"]
+    assert fs and "夹层" in fs[0].msg, [f.as_dict() for f in fs]
+
+
+def test_条件行_普通BB书不要求夹层():
+    """覆盖率不足就没有条件行 —— 必填清单不能凭感觉加。"""
+    assert L.lint_text(_NO_LAYER, SPEC, {"CPLB": "27.01;普通BB书"}) == []
+
+
+def test_条件行_精装要求衬纸_皮壳衬纸可替代():
+    rec = {"CPLB": "26.01;方脊精装书"}
+    assert "CPMS040" in {f.code for f in L.lint_text(_NO_LAYER, SPEC, rec)}
+    with_paper = _NO_LAYER.replace("  内文：24PP", "  衬纸：100g书纸(FSC)，1C\n  内文：24PP")
+    assert L.lint_text(with_paper, SPEC, rec) == []
+    with_cover_paper = _NO_LAYER.replace("  内文：24PP", "  皮壳衬纸：100g书纸(FSC)，1C\n  内文：24PP")
+    assert L.lint_text(with_cover_paper, SPEC, rec) == []
+
+
+def test_条件行_贴纸书要求贴纸():
+    fs = [f for f in L.lint_text(_NO_LAYER, SPEC, {"CPLB": "22.05;贴纸骑钉书"})
+          if f.code == "CPMS040"]
+    assert fs and "贴纸" in fs[0].msg, [f.as_dict() for f in fs]
+
+
+def test_条件行_没有CPLB时不触发条件行():
+    """建档阶段 record 还没有产品类别 → 不许误报。"""
+    assert L.lint_text(_NO_LAYER, SPEC, {}) == []
+    assert L.lint_text(_NO_LAYER, SPEC, None) == []
+
+
+def test_包装段写装箱信息提示改用装箱():
+    """历史 29.2% 的单把装箱信息写成「包装」：内容有效 → 提示改写，不报缺装箱。"""
+    text = GOOD.replace("装箱：20本/箱，每箱2张B3B平咭",
+                        "包装：8套/箱，箱内上下各加1张B3B平咭，外箱限重16kg")
+    cs = {f.code for f in L.lint_text(text, SPEC)}
+    assert "CPMS091" in cs, cs
+    assert "CPMS040" not in cs, cs
+
+
+def test_包装段写包装方式不提示改写():
+    text = GOOD.replace("装箱：20本/箱，每箱2张B3B平咭", "包装：纸箱包装\n装箱：20本/箱")
+    assert "CPMS091" not in {f.code for f in L.lint_text(text, SPEC)}

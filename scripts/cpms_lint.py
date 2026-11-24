@@ -175,7 +175,7 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
         if pos < len(line) and line[pos] == ":":
             add("CPMS008", i, f"标签「{label}」用了半角冒号")
         if not value:
-            add("CPMS022", i, f"空标签「{label}」—— 推不出来就整行不写")
+            add("CPMS022", i, f"空标签「{label}」—— 必填行没有内容就写「无」，非必填行整行不要写")
             continue
         if label in spec.alias:
             canon = spec.alias[label]
@@ -204,7 +204,7 @@ def lint_text(text: str, spec: Spec, record: Optional[dict] = None) -> list[Find
                 "装订段写的是 ERP「装订方式 ZDFS」的下拉值（胶装/PAD书）—— "
                 "要按客户原文写实际装订方式（如 冲形状无线胶装书 / 无线胶装书 / 骑马钉）")
 
-    _check_required(lines, blocks, spec, record, add)
+    _check_required(lines, blocks, spec, record, add, label_values)
 
     # ── CPMS081：装订判断不出时，正文必须让业务看到「这是占位值」──
     # 2026-11-17 森西：判断不出装订方式 → ZDFS 落 ERP 第一个合法值占位，
@@ -391,15 +391,36 @@ def _check_value(label: str, value: str, line: int, spec: Spec, add) -> None:
             add("CPMS053", line, f"表面处理顺序应为 {' → '.join(spec.finish_order)}（当前：{' → '.join(finishes)}）")
 
 
-def _check_required(lines: list[str], blocks, spec: Spec, record: Optional[dict], add) -> None:
+def _check_required(lines: list[str], blocks, spec: Spec, record: Optional[dict], add,
+                    label_values: Optional[dict] = None) -> None:
     """必填段落的**存在性**检查（森西 2026-11-24：「不该出现不填写」）。
 
-    规范 `required.*` 三段：always / 书本类 / 发声书 / 多件套装。
+    规范 `required.*` 四段：always / 书本类 / 发声书 / 多件套装，外加 `条件行`
+    （按 CPLB 类别触发：机关/揭页/冲形/毛毡 BB 要夹层，精装要衬纸，贴纸书要贴纸
+    —— 清单来自 18476 份历史单的覆盖率实测，见 spec 注释）。
     没有信息不是省略的理由 —— 该行必须存在，值写「无」（`required.none_value`）。
     唯一例外：「皮壳」是精装书的封面构造，可替代「封面」行。
     """
     labels = [n for b in blocks for (_, n, _) in b]
-    if "装箱" not in labels:
+    # 原始标签（含词表外的「衬纸（贴衬）」「封面衬纸（贴衬）」等变体）——
+    # 条件行判「有没有这一族」要看原文，不能只看归一后的规范标签
+    raw_labels: list[str] = []
+    for ln in lines:
+        rm = LABEL_RE.match(ln)
+        if rm:
+            raw_labels.append(rm.group("label").strip())
+    # 「包装」写成了装箱信息（历史 29.2% 的单这么写）：应改用「装箱」，但内容有效 → 视同装箱
+    packing_as_carton = False
+    if label_values and "包装" in label_values:
+        pline, pval = label_values["包装"]
+        is_carton = bool(re.search(r"内箱|外箱|限重|毛重|套\s*/\s*箱|/\s*箱|套入|套一?装|个内箱|个外箱|箱内", pval))
+        is_mode = bool(re.search(r"纸箱包装|胶袋包装|牛皮纸包装|卡板摆放|收缩|OPP", pval))
+        if is_carton and not is_mode:
+            packing_as_carton = True
+            add("CPMS091", pline,
+                "「包装」写的是装箱信息（套/箱、内外箱、限重…）—— 应改用「装箱」；"
+                "「包装」段只留包装方式（纸箱包装/胶袋包装/收缩）")
+    if "装箱" not in labels and not packing_as_carton:
         add("CPMS040", 0, "缺少「装箱」段 —— 装箱数量与纸板要求必须写（推不出就写「装箱：无」）")
     # 书本类（CPLB 顶层 22~28 或 ZDFS≠套装）
     top = ""
@@ -429,6 +450,25 @@ def _check_required(lines: list[str], blocks, spec: Spec, record: Optional[dict]
         tzs = 0
     if record and str(record.get("ZDFS") or "") == "套装" and "装配" not in labels:
         add("CPMS040", 0, "缺少「装配」段 —— 套装必须写组成（没有就写「装配：无」）")
+    # ── 条件必填（按 CPLB 类别触发；清单与依据见 spec required.条件行）──
+    cplb_full = str((record or {}).get("CPLB") or "").strip()
+    if cplb_full:
+        for item in ((spec.raw.get("required") or {}).get("条件行") or []):
+            row = str(item.get("row") or "").strip()
+            pat = str(item.get("when_cplb") or "").strip()
+            not_pat = str(item.get("when_not_cplb") or "").strip()
+            if not row or not pat:
+                continue
+            if not re.search(pat, cplb_full):
+                continue
+            if not_pat and re.search(not_pat, cplb_full):
+                continue
+            if any(row in lab for lab in raw_labels):      # 「皮壳衬纸」「内文连衬纸」「衬纸（贴衬）」…同族都算有
+                continue
+            basis = str(item.get("basis") or "")
+            add("CPMS040", 0,
+                f"缺少「{row}」段 —— 类别「{cplb_full}」里这类单 {basis} 都写这一行"
+                f"（没有就写「{row}：无」）")
     # 商务要求必须在装箱之后（按行位置，不是 order 值 —— 两条规则说的是两件事）
     rows = [(l, n) for b in blocks for (l, n, _) in b]
     pack_line = next((l for l, n in rows if n == "装箱"), None)
