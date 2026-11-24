@@ -306,40 +306,116 @@ def _pdf_pages(src: Path, tmp: Path, max_pages: int) -> list[Path]:
     return out
 
 
+def _dhash(path: Path, hash_size: int = 8) -> int:
+    """64 位差分感知哈希（dHash）。同一页的两帧哈希距离很小，换页会变大。"""
+    from PIL import Image       # 延迟导入：只有视频路径用得到
+    with Image.open(path) as im:
+        img = im.convert("L").resize((hash_size + 1, hash_size), Image.LANCZOS)
+    px = list(img.tobytes())   # 'L' 模式：每像素 1 字节
+    bits = 0
+    width = hash_size + 1
+    for row in range(hash_size):
+        for col in range(hash_size):
+            left = px[row * width + col]
+            right = px[row * width + col + 1]
+            bits = (bits << 1) | (1 if left > right else 0)
+    return bits
+
+
+def _hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def _group_by_page(items: list[tuple[float, int]], threshold: int) -> list[list[int]]:
+    """把 (时刻, 哈希) 序列按画面相似度分组（只用于**去掉重复帧**，不用于切页）。
+
+    ⚠ 实测结论（2026-11-24，`20220317_EMCPU.mp4`）：**别指望自动切页**。
+      · ffmpeg `select='gt(scene,0.10)'` → 84.5s 翻书视频 0 个切点（书本/桌面/灯光不变，
+        只有中间一块纸翻过去，全局 scene 分数上不去）；阈值降到 0.06 也只有 1 个。
+      · dHash 相邻帧汉明距离平均 21/64，60 帧里 57 帧互不相同 —— 手持拍摄整帧一直在动，
+        同一页的两帧也不像。
+      所以页级覆盖**只能靠采样密度**（见 `video_frame_interval`），哈希只用来丢「视频卡住/
+      重复帧」这种真·重复。要自动切页得做局部特征匹配，代价远超收益。
+    """
+    groups: list[list[int]] = []
+    for i, (_t, h) in enumerate(items):
+        if groups:
+            rep = items[groups[-1][0]][1]
+            if _hamming(h, rep) <= threshold:
+                groups[-1].append(i)
+                continue
+        groups.append([i])
+    return groups
+
+
+def _sample_times(dur: float, cfg: dict[str, Any]) -> list[float]:
+    """均匀采样时刻：间隔至少 `video_frame_interval` 秒，总帧数不超过 `max_video_frames`。
+
+    84.5s 的视频 → 3.0s 一帧 = 28 帧；一页（约 8s）能落到 2-3 帧，模型自己归页。
+    视频越长间隔越大，此时在 unknowns 里提示可能漏页（见 process_file）。
+    """
+    max_frames = max(2, int(cfg.get("max_video_frames") or 28))
+    min_interval = float(cfg.get("video_frame_interval") or 3.0)
+    step = max(min_interval, dur / max_frames)
+    times = []
+    t = 0.0
+    while t < dur - 0.05 and len(times) < max_frames:
+        times.append(round(t, 2))
+        t += step
+    last = round(dur - 0.6, 2)
+    if last > 0 and (not times or last - times[-1] > 0.5):
+        if len(times) >= max_frames:
+            times[-1] = last        # 帧数满了也要保住片尾（封底/版权页）
+        else:
+            times.append(last)
+    return times[:max_frames]
+
+
+def _grab(src: Path, ffmpeg: str, t: float, path: Path, short: int) -> bool:
+    cmd = [ffmpeg, "-v", "error", "-ss", f"{t:.2f}", "-i", str(src), "-frames:v", "1",
+           "-vf", f"scale='if(gt(iw,ih),{short * 16 // 9},-2)':'if(gt(iw,ih),-2,{short})'",
+           "-y", str(path)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    return proc.returncode == 0 and path.exists() and path.stat().st_size > 0
+
+
+def _probe_duration(src: Path) -> float:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    try:
+        proc = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
+                               "-of", "default=nw=1:nk=1", str(src)],
+                              capture_output=True, text=True, timeout=60)
+        return float((proc.stdout or "0").strip() or 0)
+    except (subprocess.SubprocessError, ValueError):
+        return 0.0
+
+
 def _video_frames(src: Path, tmp: Path, cfg: dict[str, Any]) -> list[Path]:
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
         raise MMError("ffmpeg / ffprobe 未安装 —— 视频识别跑不了（装法见 docs/multimodal-intake.md）")
-    max_frames = int(cfg.get("max_video_frames") or 12)
     short = int(cfg.get("video_short_side") or 480)
+    dup_th = int(cfg.get("video_hash_threshold") or 2)
 
-    dur = 0.0
-    try:
-        probe = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
-                                "-of", "default=nw=1:nk=1", str(src)],
-                               capture_output=True, text=True, timeout=60)
-        dur = float((probe.stdout or "0").strip() or 0)
-    except (subprocess.SubprocessError, ValueError):
-        dur = 0.0
+    dur = _probe_duration(src)
     if dur <= 0:
         raise MMError(f"读不出视频时长：{src.name}")
 
-    # 均匀采样：一段 40s 的翻书视频，12 帧已能看出装订与工艺
-    interval = max(dur / max_frames, 0.5)
-    out: list[Path] = []
-    for i in range(max_frames):
-        t = min(dur - 0.1, i * interval)
+    kept: list[tuple[float, Path, int]] = []
+    for i, t in enumerate(_sample_times(dur, cfg)):
         p = tmp / f"frame{i + 1:02d}.jpg"
-        cmd = [ffmpeg, "-v", "error", "-ss", f"{t:.2f}", "-i", str(src), "-frames:v", "1",
-               "-vf", f"scale='if(gt(iw,ih),{short * 16 // 9},-2)':'if(gt(iw,ih),-2,{short})'",
-               "-y", str(p)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if proc.returncode == 0 and p.exists() and p.stat().st_size > 0:
-            out.append(p)
-    if not out:
+        if not _grab(src, ffmpeg, t, p, short):
+            continue
+        h = _dhash(p)
+        if kept and _hamming(h, kept[-1][2]) <= dup_th:   # 视频卡住/重复帧
+            continue
+        kept.append((t, p, h))
+    if not kept:
         raise MMError(f"抽帧全失败：{src.name}")
-    return out
+    return [p for _t, p, _h in kept]
 
 
 def prepare_images(path: Path, cfg: dict[str, Any], tmp: Path) -> tuple[str, list[Path]]:
@@ -398,6 +474,43 @@ def build_transcript(payload: dict[str, Any], src: Path, kind: str,
         lines = ["──── 视频内容（时序）────"]
         if payload.get("summary"):
             lines.append(f"概述: {payload['summary']}")
+        # ── 逐页清单（2026-11-24）：客户只发视频时，报价靠这段逐页记录；
+        #    「各种图案」这种概括等于没看，所以页级内容单独成型、按出现顺序排。
+        pages = payload.get("pages")
+        if isinstance(pages, list) and pages:
+            lines.append("──── 逐页清单（视频实际翻到的页，按出现顺序；左右页分开记）────")
+            for pg in pages:
+                if not isinstance(pg, dict):
+                    continue
+                kind_zh = {"cover": "封面", "back_cover": "封底", "spread": "跨页",
+                           "page": "单页", "detail": "特写", "unknown": "看不清"}.get(
+                    str(pg.get("kind") or "").strip(), str(pg.get("kind") or "").strip())
+                fr = pg.get("frames")
+                fr_s = ("帧" + "/".join(str(x) for x in fr)) if isinstance(fr, list) and fr else ""
+                row = f"  P{pg.get('no', '?')}"
+                if kind_zh:
+                    row += f" [{kind_zh}]"
+                if fr_s:
+                    row += f" {fr_s}"
+                lines.append(row)
+                left = str(pg.get("left") or "").strip()
+                right = str(pg.get("right") or "").strip()
+                if left or right:
+                    lines.append(f"    左页: {left or '—'}｜右页: {right or '—'}")
+                pop = pg.get("popup")
+                if isinstance(pop, dict):
+                    bits = [f"{_PG_POPUP_ZH[k]}={pop.get(k)}"
+                            for k in _PG_POPUP_ZH if pop.get(k) and str(pop.get(k)).strip().lower() not in ("null", "none")]
+                    if bits:
+                        lines.append("    立体件: " + "｜".join(bits))
+                ptext = pg.get("text")
+                if isinstance(ptext, list):
+                    for t in ptext:
+                        if str(t).strip():
+                            lines.append(f"    文字: {str(t).strip()}")
+                note = str(pg.get("note") or "").strip()
+                if note:
+                    lines.append(f"    ⚠ {note}")
         for step in payload.get("sequence") or []:
             if isinstance(step, dict):
                 lines.append(f"帧{step.get('frame', '?')}: {step.get('what_changed', '')}")
@@ -553,6 +666,13 @@ def has_quote_info(payload: dict[str, Any]) -> bool:
             return True
         if (isinstance(pg, dict) and pg.get("value")) or (isinstance(sz, dict) and sz.get("value")):
             return True
+        # 逐页清单（2026-11-24）：客户只发视频时，页级内容就是唯一可引用的原文，
+        # 有页就是有效信息 —— 不能再按「texts ≥3 行」卡掉。
+        pages = payload.get("pages")
+        if isinstance(pages, list) and any(
+                isinstance(p, dict) and (p.get("text") or p.get("left") or p.get("right"))
+                for p in pages):
+            return True
         return len([t for t in (payload.get("texts") or []) if str(t).strip()]) >= 3
     raw = [str(r) for r in (payload.get("raw_text") or []) if str(r).strip()]
     # doc_type 已经排除了 logo_banner；其余类型只要抄到了字就值得进转录。
@@ -632,6 +752,14 @@ _CRAFT_ZH = {
     "mechanism": "机关",
     "felt": "毛毡布",
     "die_cut_shape": "冲形状",
+}
+# 逐页清单（pages[].popup）的中文标签
+_PG_POPUP_ZH = {
+    "state": "state",
+    "subject": "主体",
+    "type": "类型",
+    "spans": "跨页",
+    "motion": "动作",
 }
 _CRAFT_DETAIL = {
     "flap": ("where", "per_page", "total", "origin", "finger_notch",
@@ -718,7 +846,8 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
     try:
         kind, images = prepare_images(path, cfg, tmp)
         prompt = cfg.get("video_user") if kind == "video" else cfg.get("image_user")
-        reply = client.chat(images, str(prompt))
+        prompt = str(prompt).replace("{FRAME_COUNT}", str(len(images)))
+        reply = client.chat(images, prompt)
         payload = parse_json_reply(reply["text"]) or {}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -726,6 +855,57 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
     if kind != "video":
         payload = normalize_components(payload)
     payload = normalize_crafts(payload)
+
+    # ── 复读护栏（2026-11-24，实测教训）──
+    # Qwen3-VL-4B 在帧数偏多（28 帧）时会退化成复读：P8–P20 二十条全写「彩色圆点图案/卡通怪兽」。
+    # 这里把「连续且 left/right/text 完全相同」的页合并，并在 unknowns 里挑明 —— 宁少不多。
+    if kind == "video" and isinstance(payload.get("pages"), list):
+        merged: list[dict[str, Any]] = []
+        dropped = 0
+        for pg in payload["pages"]:
+            if not isinstance(pg, dict):
+                continue
+            sig = (str(pg.get("left") or ""), str(pg.get("right") or ""),
+                   "|".join(str(t) for t in (pg.get("text") or [])))
+            if merged:
+                prev = merged[-1]
+                psig = (str(prev.get("left") or ""), str(prev.get("right") or ""),
+                        "|".join(str(t) for t in (prev.get("text") or [])))
+                if sig == psig:
+                    frames = list(dict.fromkeys((prev.get("frames") or []) + (pg.get("frames") or [])))
+                    prev["frames"] = frames
+                    dropped += 1
+                    continue
+            merged.append(pg)
+        if dropped:
+            payload["pages"] = merged
+            payload.setdefault("unknowns", []).append(
+                f"模型输出里有 {dropped} 条页描述与上一条完全相同（复读），已合并；"
+                f"逐页清单实际只剩 {len(merged)} 页，需人工对照视频核一遍")
+
+    # ── 页级文字兜底（2026-11-24）──
+    # 4B 有时把整页文字写进 pages[].text 却把顶层 texts 留空；抽取引擎读的是 texts，
+    # 这里按页序汇总补上（页序 = 书页顺序，比拼在一起的 texts 更好核对）。
+    if kind == "video" and isinstance(payload.get("pages"), list):
+        page_texts: list[str] = []
+        clean_pages: list[dict[str, Any]] = []
+        for pg in payload["pages"]:
+            if not isinstance(pg, dict):
+                continue
+            try:
+                pg["no"] = int(str(pg.get("no")).strip())
+            except (TypeError, ValueError):
+                pass
+            clean_pages.append(pg)
+            if isinstance(pg.get("text"), list):
+                page_texts += [str(t).strip() for t in pg["text"] if str(t).strip()]
+        payload["pages"] = clean_pages
+        seen_pages = {str(p.get("no")) for p in clean_pages if p.get("no") is not None}
+        if clean_pages and len(seen_pages) != len(clean_pages):
+            payload.setdefault("unknowns", []).append("pages 里有重复的页号，页序需人工核对")
+        if page_texts and not payload.get("texts"):
+            payload["texts"] = page_texts
+            payload.setdefault("unknowns", []).append("顶层 texts 为空，已从 pages[].text 按页序汇总")
 
     # ── 文本去重（2026-11-24）──
     # 4B 在整段视频上会把同一句画面文字循环输出几十次（实测 227 行 → 29 行唯一），
@@ -766,6 +946,14 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
                              "usage": reply.get("usage"), "raw_reply": reply["text"][:2000]})
     usable = has_quote_info(payload)
     transcript = build_transcript(payload, path, kind, client.model, reply["latency_s"]) if usable else ""
+
+    # 视频太长、帧数打了上限 → 未必每页都有帧，必须说出来
+    if kind == "video" and len(images) >= int(cfg.get("max_video_frames") or 28):
+        dur = _probe_duration(path)
+        gap = dur / max(len(images), 1)
+        if gap > float(cfg.get("video_frame_interval") or 3.0) + 0.5:
+            payload.setdefault("unknowns", []).append(
+                f"视频 {dur:.0f}s，只抽到 {len(images)} 帧（约 {gap:.1f}s 一帧），可能有页没拍到")
 
     if not dry_run:
         json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")

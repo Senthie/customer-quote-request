@@ -102,6 +102,98 @@ def test_build_transcript_video_sequence():
     assert "画面文字" in txt and "Bauernhof" in txt
 
 
+def test_build_transcript_video_pages_逐页清单():
+    payload = {"summary": "翻样书",
+               "pages": [
+                   {"no": 1, "kind": "cover", "frames": [1],
+                    "left": "彩色怪兽", "right": None,
+                    "text": ["el monstruo de colores"],
+                    "popup": {"state": "null", "subject": None, "type": None}},
+                   {"no": 2, "kind": "spread", "frames": [3, 4],
+                    "left": "玻璃瓶", "right": "山景",
+                    "text": ["Estás en tu emoción."],
+                    "popup": {"state": "real", "subject": "彩色怪兽",
+                              "type": "立体弹起", "spans": "跨页", "motion": "翻开时弹起"},
+                    "note": "左页被手挡住"},
+               ],
+               "sequence": [], "texts": [], "unknowns": ["视频共看到 2 页"]}
+    txt = MM.build_transcript(payload, Path("a.mp4"), "video", "M", 3.0)
+    assert txt.startswith("【视频抽帧识别】")      # 表头不能被 pages 段覆盖（回归）
+    assert "逐页清单" in txt
+    assert "P1 [封面] 帧1" in txt
+    assert "P2 [跨页] 帧3/4" in txt
+    assert "左页: 玻璃瓶｜右页: 山景" in txt
+    assert "立体件: state=real｜主体=彩色怪兽｜类型=立体弹起" in txt
+    assert "⚠ 左页被手挡住" in txt
+
+
+def test_sample_times_84秒视频按3秒一帧():
+    cfg = {"max_video_frames": 28, "video_frame_interval": 3.0}
+    times = MM._sample_times(84.5, cfg)
+    assert len(times) == 28
+    assert times[0] == 0.0
+    assert times[-1] >= 80.0        # 片尾必留（封底/版权页）
+    assert all(b - a >= 2.5 for a, b in zip(times, times[1:]))
+
+
+def test_sample_times_短视频不会被拉稀():
+    cfg = {"max_video_frames": 28, "video_frame_interval": 3.0}
+    times = MM._sample_times(12.0, cfg)
+    assert len(times) <= 6 and times[0] == 0.0
+
+
+def test_sample_times_长视频按上限封顶():
+    cfg = {"max_video_frames": 28, "video_frame_interval": 3.0}
+    times = MM._sample_times(600.0, cfg)
+    assert len(times) == 28 and times[-1] >= 590.0
+
+
+def test_group_by_page_只合并真重复帧():
+    items = [(0.0, 0b0), (1.0, 0b0), (2.0, 0b1111), (3.0, 0b1111)]
+    # 阈值 2：0 与 0b1111 差 4 位 > 2，不许合并
+    assert [len(g) for g in MM._group_by_page(items, threshold=2)] == [2, 2]
+
+
+def test_dhash_同图同哈希_不同图不同哈希(tmp_path):
+    from PIL import Image, ImageDraw
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    c = tmp_path / "c.jpg"
+    Image.new("L", (64, 64), 200).save(a)
+    Image.new("L", (64, 64), 200).save(b)
+    img = Image.new("L", (64, 64), 200)
+    ImageDraw.Draw(img).rectangle([0, 0, 32, 32], fill=0)   # 左上一半涂黑
+    img.save(c)
+    assert MM._dhash(a) == MM._dhash(b)
+    assert MM._hamming(MM._dhash(a), MM._dhash(c)) > 8
+
+
+def test_复读护栏_连续相同页合并并记unknown(monkeypatch, tmp_path):
+    """28 帧时 4B 会复读同一页描述；process_file 里的护栏要把它们合并掉。"""
+    dup = {"no": 8, "kind": "spread", "frames": [8], "left": "彩色圆点", "right": "卡通怪兽",
+           "text": ["Estás en tu emoción."]}
+    payload = {"pages": [dict(dup), dict(dup, no=9, frames=[9]), dict(dup, no=10, frames=[10]),
+                         {"no": 11, "kind": "spread", "frames": [11], "left": "树林",
+                          "right": "猫头鹰", "text": ["El bosque"]}],
+               "unknowns": []}
+    src = tmp_path / "a.mp4"
+    src.write_bytes(b"x")
+    (tmp_path / "a.mp4.vlm.json").write_text("{}", encoding="utf-8")
+
+    class FakeClient:
+        model = "M"
+        def chat(self, images, prompt):
+            return {"text": json.dumps(payload), "latency_s": 1.0, "usage": {}}
+
+    monkeypatch.setattr(MM, "prepare_images", lambda *a, **k: ("video", []))
+    out = MM.process_file(src, MM.load_config(), FakeClient(), force=True)
+    data = json.loads((tmp_path / "a.mp4.vlm.json").read_text(encoding="utf-8"))
+    assert len(data["pages"]) == 2          # 3 条复读合成 1 条 + 树林页
+    assert data["pages"][0]["frames"] == [8, 9, 10]
+    assert any("复读" in u for u in data["unknowns"])
+    assert out["status"] == "ok"
+
+
 # ── PDF 判别 ──────────────────────────────────────────────────────────
 def _make_text_pdf(path: Path):
     fitz = pytest.importorskip("fitz")
