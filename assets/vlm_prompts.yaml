@@ -19,7 +19,7 @@ model: ""
 timeout: 120          # 单次请求超时（秒）；2048px + 部件扫查后单图更慢，90→120
 retries: 2
 concurrency: 2        # 同时最多几个请求（4B + 单卡，再多没收益）
-max_tokens: 2400      # 响应上限；旧值 1200 会被 components 撑爆（实测截断在 "count": nul）
+max_tokens: 3200      # 响应上限；旧值 1200→2400 被 components 撑爆，加 craft 五类工艺后提到 3200（实测截断在 "count": nul）
 max_edge_px: 2048     # 图片长边压到这个尺寸；1600 看不清按键形状/出音孔/仓盖卡扣，2026-11-23 提高
 max_raw_text_lines: 40  # raw_text 最多抄几行，超出部分进 unknowns（保 JSON 完整）
 max_pdf_pages: 6      # 扫描 PDF 最多转几页
@@ -56,6 +56,13 @@ image_user: |
      "toys_included": [],
      "box_contents":  []
    },
+   "craft": {
+     "flap":          {"state": null, "where": null, "per_page": null, "total": null, "origin": null, "finger_notch": null, "waste_removal": null, "staple_allowance": null, "size_mm": null, "evidence": null},
+     "pull_tab":      {"state": null, "where": null, "total": null, "layers": null, "size_mm": null, "print_face": null, "print_back": null, "track": null, "evidence": null},
+     "mechanism":     {"state": null, "kind": null, "where": null, "sets": null, "parts_per_set": null, "size_mm": null, "motion": null, "evidence": null},
+     "felt":          {"state": null, "count": null, "source": null, "thickness_mm": null, "size_mm": null, "color_softness": null, "mount": null, "evidence": null},
+     "die_cut_shape": {"state": null, "where": null, "shape": null, "size_mm": null, "purpose": null, "waste_removal": null, "evidence": null}
+   },
    "quantities": [],
    "languages": [],
    "raw_text": [],
@@ -83,6 +90,36 @@ image_user: |
      - interactive：推拉滑块、翻翻页、洞洞、转盘、磁铁、触摸感应区、滑轨、立体弹起
      - toys_included：随书玩偶、积木、拼图、贴纸、发声棒 / 魔法棒、卡片
      - box_contents：外盒、泡壳、绑带、说明书、电池是否预装
+  ⑦-b **互动工艺扫查（★最关键：客户询价的文字里通常根本不提这些工艺，报价成本却全靠它们）**：
+     逐项判断画面里有没有下列五类工艺，有就填细节，没有就整体留 null，不要编。
+     ★ **答题必须用本厂术语，不要写译名**：
+       - 揭页（不写「翻翻页」「掀页」「flap」「Klappe」）
+       - 拉卡（不写「拉条」「滑块」「pull tab」；带机关结构的写「拉卡机关」）
+       - 机关（不写「pop-up 立体」「转盘机构」；本厂分：转轮机关 / 推拉机关 / 相扣机关 / 立体弹起）
+       - 毛毡布（不写「不织布」「felt」）
+       - 冲形状（不写「模切形状」「die-cut」；冲孔 / 冲窗口 / 冲异形都归这里）
+     - flap（揭页）：where=在哪几页（`P2、P4、P6` 或 `每张内文` / `整本书`）；
+       per_page=每页几个；total=全书共几个；origin=揭页从哪来（内文本身啤出 / 独立张 / 夹层啤出）；
+       finger_notch=手指位（有 / 无 / 挑手指位）；waste_removal=除废（需 / 去废纸）；
+       staple_allowance=钉位（留钉位 / 不留订位）；size_mm=揭页尺寸（约145*145mm）
+     - pull_tab（拉卡）：where=装在哪（粘嵌在后封面 / P4、P6、P8、P10）；
+       total=总共几个；layers=用纸层数（如「3张400g单粉」）；size_mm=尺寸；
+       print_face=正面印色；print_back=背面印色（常见「不印色」）；track=有无轨道槽
+     - mechanism（机关）：kind=机关类型（转轮 / 推拉 / 相扣 / 立体弹起）；
+       where=装在哪几页；sets=几套；parts_per_set=每套由几个部件组成；
+       size_mm=每套尺寸；motion=动作效果（可转动 / 可拉动 / 弹起）
+     - felt（毛毡布）：count=几张；source=自厂购 / 客供；thickness_mm=厚度；
+       size_mm=尺寸；color_softness=颜色与硬度（硬的黄色毛毡 / 柔软的绿色毛毡）；
+       mount=怎么固定（内文啤刀线再嵌入 / 粘在表面 / 边缘粘进内文里面）
+     - die_cut_shape（冲形状）：where=冲哪里（整本书 / 前封面 / 前4张内文 / P5 / 天地盖顶）；
+       shape=形状（圆孔 / 椭圆孔 / 飞机孔 / 动物形 / 十字位）；
+       size_mm（直径约25mm / 约100*80mm）；purpose=冲来干什么用
+       （露出毛毡揭页 / 穿过硅胶公仔 / 穿PP环 / 透出拉卡）；waste_removal=除废
+     ⚠ state 规则与 ⑧ 相同：
+       **printed** = 只是插画里画出来的揭页/机关/印上去的孔（扁平、无厚度、和画面同一层）；
+       **real**   = 看得见纸边开口、纸张厚度、层间阴影、手指位缺口、纸层错位、部件与纸面缝隙。
+     ⚠ 数量数不清写「约N」并同时进 unknowns。**不要拿页数推算**（10PP ≠ 10 个揭页）。
+     ⚠ 五类一个都没有时，craft 里五个键全部留 null —— 空白是正确答案，编造会直接算错成本。
   ⑧ **state 只取三值之一，不要写 true/false**：
      - "real"    = 能看到**实物结构证据**：明显厚度 / 阴影 / 高光、与纸面的缝隙、开孔、
                    仓盖卡扣或螺丝、导线、按键按下的凹陷、塑料或硅胶反光、出音孔阵列；

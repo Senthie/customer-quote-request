@@ -70,7 +70,7 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
 MEDIA_SUFFIXES = IMAGE_SUFFIXES | VIDEO_SUFFIXES
 SIDECAR_TXT = ".vlm.txt"
 SIDECAR_JSON = ".vlm.json"
-MAX_TOKENS = 2400
+MAX_TOKENS = 3200
 
 
 class MMError(RuntimeError):
@@ -443,6 +443,31 @@ def build_transcript(payload: dict[str, Any], src: Path, kind: str,
                 lines.append("──── 结构部件（可见）────")
                 lines.append("  state: real=看得见实物结构 / printed=只是印刷图案 / unclear=分不清 / null=本图无信息")
                 lines += rows
+        # ── 互动工艺（2026-11-24）：客户询价文字里通常不写，报价成本却全靠它，
+        #    所以单独成段，术语按本厂口径（揭页/拉卡/机关/毛毡布/冲形状），可直接抄进 CPMS。
+        craft = payload.get("craft") or {}
+        if isinstance(craft, dict):
+            rows = []
+            for key, zh in _CRAFT_ZH.items():
+                item = craft.get(key)
+                if not isinstance(item, dict):
+                    continue
+                state = str(item.get("state") or "").strip()
+                bits = [f"{_DETAIL_ZH.get(f, f)}={item.get(f)}"
+                        for f in _CRAFT_DETAIL.get(key, ()) if item.get(f)]
+                ev = str(item.get("evidence") or "").strip()
+                if not state and not bits:      # 既没判断也没细节 → 本图无此工艺，别刷行
+                    continue
+                line = f"  {zh}: state={state or 'null'}"
+                if bits:
+                    line += "｜" + "、".join(bits)
+                if ev:
+                    line += f" ← 「{ev}」"
+                rows.append(line)
+            if rows:
+                lines.append("──── 互动工艺（可见；术语按本厂口径）────")
+                lines.append("  state: real=实物结构 / printed=只是印刷图案 / unclear=分不清 / null=本图无信息")
+                lines += rows
         for key, zh in (("quantities", "印数/档位"), ("languages", "语言")):
             val = payload.get(key)
             if val:
@@ -496,6 +521,15 @@ def has_quote_info(payload: dict[str, Any]) -> bool:
                 return True
     if payload.get("quantities") or payload.get("languages") or payload.get("titles"):
         return True
+    # 互动工艺（2026-11-24）：只拍出「有揭页/拉卡/机关/毛毡/冲形」的样书内页，
+    # 客户正文一个字不提也是有效询价信息 —— 报价成本全在这些工艺上
+    craft = payload.get("craft") or {}
+    if isinstance(craft, dict):
+        for key, item in craft.items():
+            if not isinstance(item, dict):
+                continue
+            if item.get("state") or any(item.get(f) for f in _CRAFT_DETAIL.get(key, ())):
+                return True
     # 视频的形状不一样：没有 specs，判据是「有没有装订/页数/尺寸结论」
     if str(payload.get("_meta", {}).get("kind") or "") == "video":
         bind = payload.get("binding") or {}
@@ -568,6 +602,85 @@ def normalize_components(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+# ── 互动工艺字段的确定性护栏（2026-11-24）──────────────────────────
+# 客户询价文字里通常不写这些工艺，只能从样书照片/刀线图看出来；
+# 但它们是报价成本的大头（模切次数、手工装配工时），所以单独立段并要求结构化工序要素。
+_CRAFT_ZH = {
+    "flap": "揭页",
+    "pull_tab": "拉卡",
+    "mechanism": "机关",
+    "felt": "毛毡布",
+    "die_cut_shape": "冲形状",
+}
+_CRAFT_DETAIL = {
+    "flap": ("where", "per_page", "total", "origin", "finger_notch",
+             "waste_removal", "staple_allowance", "size_mm"),
+    "pull_tab": ("where", "total", "layers", "size_mm", "print_face", "print_back", "track"),
+    "mechanism": ("kind", "where", "sets", "parts_per_set", "size_mm", "motion"),
+    "felt": ("count", "source", "thickness_mm", "size_mm", "color_softness", "mount"),
+    "die_cut_shape": ("where", "shape", "size_mm", "purpose", "waste_removal"),
+}
+_DETAIL_ZH = {
+    "where": "在哪", "per_page": "每页", "total": "共", "origin": "来源",
+    "finger_notch": "手指位", "waste_removal": "除废", "staple_allowance": "钉位",
+    "size_mm": "尺寸", "layers": "用纸", "print_face": "正面印色",
+    "print_back": "背面印色", "track": "轨道槽", "kind": "类型", "sets": "套数",
+    "parts_per_set": "部件数", "motion": "动作", "count": "张数", "source": "来源",
+    "thickness_mm": "厚度", "color_softness": "颜色硬度", "mount": "固定方式",
+    "shape": "形状", "purpose": "用途",
+}
+
+
+def normalize_crafts(payload: dict[str, Any]) -> dict[str, Any]:
+    """把模型给的 craft（互动工艺五类）收敛成可用的三态，并保证审计留痕。
+
+    与 normalize_components 同一套护栏，因为 4B 在工艺上更爱把「插画里画出来的门」
+    当成揭页、把「印上去的孔」当成冲孔：
+      1. state 只留 real / printed / unclear / null，true→real、false→null；
+      2. 说 printed 但 evidence 里没有印刷类字样 → 降级 unclear；
+      3. 非 real 的，工序要素（几个/在哪/尺寸…）一律清空 —— 图案上的东西算不了成本；
+      4. 非 real 的，自动往 unknowns 补一条「需客户确认」。
+    """
+    craft = payload.get("craft")
+    if not isinstance(craft, dict):
+        return payload
+    unk = payload.get("unknowns")
+    if not isinstance(unk, list):
+        unk = []
+    for key, zh in _CRAFT_ZH.items():
+        item = craft.get(key)
+        if not isinstance(item, dict):
+            continue
+        details = _CRAFT_DETAIL.get(key, ())
+        st = item.get("state")
+        if isinstance(st, bool):
+            st = "real" if st else None
+        st = str(st).strip().lower() if st else None
+        if st in ("true", "yes"):
+            st = "real"
+        elif st in ("false", "no", ""):
+            st = None
+        if st not in ("real", "printed", "unclear"):
+            st = None
+        ev = str(item.get("evidence") or "").strip()
+        has_detail = any(item.get(f) for f in details)
+        if not ev and not has_detail:
+            st = None
+        if st == "printed" and not any(w in ev.lower() for w in _PRINT_WORDS):
+            st = "unclear"
+        if st == "unclear" and not ev:
+            st = None
+        if st in ("printed", "unclear"):
+            for f in details:
+                if item.get(f):
+                    item[f] = None
+            if not any(zh in str(u) and "确认" in str(u) for u in unk):
+                unk.append(f"{zh} state={st}，是否真有该工艺需客户确认")
+        item["state"] = st
+    payload["unknowns"] = unk
+    return payload
+
+
 def process_file(path: Path, cfg: dict[str, Any], client: Any,
                  force: bool = False, dry_run: bool = False) -> dict[str, Any]:
     """把一份媒体文件转成 `<名>.vlm.txt` + `.vlm.json`。返回结果摘要。"""
@@ -591,6 +704,7 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
 
     if kind != "video":
         payload = normalize_components(payload)
+        payload = normalize_crafts(payload)
 
     # raw_text 硬上限（2026-11-23 森西拍板）：提示词里已要求 ≤40 行，
     # 但 4B 模型不总听话，这里兜底截断，超出的写进 unknowns，避免长文本撑爆 JSON。

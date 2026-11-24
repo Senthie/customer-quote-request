@@ -283,3 +283,73 @@ def test_raw_text_line_cap_enforced(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "page.jpg.vlm.json").read_text(encoding="utf-8"))
     assert len(payload["raw_text"]) == 3
     assert any("未转录" in u for u in payload["unknowns"])
+
+
+# ── 互动工艺（2026-11-24）：客户文字不写、只能从图片看出来 ────────────
+def test_craft_五类工艺都在词表里():
+    assert set(MM._CRAFT_ZH) == {"flap", "pull_tab", "mechanism", "felt", "die_cut_shape"}
+    assert MM._CRAFT_ZH["flap"] == "揭页" and MM._CRAFT_ZH["felt"] == "毛毡布"
+
+
+def test_normalize_crafts_real_保留工序要素():
+    payload = {"craft": {"flap": {"state": "real", "where": "P2、P4、P6", "per_page": "2个",
+                                  "total": "10个", "finger_notch": "有", "waste_removal": "需",
+                                  "staple_allowance": "留钉位", "size_mm": "约145*145mm",
+                                  "evidence": "可见纸边开口与手指位缺口"}}}
+    out = MM.normalize_crafts(payload)
+    f = out["craft"]["flap"]
+    assert f["state"] == "real"
+    assert f["total"] == "10个" and f["staple_allowance"] == "留钉位"
+
+
+def test_normalize_crafts_printed无印刷词降级为unclear并清空细节():
+    """插画里画出来的揭页不是实物 —— 数量和位置都不许留，否则直接算错成本。"""
+    payload = {"craft": {"flap": {"state": "printed", "where": "P2", "total": "6个",
+                                  "evidence": "画面里画着一扇小门"}},
+               "unknowns": []}
+    out = MM.normalize_crafts(payload)
+    f = out["craft"]["flap"]
+    assert f["state"] == "unclear"
+    assert f["where"] is None and f["total"] is None
+    assert any("揭页" in u and "确认" in u for u in out["unknowns"])
+
+
+def test_normalize_crafts_printed有印刷词才保留printed():
+    payload = {"craft": {"felt": {"state": "printed", "count": "5张",
+                                  "evidence": "封底印着毛毡布图案"}}}
+    out = MM.normalize_crafts(payload)
+    assert out["craft"]["felt"]["state"] == "printed"
+    assert out["craft"]["felt"]["count"] is None
+
+
+def test_normalize_crafts_全空不动():
+    payload = {"craft": {"flap": {"state": None, "where": None},
+                         "felt": {"state": None}}}
+    out = MM.normalize_crafts(payload)
+    assert out["craft"]["flap"]["state"] is None
+    assert not out.get("unknowns")
+
+
+def test_build_transcript_渲染互动工艺段用厂内术语():
+    payload = {"doc_type": "interior_spread", "titles": [], "specs": {}, "raw_text": ["x"],
+               "craft": {"flap": {"state": "real", "where": "P2、P4、P6、P8、P10",
+                                  "per_page": "2个", "total": "10个",
+                                  "origin": "内文本身啤出", "finger_notch": "有",
+                                  "waste_removal": "需", "staple_allowance": "留钉位",
+                                  "evidence": "可见纸边开口"},
+                         "felt": {"state": "real", "count": "5张", "thickness_mm": "1mm",
+                                  "mount": "内文啤刀线再嵌入", "evidence": "可见毛毡层"}},
+               "unknowns": [], "conflicts": []}
+    txt = MM.build_transcript(payload, Path("a.jpg"), "image", "M", 1.0)
+    assert "互动工艺" in txt
+    assert "揭页: state=real" in txt and "共=10个" in txt and "钉位=留钉位" in txt
+    assert "毛毡布: state=real" in txt and "厚度=1mm" in txt
+    # 术语必须是厂内口径
+    assert "翻翻页" not in txt and "felt" not in txt and "不织布" not in txt
+
+
+def test_has_quote_info_true_for_craft_only_photo():
+    """只拍出「有揭页」的样书内页，客户正文一字不提也是有效询价信息。"""
+    payload = {"doc_type": "interior_spread", "specs": {},
+               "craft": {"flap": {"state": "real", "total": "10个"}}, "raw_text": []}
+    assert MM.has_quote_info(payload) is True
