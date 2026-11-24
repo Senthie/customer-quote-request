@@ -1,0 +1,94 @@
+# ═══════════════════════════════════════════════════════════════
+# 客户档案：AVR18（塞浦路斯 C.C.R.S.M. / Avra Pieridou）
+#
+# 来源：
+#   ① 真实 ERP 语料 /home/claw/train/custom_cpms_requie 中 KHZL=AVR18 的 6 份单据
+#      （BJXQ230204004 主单 + 4 子单 2023-02，BJXQ241007009 2024-10）
+#   ② 2026-11-24 Mark Lin 转发的「New Project」询价邮件（CCRSM 原文 2021-03）
+#
+# 对接关系（ERP 客户资料页 01.0415 实测）：
+#   简称 Avra Pieridou，联系人 Nicos Skoutellas，电话 99628378（塞浦路斯）
+#   业务员 黄秋芬 / 跟单员 林珍海 / 币种 美元
+#
+# status 保持 draft：这份档案的 erp_defaults 只来自 6 份历史单（样本少），
+# 询价文件的写法也才见过一种（英文散文正文 + 产品照片），还没跑过回归。
+# ═══════════════════════════════════════════════════════════════
+id: avr18
+name: AVR18（C.C.R.S.M. Cyprus / Avra Pieridou）
+priority: 10
+status: draft
+erp_khzl: [AVR18]
+notes: >
+  客户是塞浦路斯的 C.C.R.S.M.（Cyprus Centre for the Research and Study of Music），
+  ERP 客户代码 AVR18（01.0415），联系人 Nicos Skoutellas。
+  询价长这样：本厂香港市场部（Mark Lin / Tinrry，wafai.net / ghouseproducts.com）
+  把客户英文原邮件连同产品照片一起转发到做单邮箱 —— 正文是**散文规格**（不是表格），
+  通常**没有数量档**，香港单号要等业务后续补。
+  历史产品口径稳定：210*297mm 方脊精装音乐书（线路），客供发声配件。
+    · BJXQ230204004（2023-02）4 个子单：方脊锁线精装 3000/5000 与 2000/3000；
+      精装车线 2000/3000 × 2
+    · BJXQ241007009（2024-10）：方脊锁线精装 6000/10000/15000，TZS=2
+  产品大类只能从正文工艺推（精装 grey board → 22.06；车线 → 25.03），不要乱猜。
+
+# ── 1. 身份识别 ────────────────────────────────────────────
+# 发件人是自家域（wafai.net / ghouseproducts.com），不能拿来当判据 —— 只认正文里
+# 客户自己的签名/机构名（这三条在 CCRSM 原邮件签名里都会出现）。
+detect:
+  filename_keywords: []
+  label_signatures: ["ccrsm", "nicos skoutellas", "avra pieridou"]
+  min_signature_hits: 1
+  sender_domains: []
+  subject_keywords: ["new project"]
+
+# ── 2. 列名别名表 ──────────────────────────────────────────
+# 正文是散文，不是「标签: 值」两列，所以只挂几个真的会出现的写法；
+# 主要靠 spec_fields 从原文推。
+fields:
+  size: ["Size", "Size:", "成品尺寸"]
+  extent: ["Extent", "Text(36pp)", "Inside spreads"]
+  quantity_tiers: ["Quantity", "数量"]
+
+# ── 3. 默认值层（只补空，客户写明了听客户的）──────────────
+erp_defaults:
+  BZFS: "纸箱包装"                      # 语料 AVR18 6/6 份一致（覆盖 100%）
+  TBLX: "1.2m*0.8m(欧标)松木消毒卡板"    # 语料 AVR18 6/6 份一致
+  SHFS: "FOB 盐田"                      # 语料 6/6；客户正文也只写 "FOB your port"
+  ZDFS: "精装书"                        # 语料 5/6 精装书（另一 1 为车线书）；正文 cased grey board
+  CPLB: "22.06;方脊精装音乐书(线路)"      # 语料 4/6 该值（另 2 为 25.03 精装车线）
+
+# ── 4. 人看的偏好表（必须与上面落库值一致，校验器会拦）──────
+preferences:
+  - { field: BZFS, value: "纸箱包装", reason: "语料 AVR18 6/6 份一致（覆盖 100%）" }
+  - { field: TBLX, value: "1.2m*0.8m(欧标)松木消毒卡板", reason: "语料 AVR18 6/6 份一致" }
+  - { field: SHFS, value: "FOB 盐田", reason: "语料 6/6；客户正文只写 FOB your port，盐田是本厂默认出口港" }
+  - { field: ZDFS, value: "精装书", reason: "正文 'cased in over 3.0mm Grey board' = 精装；语料 5/6 精装书" }
+  - { field: CPLB, value: "22.06;方脊精装音乐书(线路)", reason: "语料 4/6 为该值；另 2 份是车线工艺，本次正文未提车线" }
+
+# ── 5. 解析规则覆盖 ────────────────────────────────────────
+rules:
+  size:
+    unit: mm
+    order: [CD, KD, GD]
+  binding:
+    enabled: true
+    default: "精装书"                   # 兜底也必须是 erp_form_schema 的合法值
+    map:
+      "cased|hardback|hardcover|case ?bound|grey ?board|灰板|精装": 精装书
+  # 产品类别：正文出现发声/音乐/模块 → 方脊精装音乐书(线路) 22.06
+  cplb:
+    match_keys: [format, binding, project_description, series_name]
+    map:
+      - { match: "sound|music|module|发声|音乐", node: "22.06" }
+      - { match: "车线|sewn", node: "25.03" }
+  product_category:
+    fallback: "22.06;方脊精装音乐书(线路)"
+  # 客户正文只写 "FOB your port"，具体港口/地区留给业务确认（SHDQ 是级联下拉，落不进去）
+  cpsx:
+    when_missing: ""
+
+# ── 6. 邮件规则 ────────────────────────────────────────────
+email:
+  khdh:
+    attachment_keys: []
+    subject_patterns: []
+    body_patterns: ["HK ?order|香港单号"]
