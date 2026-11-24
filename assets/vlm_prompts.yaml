@@ -152,7 +152,13 @@ video_user: |
    "summary": "一句话说这段视频在演示什么",
    "sequence": [{"frame": 1, "what_changed": "相对上一帧发生了什么"}],
    "binding": {"value": null, "frame": null, "why": "哪一帧看到书脊/订口/订线"},
-   "craft": [],
+   "craft": {
+     "flap":          {"state": null, "where": null, "total": null, "finger_notch": null, "staple_allowance": null, "evidence": null},
+     "pull_tab":      {"state": null, "where": null, "total": null, "layers": null, "track": null, "evidence": null},
+     "mechanism":     {"state": null, "kind": null, "where": null, "sets": null, "motion": null, "evidence": null},
+     "felt":          {"state": null, "count": null, "source": null, "thickness_mm": null, "mount": null, "evidence": null},
+     "die_cut_shape": {"state": null, "where": null, "shape": null, "purpose": null, "evidence": null}
+   },
    "components": {
      "sound_module": {"state": null, "keys": null, "key_shape": null, "evidence": null},
      "lights": {"state": null, "type": null, "count": null, "evidence": null},
@@ -173,6 +179,16 @@ video_user: |
   ⑤ components 的 state 同样只取 real / printed / unclear / null：
      只有**手指按压后画面有反应**（发声嘴型、灯亮、页面弹起）才算 real，并写清第几帧；
      单纯看到印着的按钮图案算 "printed"；拿不准写 "unclear" 并列进 unknowns。
+  ⑥ **互动工艺扫查（视频是最硬的证据，别浪费）**：视频里一旦**看到动作真的发生了**，
+     该工艺 state 就写 "real" 并注明第几帧 —— 这是静态照片给不了的信息：
+     - 看到手指**掀开某一页**、纸片被翻起后底下露出另一幅画 → flap（揭页）real
+     - 看到手指**拖动一个卡条**、卡条在纸缝里滑出 → pull_tab（拉卡）real
+     - 看到**转盘旋转 / 部件弹起 / 纸片相扣带动** → mechanism（机关）real，kind 写清是哪种
+     - 看到**毛毡被按压/被手指拨动**、能看出绒面厚度 → felt（毛毡布）real
+     - 看到手指穿过一个**冲孔**、或孔里穿出绳子/塑料环 → die_cut_shape（冲形状）real
+     ⚠ 术语必须用厂内口径：揭页（不写翻翻页/flap 直译）、拉卡（不写拉条/滑块）、机关、毛毡布（不写不织布）、冲形状（不写模切形状）。
+     ⚠ 只看到「书上画着一扇门」但没动 = printed / unclear，不是 real。
+     ⚠ 数量仍不许从时长或帧数推算；数不清写「约N」并进 unknowns。
 
 # ── P3：对抗式复核（对 P1/P2 结果的二次请求，砍幻觉）────────────────
 verify_user: |

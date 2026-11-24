@@ -362,6 +362,30 @@ def _quote(item: dict[str, Any]) -> str:
     return f" ← 「{q}」" + (f"（{where}）" if where else "")
 
 
+def _craft_rows(craft: Any) -> list[str]:
+    """把 craft（五类互动工艺）渲染成可抄进 CPMS 的行。"""
+    if not isinstance(craft, dict):
+        return []
+    rows = []
+    for key, zh in _CRAFT_ZH.items():
+        item = craft.get(key)
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "").strip()
+        bits = [f"{_DETAIL_ZH.get(f, f)}={item.get(f)}"
+                for f in _CRAFT_DETAIL.get(key, ()) if item.get(f)]
+        ev = str(item.get("evidence") or "").strip()
+        if not state and not bits:      # 既没判断也没细节 → 本图无此工艺，别刷行
+            continue
+        line = f"  {zh}: state={state or 'null'}"
+        if bits:
+            line += "｜" + "、".join(bits)
+        if ev:
+            line += f" ← 「{ev}」"
+        rows.append(line)
+    return rows
+
+
 def build_transcript(payload: dict[str, Any], src: Path, kind: str,
                      model: str, latency: float) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -380,8 +404,15 @@ def build_transcript(payload: dict[str, Any], src: Path, kind: str,
         bind = payload.get("binding") or {}
         if isinstance(bind, dict) and bind.get("value"):
             lines.append(f"装订: {bind['value']}" + (f"（帧{bind['frame']}: {bind.get('why','')}）" if bind.get("frame") else ""))
-        if payload.get("craft"):
-            lines.append("工艺: " + "、".join(str(x) for x in payload["craft"]))
+        craft_payload = payload.get("craft")
+        if isinstance(craft_payload, list) and any(str(x).strip() for x in craft_payload):
+            lines.append("工艺: " + "、".join(str(x) for x in craft_payload))
+        elif isinstance(craft_payload, dict):
+            rows = _craft_rows(craft_payload)
+            if rows:
+                lines.append("──── 互动工艺（可见；术语按本厂口径）────")
+                lines.append("  state: real=看到动作发生 / printed=只是印刷图案 / unclear=分不清 / null=本段无信息")
+                lines += rows
         pg = payload.get("page_guess") or {}
         if isinstance(pg, dict) and pg.get("value"):
             lines.append(f"页数线索: {pg['value']}" + (f"（依据: {pg.get('basis','')}）" if pg.get("basis") else ""))
@@ -446,28 +477,11 @@ def build_transcript(payload: dict[str, Any], src: Path, kind: str,
         # ── 互动工艺（2026-11-24）：客户询价文字里通常不写，报价成本却全靠它，
         #    所以单独成段，术语按本厂口径（揭页/拉卡/机关/毛毡布/冲形状），可直接抄进 CPMS。
         craft = payload.get("craft") or {}
-        if isinstance(craft, dict):
-            rows = []
-            for key, zh in _CRAFT_ZH.items():
-                item = craft.get(key)
-                if not isinstance(item, dict):
-                    continue
-                state = str(item.get("state") or "").strip()
-                bits = [f"{_DETAIL_ZH.get(f, f)}={item.get(f)}"
-                        for f in _CRAFT_DETAIL.get(key, ()) if item.get(f)]
-                ev = str(item.get("evidence") or "").strip()
-                if not state and not bits:      # 既没判断也没细节 → 本图无此工艺，别刷行
-                    continue
-                line = f"  {zh}: state={state or 'null'}"
-                if bits:
-                    line += "｜" + "、".join(bits)
-                if ev:
-                    line += f" ← 「{ev}」"
-                rows.append(line)
-            if rows:
-                lines.append("──── 互动工艺（可见；术语按本厂口径）────")
-                lines.append("  state: real=实物结构 / printed=只是印刷图案 / unclear=分不清 / null=本图无信息")
-                lines += rows
+        rows = _craft_rows(craft)
+        if rows:
+            lines.append("──── 互动工艺（可见；术语按本厂口径）────")
+            lines.append("  state: real=实物结构 / printed=只是印刷图案 / unclear=分不清 / null=本图无信息")
+            lines += rows
         for key, zh in (("quantities", "印数/档位"), ("languages", "语言")):
             val = payload.get(key)
             if val:
@@ -541,6 +555,13 @@ def has_quote_info(payload: dict[str, Any]) -> bool:
             return True
         return len([t for t in (payload.get("texts") or []) if str(t).strip()]) >= 3
     raw = [str(r) for r in (payload.get("raw_text") or []) if str(r).strip()]
+    # doc_type 已经排除了 logo_banner；其余类型只要抄到了字就值得进转录。
+    # 2026-11-24 实测：封面照只有「LLenas / Un libro pop-up」两行，按旧规则（≥6 行含数字）
+    # 被判无价值丢掉 —— 而"pop-up"正是判断产品形态的唯一证据。
+    if raw and str(payload.get("doc_type") or "") in (
+            "spec_table", "cover_art", "interior_spread", "die_line",
+            "packing_photo", "component_closeup"):
+        return True
     return len(raw) >= 6 and any(ch.isdigit() for ch in "".join(raw))
 
 
@@ -704,7 +725,26 @@ def process_file(path: Path, cfg: dict[str, Any], client: Any,
 
     if kind != "video":
         payload = normalize_components(payload)
-        payload = normalize_crafts(payload)
+    payload = normalize_crafts(payload)
+
+    # ── 文本去重（2026-11-24）──
+    # 4B 在整段视频上会把同一句画面文字循环输出几十次（实测 227 行 → 29 行唯一），
+    # 也会在 raw_text 里重复抄同一行。转录里留着会污染抽取引擎，这里按顺序去重。
+    for key in ("texts", "raw_text"):
+        vals = payload.get(key)
+        if not isinstance(vals, list) or not vals:
+            continue
+        seen, uniq = set(), []
+        for v in vals:
+            s = str(v).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            uniq.append(s)
+        if len(uniq) != len(vals):
+            payload.setdefault("unknowns", []).append(
+                f"{key} 原文重复输出 {len(vals)} 行，已按顺序去重为 {len(uniq)} 行")
+        payload[key] = uniq
 
     # raw_text 硬上限（2026-11-23 森西拍板）：提示词里已要求 ≤40 行，
     # 但 4B 模型不总听话，这里兜底截断，超出的写进 unknowns，避免长文本撑爆 JSON。
