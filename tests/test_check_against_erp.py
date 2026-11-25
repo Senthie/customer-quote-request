@@ -29,9 +29,10 @@ def truth():
 
 @pytest.fixture
 def list_truth():
-    # ERP 列表页：4 款 × 7 语 × 40000 单款 = 1,120,000
+    # ERP 列表页真值（reference-eml/list_truth.json 里 BJXQ260825007 的实测值）：
+    # 单款 40,000 × 款 4 = 160,000，**语言数 7 不放大**（4×7×40000=1,120,000 是错的口径）。
     return {FORM: {"表单编号": FORM, "款数": "4", "语言数": "7",
-                   "最小值": "1120000", "最大值": "1120000"}}
+                   "最小值": "160000", "最大值": "160000"}}
 
 
 def run(tmp_path, prod, truth, list_truth=None, name="ERP_x.json"):
@@ -60,11 +61,23 @@ def test_单号命中与基础判定(tmp_path, truth):
     assert verdict(res, "尺寸(CDxKD)") == "一致"
 
 
-def test_数量按款数语言数还原成总量(tmp_path, truth, list_truth):
+def test_数量按款数还原成总量_语言数不放大(tmp_path, truth, list_truth):
     prod = {"KHDDH": "CU26082501", "TZS": 4, "YYS": 7, "CPSL1": 40000}
     res = run(tmp_path, prod, truth, list_truth)
     assert verdict(res, "数量首档") == "一致"
     assert verdict(res, "数量末档") == "一致"
+    row = next(r for r in res["rows"] if r["字段"] == "数量首档")
+    assert row["我方"] == 160000          # 只乘款数
+    assert "不放大" in row["备注"]
+
+
+def test_多语言单不乘语言数(tmp_path, truth):
+    """2026-11-25 实测 BJXQ261125008：10 款 10 语，单款 81,600 → ERP 816,000（×10，不是 ×100）。"""
+    lt = {FORM: {"表单编号": FORM, "款数": "10", "语言数": "10",
+                 "最小值": "816000", "最大值": "816000"}}
+    res = run(tmp_path, {"KHDDH": "CU26082501", "TZS": 10, "YYS": 10, "CPSL1": 81600},
+              truth, lt)
+    assert verdict(res, "数量首档") == "一致"
 
 
 def test_数量算错就是真差异(tmp_path, truth, list_truth):

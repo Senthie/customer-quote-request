@@ -9,7 +9,8 @@
 为什么两个都要（2026-11-18 实测）
     明细页的 `CPSL1~CPSL10` 只在**单语言**单上有值，且存的是**总量**（含款数）；
     多语言单明细不落数量档（只写主表汇总），列表页的「最小值/最大值」才是全的。
-    所以数量对账一律走列表页，按 `单款本数 × 款数 × 语言数` 还原成总量再比。
+    所以数量对账一律走列表页，按 `单款本数 × 款数` 还原成总量再比（**语言数不放大**：
+    2026-11-25 实测 008 10款10语 81,600→816,000 只乘 10，不是 100）。
 
 用法
 ----
@@ -120,7 +121,7 @@ def same(field: str, a: Any, b: Any) -> bool:
     return fa == fb
 
 
-# ── 数量：产物存单款本数，ERP 存总量 ─────────────────────────────────
+# ── 数量：产物存单款本数，ERP 存总量（总量 = 单款 × 款数，**不乘语言数**）──
 def cpsl_tiers(prod: dict) -> list[int]:
     return [x for x in (as_int(prod.get(f"CPSL{i}")) for i in range(1, 11)) if x]
 
@@ -129,7 +130,10 @@ def quantity_rows(prod: dict, lt: dict) -> list[dict]:
     tiers = cpsl_tiers(prod)
     tzs = as_int(prod.get("TZS")) or 1
     yys = as_int(prod.get("YYS")) or 1
-    factor = tzs * max(yys, 1)
+    # ★ 2026-11-25 实测 7 单（BJXQ261125006~012）：储能读到的 CPSL1 / 产物 CPSL1 恰等于 TZS。
+    #   008 10款10语 81,600→816,000（×10，不是 ×100）、012 10款6语 12,225→122,250（×10，不是 ×60）。
+    #   所以总量只按款数放大；再把语言数乘进去会造出「真差异」误报。
+    factor = tzs
     lo, hi = (lt.get("最小值"), lt.get("最大值")) if lt else (None, None)
     rows = []
 
@@ -148,9 +152,9 @@ def quantity_rows(prod: dict, lt: dict) -> list[dict]:
         rows.append({"字段": field, "我方": mine_v, "ERP": e, "判定": verdict, "备注": scale_note})
 
     add("数量首档", tiers[0] if tiers else "", lo,
-        f"单款 {tiers[0] if tiers else '—'} × 款{tzs} × 语{max(yys, 1)}")
+        f"单款 {tiers[0] if tiers else '—'} × 款{tzs}（语{yys}不放大）")
     add("数量末档", tiers[-1] if tiers else "", hi,
-        f"单款 {tiers[-1] if tiers else '—'} × 款{tzs} × 语{max(yys, 1)}")
+        f"单款 {tiers[-1] if tiers else '—'} × 款{tzs}（语{yys}不放大）")
     return rows
 
 

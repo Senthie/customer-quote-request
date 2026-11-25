@@ -298,7 +298,12 @@ def validate_call(call: dict[str, Any]) -> list[str]:
 
 
 def _record_qty(record: dict[str, Any], override: Optional[int]) -> Optional[int]:
-    """**单款本数**（业务口径）。`CPSL1..10` 每档存总量，这里取单款，落库前乘款数。"""
+    """**单款本数**（业务口径）。
+
+    产物里的 `CPSL1..10` 按约定就填「单款本数」（抽取侧已按客户原文/历史单折算），
+    这里原样取出当 `qty`；`erp_push` 落库时再乘款数 `TZS` 还原成总量。
+    ★ 只乘款数、**不乘语言数**（2026-11-25 实测：10 款 10 语的单 81,600→816,000）。
+    """
     if override:
         return int(override)
     for i in range(1, 11):
