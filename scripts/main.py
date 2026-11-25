@@ -2435,6 +2435,20 @@ def step6_output_results(unit: InputUnit, result: dict, processed_dir: Path,
                 record, today=datetime.now().strftime("%Y-%m-%d"))
         except Exception as gap_error:
             logger.warn(f"  规格字段缺口清单生成失败（跳过）: {gap_error}")
+        # ★ 重印/翻单件（reprint / Nachdruck / 翻单）：把「重印自哪张原单、工艺核过没有」
+        #   写进确认清单。判据与对照方法见 skill `customer-quote-cpms-push` §5.10；
+        #   ERP 不可达 / 找不到原单时降级成「需业务提供原单号」，绝不抛异常。
+        try:
+            from reprint_gate import detect_reprint
+            from reprint_gate import gap_items as reprint_gap_items
+            _enquiry_text = "\n".join(str(b) for b in (customer_data.text_blocks or []))
+            logger.info(f"  重印检测：原文 {len(_enquiry_text)} 字，命中 {detect_reprint(_enquiry_text)!r}")
+            questions = questions + reprint_gap_items(
+                record, _enquiry_text,
+                customer=str(record.get("KHZL") or "") or profile.id,
+                today=datetime.now().strftime("%Y-%m-%d"))
+        except Exception as reprint_error:  # noqa: BLE001
+            logger.warn(f"  重印溯源清单生成失败（跳过）: {reprint_error}")
         providers["question_answers"] = questions
         # Reminder = 卡交付的未确认项文本快照（权威来源是上面的 question_answers）
         providers["reminder"] = questions_reminder_text(questions)
